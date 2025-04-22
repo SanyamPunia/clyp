@@ -18,14 +18,12 @@ export default function Home() {
               clyp 📺
             </h1>
           </Link>
-          <div className="flex items-center gap-1.5">
-            <p className="text-xs text-muted-foreground">
-              upload or paste your screenshot and customize it with beautiful
-              backgrounds and styling. open sourced at
-            </p>
+          <p className="text-xs text-muted-foreground">
+            upload or paste your screenshot and customize it with beautiful
+            backgrounds and styling. open sourced at
             <a
               href="https://github.com/SanyamPunia/clyp"
-              className="flex items-center gap-1 border px-1 py-0.5 rounded-sm hover:bg-muted transition-colors"
+              className="inline-flex items-center gap-1 border px-1 py-0.5 rounded-sm hover:bg-muted transition-colors ml-1.5"
               target="_blank"
             >
               <svg
@@ -47,7 +45,7 @@ export default function Home() {
                 GitHub
               </span>
             </a>
-          </div>
+          </p>
         </div>
 
         <Clyp />
