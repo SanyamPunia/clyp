@@ -22,7 +22,6 @@ import {
 } from "@/lib/style-options";
 import type { StyleOptions } from "@/types/screenshot";
 import { ColorPicker } from "@/components/color-picker";
-import { ScrollArea } from "./ui/scroll-area";
 
 interface StyleControlsProps {
   options: StyleOptions;
@@ -38,285 +37,275 @@ export function StyleControls({
   disabled = false,
 }: StyleControlsProps) {
   return (
-    <ScrollArea>
-      <div className="space-y-4">
-        <Card
-          className={`p-3 ${disabled ? "opacity-50 pointer-events-none" : ""}`}
+    <div className="space-y-4">
+      <Card
+        className={`p-4 shadow-none rounded-sm ${disabled ? "opacity-50 pointer-events-none" : ""}`}
+      >
+        <Accordion
+          type="multiple"
+          defaultValue={["background", "appearance", "window"]}
         >
-          <Accordion
-            type="multiple"
-            defaultValue={["background", "appearance"]}
-          >
-            <AccordionItem value="background">
-              <AccordionTrigger className="text-xs py-2">
-                Background
-              </AccordionTrigger>
-              <AccordionContent>
-                <div className="space-y-3">
-                  <Tabs defaultValue="presets" className="w-full">
-                    <TabsList className="grid grid-cols-2 mb-2">
-                      <TabsTrigger value="presets" className="text-xs">
-                        Presets
-                      </TabsTrigger>
-                      <TabsTrigger value="custom" className="text-xs">
-                        Custom
-                      </TabsTrigger>
-                    </TabsList>
-                    <TabsContent value="presets">
-                      <div className="grid grid-cols-3 gap-2">
-                        {gradientOptions.map((gradient) => (
-                          <button
-                            key={gradient.value}
-                            className={`h-10 rounded-md overflow-hidden border-2 transition-all duration-300 ease-in-out ${
-                              options.gradientStyle === gradient.value
-                                ? "border-primary"
-                                : "border-transparent"
-                            }`}
-                            onClick={() =>
-                              onChange({
-                                gradientStyle: gradient.value,
-                                useCustomGradient: false,
-                              })
-                            }
-                          >
-                            <div
-                              className={`w-full h-full ${gradient.previewClass}`}
-                            />
-                          </button>
-                        ))}
-                      </div>
-                    </TabsContent>
-                    <TabsContent value="custom">
-                      <div className="space-y-3">
-                        <div>
-                          <Label className="text-xs mb-1 block">
-                            Start Color
-                          </Label>
-                          <ColorPicker
-                            color={options.customGradientFrom}
-                            onChange={(color) =>
-                              onChange({
-                                customGradientFrom: color,
-                                useCustomGradient: true,
-                              })
-                            }
+          <AccordionItem value="background">
+            <AccordionTrigger className="text-xs py-2">
+              Background
+            </AccordionTrigger>
+            <AccordionContent>
+              <div className="space-y-4">
+                <Tabs defaultValue="presets" className="w-full">
+                  <TabsList className="grid grid-cols-2 mb-2">
+                    <TabsTrigger value="presets" className="text-xs">
+                      Presets
+                    </TabsTrigger>
+                    <TabsTrigger value="custom" className="text-xs">
+                      Custom
+                    </TabsTrigger>
+                  </TabsList>
+                  <TabsContent value="presets">
+                    <div className="grid grid-cols-3 gap-2">
+                      {gradientOptions.map((gradient) => (
+                        <button
+                          key={gradient.value}
+                          className={`h-10 rounded-md overflow-hidden border-2 transition-all duration-300 ease-in-out ${
+                            options.gradientStyle === gradient.value
+                              ? "border-primary"
+                              : "border-transparent"
+                          }`}
+                          onClick={() =>
+                            onChange({
+                              gradientStyle: gradient.value,
+                              useCustomGradient: false,
+                            })
+                          }
+                        >
+                          <div
+                            className={`w-full h-full ${gradient.previewClass}`}
                           />
-                        </div>
-                        <div>
-                          <Label className="text-xs mb-1 block">
-                            End Color
-                          </Label>
-                          <ColorPicker
-                            color={options.customGradientTo}
-                            onChange={(color) =>
-                              onChange({
-                                customGradientTo: color,
-                                useCustomGradient: true,
-                              })
-                            }
-                          />
-                        </div>
-                      </div>
-                    </TabsContent>
-                  </Tabs>
-
-                  <div className="flex items-center justify-between pt-2">
-                    <Label
-                      htmlFor="noise-overlay"
-                      className="text-xs cursor-pointer"
-                    >
-                      Noise Overlay
-                    </Label>
-                    <Switch
-                      id="noise-overlay"
-                      checked={options.showNoiseOverlay}
-                      onCheckedChange={(checked) =>
-                        onChange({ showNoiseOverlay: checked })
-                      }
-                    />
-                  </div>
-                </div>
-              </AccordionContent>
-            </AccordionItem>
-
-            <AccordionItem value="appearance">
-              <AccordionTrigger className="text-xs py-2">
-                Appearance
-              </AccordionTrigger>
-              <AccordionContent>
-                <div className="space-y-3">
-                  <div>
-                    <Label className="text-xs mb-1 block">Padding</Label>
-                    <div className="flex items-center gap-4">
-                      <Slider
-                        value={[options.padding]}
-                        min={0}
-                        max={100}
-                        step={4}
-                        onValueChange={(value) =>
-                          onChange({ padding: value[0] })
-                        }
-                        className="flex-1"
-                      />
-                      <span className="text-xs w-8 text-right">
-                        {options.padding}px
-                      </span>
+                        </button>
+                      ))}
                     </div>
-                  </div>
-
-                  <div>
-                    <Label className="text-xs mb-1 block">
-                      Outer Border Radius
-                    </Label>
-                    <RadioGroup
-                      value={options.outerRadius}
-                      onValueChange={(value) =>
-                        onChange({ outerRadius: value })
-                      }
-                      className="grid grid-cols-3 gap-1"
-                    >
-                      {radiusOptions.map((radius) => (
-                        <Label
-                          key={radius.value}
-                          htmlFor={`outer-${radius.value}`}
-                          className={`flex items-center justify-center border rounded-md p-1 cursor-pointer text-xs transition-all duration-300 ease-in-out ${
-                            options.outerRadius === radius.value
-                              ? "bg-muted border-primary"
-                              : ""
-                          }`}
-                        >
-                          <RadioGroupItem
-                            value={radius.value}
-                            id={`outer-${radius.value}`}
-                            className="sr-only"
-                          />
-                          {radius.label}
+                  </TabsContent>
+                  <TabsContent value="custom">
+                    <div className="space-y-3">
+                      <div>
+                        <Label className="text-xs mb-1 block">
+                          Start Color
                         </Label>
-                      ))}
-                    </RadioGroup>
-                  </div>
-
-                  <div>
-                    <Label className="text-xs mb-1 block">
-                      Image Border Radius
-                    </Label>
-                    <RadioGroup
-                      value={options.imageRadius}
-                      onValueChange={(value) =>
-                        onChange({ imageRadius: value })
-                      }
-                      className="grid grid-cols-3 gap-1"
-                    >
-                      {radiusOptions.map((radius) => (
-                        <Label
-                          key={radius.value}
-                          htmlFor={`image-${radius.value}`}
-                          className={`flex items-center justify-center border rounded-md p-1 cursor-pointer text-xs transition-all duration-300 ease-in-out ${
-                            options.imageRadius === radius.value
-                              ? "bg-muted border-primary"
-                              : ""
-                          }`}
-                        >
-                          <RadioGroupItem
-                            value={radius.value}
-                            id={`image-${radius.value}`}
-                            className="sr-only"
-                          />
-                          {radius.label}
-                        </Label>
-                      ))}
-                    </RadioGroup>
-                  </div>
-
-                  <div>
-                    <Label className="text-xs mb-1 block">Shadow</Label>
-                    <RadioGroup
-                      value={options.shadow}
-                      onValueChange={(value) => onChange({ shadow: value })}
-                      className="grid grid-cols-3 gap-1"
-                    >
-                      {shadowOptions.map((shadow) => (
-                        <Label
-                          key={shadow.value}
-                          htmlFor={`shadow-${shadow.value}`}
-                          className={`flex items-center justify-center border rounded-md p-1 cursor-pointer text-xs transition-all duration-300 ease-in-out ${
-                            options.shadow === shadow.value
-                              ? "bg-muted border-primary"
-                              : ""
-                          }`}
-                        >
-                          <RadioGroupItem
-                            value={shadow.value}
-                            id={`shadow-${shadow.value}`}
-                            className="sr-only"
-                          />
-                          {shadow.label}
-                        </Label>
-                      ))}
-                    </RadioGroup>
-                  </div>
-                </div>
-              </AccordionContent>
-            </AccordionItem>
-
-            <AccordionItem value="window">
-              <AccordionTrigger className="text-xs py-2">
-                Window Style
-              </AccordionTrigger>
-              <AccordionContent>
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <Label
-                      htmlFor="window-navbar"
-                      className="text-xs cursor-pointer"
-                    >
-                      Window Navbar
-                    </Label>
-                    <Switch
-                      id="window-navbar"
-                      checked={options.showWindowNavbar}
-                      onCheckedChange={(checked) =>
-                        onChange({ showWindowNavbar: checked })
-                      }
-                    />
-                  </div>
-
-                  {options.showWindowNavbar && (
-                    <div className="pl-4 border-l-2 border-muted">
-                      <div className="flex items-center justify-between">
-                        <Label
-                          htmlFor="window-navbar-theme"
-                          className="text-xs cursor-pointer"
-                        >
-                          Dark Theme
-                        </Label>
-                        <Switch
-                          id="window-navbar-theme"
-                          checked={options.windowNavbarDark}
-                          onCheckedChange={(checked) =>
-                            onChange({ windowNavbarDark: checked })
+                        <ColorPicker
+                          color={options.customGradientFrom}
+                          onChange={(color) =>
+                            onChange({
+                              customGradientFrom: color,
+                              useCustomGradient: true,
+                            })
+                          }
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-xs mb-1 block">End Color</Label>
+                        <ColorPicker
+                          color={options.customGradientTo}
+                          onChange={(color) =>
+                            onChange({
+                              customGradientTo: color,
+                              useCustomGradient: true,
+                            })
                           }
                         />
                       </div>
                     </div>
-                  )}
-                </div>
-              </AccordionContent>
-            </AccordionItem>
-          </Accordion>
-        </Card>
+                  </TabsContent>
+                </Tabs>
 
-        <Button
-          variant="destructive"
-          size="sm"
-          className="w-full text-xs"
-          onClick={onReset}
-          disabled={disabled}
-        >
-          <Trash className="h-3 w-3 mr-1" />
-          Reset
-        </Button>
-      </div>
-    </ScrollArea>
+                <div className="flex items-center justify-between">
+                  <Label
+                    htmlFor="noise-overlay"
+                    className="text-xs cursor-pointer"
+                  >
+                    Noise Overlay
+                  </Label>
+                  <Switch
+                    id="noise-overlay"
+                    checked={options.showNoiseOverlay}
+                    onCheckedChange={(checked) =>
+                      onChange({ showNoiseOverlay: checked })
+                    }
+                  />
+                </div>
+              </div>
+            </AccordionContent>
+          </AccordionItem>
+
+          <AccordionItem value="appearance">
+            <AccordionTrigger className="text-xs py-2">
+              Appearance
+            </AccordionTrigger>
+            <AccordionContent>
+              <div className="space-y-4">
+                <div>
+                  <Label className="text-xs mb-2 block">Padding</Label>
+                  <div className="flex items-center gap-4">
+                    <Slider
+                      value={[options.padding]}
+                      min={0}
+                      max={100}
+                      step={4}
+                      onValueChange={(value) => onChange({ padding: value[0] })}
+                      className="flex-1"
+                    />
+                    <span className="text-xs w-8 text-right">
+                      {options.padding}px
+                    </span>
+                  </div>
+                </div>
+
+                <div>
+                  <Label className="text-xs mb-2 block">
+                    Outer Border Radius
+                  </Label>
+                  <RadioGroup
+                    value={options.outerRadius}
+                    onValueChange={(value) => onChange({ outerRadius: value })}
+                    className="grid grid-cols-3 gap-2"
+                  >
+                    {radiusOptions.map((radius) => (
+                      <Label
+                        key={radius.value}
+                        htmlFor={`outer-${radius.value}`}
+                        className={`flex items-center justify-center border rounded-md p-2 cursor-pointer text-xs transition-all duration-300 ease-in-out ${
+                          options.outerRadius === radius.value
+                            ? "bg-muted border-primary"
+                            : ""
+                        }`}
+                      >
+                        <RadioGroupItem
+                          value={radius.value}
+                          id={`outer-${radius.value}`}
+                          className="sr-only"
+                        />
+                        {radius.label}
+                      </Label>
+                    ))}
+                  </RadioGroup>
+                </div>
+
+                <div>
+                  <Label className="text-xs mb-2 block">
+                    Image Border Radius
+                  </Label>
+                  <RadioGroup
+                    value={options.imageRadius}
+                    onValueChange={(value) => onChange({ imageRadius: value })}
+                    className="grid grid-cols-3 gap-2"
+                  >
+                    {radiusOptions.map((radius) => (
+                      <Label
+                        key={radius.value}
+                        htmlFor={`image-${radius.value}`}
+                        className={`flex items-center justify-center border rounded-md p-2 cursor-pointer text-xs transition-all duration-300 ease-in-out ${
+                          options.imageRadius === radius.value
+                            ? "bg-muted border-primary"
+                            : ""
+                        }`}
+                      >
+                        <RadioGroupItem
+                          value={radius.value}
+                          id={`image-${radius.value}`}
+                          className="sr-only"
+                        />
+                        {radius.label}
+                      </Label>
+                    ))}
+                  </RadioGroup>
+                </div>
+
+                <div>
+                  <Label className="text-xs mb-2 block">Shadow</Label>
+                  <RadioGroup
+                    value={options.shadow}
+                    onValueChange={(value) => onChange({ shadow: value })}
+                    className="grid grid-cols-3 gap-2"
+                  >
+                    {shadowOptions.map((shadow) => (
+                      <Label
+                        key={shadow.value}
+                        htmlFor={`shadow-${shadow.value}`}
+                        className={`flex items-center justify-center border rounded-md p-2 cursor-pointer text-xs transition-all duration-300 ease-in-out ${
+                          options.shadow === shadow.value
+                            ? "bg-muted border-primary"
+                            : ""
+                        }`}
+                      >
+                        <RadioGroupItem
+                          value={shadow.value}
+                          id={`shadow-${shadow.value}`}
+                          className="sr-only"
+                        />
+                        {shadow.label}
+                      </Label>
+                    ))}
+                  </RadioGroup>
+                </div>
+              </div>
+            </AccordionContent>
+          </AccordionItem>
+
+          <AccordionItem value="window">
+            <AccordionTrigger className="text-xs py-2">
+              Window Style
+            </AccordionTrigger>
+            <AccordionContent>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <Label
+                    htmlFor="window-navbar"
+                    className="text-xs cursor-pointer"
+                  >
+                    Window Navbar
+                  </Label>
+                  <Switch
+                    id="window-navbar"
+                    checked={options.showWindowNavbar}
+                    onCheckedChange={(checked) =>
+                      onChange({ showWindowNavbar: checked })
+                    }
+                  />
+                </div>
+
+                {options.showWindowNavbar && (
+                  <div className="pl-4 border-l-2 border-muted">
+                    <div className="flex items-center justify-between">
+                      <Label
+                        htmlFor="window-navbar-theme"
+                        className="text-xs cursor-pointer"
+                      >
+                        Dark Theme
+                      </Label>
+                      <Switch
+                        id="window-navbar-theme"
+                        checked={options.windowNavbarDark}
+                        onCheckedChange={(checked) =>
+                          onChange({ windowNavbarDark: checked })
+                        }
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </AccordionContent>
+          </AccordionItem>
+        </Accordion>
+      </Card>
+
+      <Button
+        variant="destructive"
+        size="sm"
+        className="w-full text-xs"
+        onClick={onReset}
+        disabled={disabled}
+      >
+        <Trash className="h-3 w-3 mr-1" />
+        Reset
+      </Button>
+    </div>
   );
 }
