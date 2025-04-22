@@ -1,7 +1,6 @@
 import { Clyp } from "@/components/screenshot-beautifier";
 import Link from "next/link";
 import { Schoolbell } from "next/font/google";
-import { Github } from "lucide-react";
 
 const schoolbell = Schoolbell({
   weight: "400",
