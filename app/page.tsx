@@ -20,7 +20,7 @@ export default function Home() {
           </Link>
           <div className="flex items-center gap-1.5">
             <p className="text-xs text-muted-foreground">
-              Upload or paste your screenshot and customize it with beautiful
+              upload or paste your screenshot and customize it with beautiful
               backgrounds and styling. open sourced at
             </p>
             <a
