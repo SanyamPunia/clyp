@@ -1,18 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Camera, Copy, Download, RotateCcw } from "lucide-react";
 import { toPng } from "html-to-image";
+import { Camera, Copy, Download, RotateCcw } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import { ExportModal } from "@/components/export-modal";
+import { GradientBackground } from "@/components/gradient-background";
 import { ImageUploader } from "@/components/image-uploader";
 import { StyleControls } from "@/components/style-controls";
-import { GradientBackground } from "@/components/gradient-background";
+import { Button } from "@/components/ui/button";
 import { WindowNavbar } from "@/components/window-navbar";
-import { ExportModal } from "@/components/export-modal";
-import type { StyleOptions, ExportOptions } from "@/types/screenshot";
+import { cn } from "@/lib/utils";
+import type { ExportOptions, StyleOptions } from "@/types/screenshot";
 
 export function Clyp() {
   const [image, setImage] = useState<string | null>(null);
@@ -114,29 +113,33 @@ export function Clyp() {
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-medium">Preview</h2>
               <div className="flex gap-3">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="text-xs rounded-sm shadow-none cursor-pointer flex items-center"
-                    onClick={() => openExportModal("copy")}
-                    disabled={!image}
-                  >
-                    <Copy className="size-3" />
-                    Copy
-                  </Button>
-                  <Button
-                    size="sm"
-                    className="text-xs rounded-sm shadow-none cursor-pointer flex items-center"
-                    onClick={() => openExportModal("download")}
-                    disabled={!image}
-                  >
-                    <Download className="size-3" />
-                    Download
-                  </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-xs rounded-sm shadow-none cursor-pointer flex items-center"
+                  onClick={() => openExportModal("copy")}
+                  disabled={!image}
+                >
+                  <Copy className="size-3" />
+                  Copy
+                </Button>
+                <Button
+                  size="sm"
+                  className="text-xs rounded-sm shadow-none cursor-pointer flex items-center"
+                  onClick={() => openExportModal("download")}
+                  disabled={!image}
+                >
+                  <Download className="size-3" />
+                  Download
+                </Button>
               </div>
             </div>
 
-            <div className={`bg-slate-100 rounded-sm ${!image ? "md:p-20 px-6 py-10" : "p-0"} flex items-center justify-center relative`}>
+            <div
+              className={`bg-slate-100 rounded-sm ${
+                !image ? "md:p-20 px-6 py-10" : "p-0"
+              } flex items-center justify-center relative`}
+            >
               <Button
                 variant="destructive"
                 size="sm"

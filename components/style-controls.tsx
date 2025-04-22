@@ -1,27 +1,23 @@
 "use client";
 
-import { Trash } from "lucide-react";
-
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { Label } from "@/components/ui/label";
-import { Slider } from "@/components/ui/slider";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { Switch } from "@/components/ui/switch";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ColorPicker } from "@/components/color-picker";
 import {
   Accordion,
   AccordionContent,
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
+import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   gradientOptions,
   radiusOptions,
   shadowOptions,
 } from "@/lib/style-options";
 import type { StyleOptions } from "@/types/screenshot";
-import { ColorPicker } from "@/components/color-picker";
 
 interface StyleControlsProps {
   options: StyleOptions;
@@ -37,12 +33,11 @@ export function StyleControls({
   return (
     <div className="space-y-4">
       <div
-        className={`max-h-[calc(100vh-10rem)] pr-4 ${disabled ? "opacity-50 pointer-events-none" : "md:overflow-y-auto"}`}
+        className={`max-h-[calc(100vh-10rem)] pr-4 ${
+          disabled ? "opacity-50 pointer-events-none" : "md:overflow-y-auto"
+        }`}
       >
-        <Accordion
-          type="multiple"
-          defaultValue={["background"]}
-        >
+        <Accordion type="multiple" defaultValue={["background"]}>
           <AccordionItem value="background">
             <AccordionTrigger className="text-xs pb-3 cursor-pointer">
               Background

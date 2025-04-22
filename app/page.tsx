@@ -1,5 +1,12 @@
 import { Clyp } from "@/components/screenshot-beautifier"
 import Link from "next/link"
+import { Schoolbell } from 'next/font/google'
+
+const schoolbell = Schoolbell({
+  weight: '400',
+  subsets: ['latin'],
+  fallback: ['sans-serif'],
+})
 
 export default function Home() {
   return (
@@ -7,7 +14,7 @@ export default function Home() {
       <div className="max-w-5xl mx-auto">
         <div className="mb-2">
           <Link href="/">
-            <h1 className="text-sm font-medium mb-1">clyp 📺</h1>
+            <h1 className={`text-xl font-medium mb-1 ${schoolbell.className}`}>clyp 📺</h1>
           </Link>
           <p className="text-xs text-muted-foreground">
             Upload or paste your screenshot and customize it with beautiful backgrounds and styling
