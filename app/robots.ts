@@ -6,6 +6,6 @@ export default function robots(): MetadataRoute.Robots {
       userAgent: "*",
       allow: "/",
     },
-    sitemap: "https://clyp.vercel.app/sitemap.xml",
+    sitemap: "https://clyp-omega.vercel.app/sitemap.xml",
   }
 }

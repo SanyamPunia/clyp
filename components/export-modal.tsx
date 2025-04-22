@@ -41,14 +41,14 @@ export function ExportModal({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[425px]">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
+          <DialogTitle className="flex items-center gap-2 text-sm">
             {action === "copy" ? (
               <>
-                <Copy className="h-4 w-4" /> Copy to Clipboard
+                <Copy className="size-4" /> Copy to Clipboard
               </>
             ) : (
               <>
-                <Download className="h-4 w-4" /> Download Image
+                <Download className="size-4" /> Download Image
               </>
             )}
           </DialogTitle>
@@ -69,8 +69,8 @@ export function ExportModal({
             >
               <Label
                 htmlFor="quality-1"
-                className={`flex items-center justify-center border rounded-md p-2 cursor-pointer text-xs transition-all duration-300 ease-in-out ${
-                  options.quality === 1 ? "bg-muted border-primary" : ""
+                className={`flex items-center justify-center border rounded-sm p-2 cursor-pointer text-xs transition-all duration-300 ease-in-out ${
+                  options.quality === 1 ? "bg-muted border-zinc-300" : ""
                 }`}
               >
                 <RadioGroupItem value="1" id="quality-1" className="sr-only" />
@@ -78,8 +78,8 @@ export function ExportModal({
               </Label>
               <Label
                 htmlFor="quality-2"
-                className={`flex items-center justify-center border rounded-md p-2 cursor-pointer text-xs transition-all duration-300 ease-in-out ${
-                  options.quality === 2 ? "bg-muted border-primary" : ""
+                className={`flex items-center justify-center border rounded-sm p-2 cursor-pointer text-xs transition-all duration-300 ease-in-out ${
+                  options.quality === 2 ? "bg-muted border-zinc-300" : ""
                 }`}
               >
                 <RadioGroupItem value="2" id="quality-2" className="sr-only" />
@@ -87,8 +87,8 @@ export function ExportModal({
               </Label>
               <Label
                 htmlFor="quality-3"
-                className={`flex items-center justify-center border rounded-md p-2 cursor-pointer text-xs transition-all duration-300 ease-in-out ${
-                  options.quality === 3 ? "bg-muted border-primary" : ""
+                className={`flex items-center justify-center border rounded-sm p-2 cursor-pointer text-xs transition-all duration-300 ease-in-out ${
+                  options.quality === 3 ? "bg-muted border-zinc-300" : ""
                 }`}
               >
                 <RadioGroupItem value="3" id="quality-3" className="sr-only" />
@@ -118,11 +118,12 @@ export function ExportModal({
           <Button
             variant="outline"
             size="sm"
+            className="text-xs rounded-sm shadow-none cursor-pointer"
             onClick={() => onOpenChange(false)}
           >
             Cancel
           </Button>
-          <Button size="sm" onClick={handleExport}>
+          <Button size="sm" className="text-xs rounded-sm shadow-none cursor-pointer" onClick={handleExport}>
             {action === "copy" ? "Copy" : "Download"}
           </Button>
         </DialogFooter>

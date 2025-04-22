@@ -41,9 +41,9 @@ export function ImageUploader({ onImageUpload }: ImageUploaderProps) {
         accept="image/*"
         className="hidden"
       />
-      <Button variant="outline" onClick={handleButtonClick} className="text-xs">
-        <Upload className="h-3 w-3 mr-1" />
-        Upload Screenshot
+      <Button variant="outline" onClick={handleButtonClick} className="text-xs cursor-pointer rounded-sm shadow-none h-fit">
+        <Upload className="size-3" />
+        Upload
       </Button>
     </div>
   );

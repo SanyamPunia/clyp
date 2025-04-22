@@ -26,37 +26,35 @@ import { ColorPicker } from "@/components/color-picker";
 interface StyleControlsProps {
   options: StyleOptions;
   onChange: (options: Partial<StyleOptions>) => void;
-  onReset: () => void;
   disabled?: boolean;
 }
 
 export function StyleControls({
   options,
   onChange,
-  onReset,
   disabled = false,
 }: StyleControlsProps) {
   return (
     <div className="space-y-4">
-      <Card
-        className={`p-4 shadow-none rounded-sm ${disabled ? "opacity-50 pointer-events-none" : ""}`}
+      <div
+        className={`max-h-[calc(100vh-10rem)] pr-4 ${disabled ? "opacity-50 pointer-events-none" : "md:overflow-y-auto"}`}
       >
         <Accordion
           type="multiple"
-          defaultValue={["background", "appearance", "window"]}
+          defaultValue={["background"]}
         >
           <AccordionItem value="background">
-            <AccordionTrigger className="text-xs py-2">
+            <AccordionTrigger className="text-xs pb-3 cursor-pointer">
               Background
             </AccordionTrigger>
             <AccordionContent>
               <div className="space-y-4">
                 <Tabs defaultValue="presets" className="w-full">
-                  <TabsList className="grid grid-cols-2 mb-2">
-                    <TabsTrigger value="presets" className="text-xs">
+                  <TabsList className="grid grid-cols-2 mb-2 rounded-sm w-full">
+                    <TabsTrigger value="presets" className="text-xs rounded-sm">
                       Presets
                     </TabsTrigger>
-                    <TabsTrigger value="custom" className="text-xs">
+                    <TabsTrigger value="custom" className="text-xs rounded-sm">
                       Custom
                     </TabsTrigger>
                   </TabsList>
@@ -65,9 +63,9 @@ export function StyleControls({
                       {gradientOptions.map((gradient) => (
                         <button
                           key={gradient.value}
-                          className={`h-10 rounded-md overflow-hidden border-2 transition-all duration-300 ease-in-out ${
+                          className={`h-9 rounded-sm cursor-pointer overflow-hidden border-2 transition-all duration-300 ease-in-out ${
                             options.gradientStyle === gradient.value
-                              ? "border-primary"
+                              ? "border-zinc-300 shadow-xl"
                               : "border-transparent"
                           }`}
                           onClick={() =>
@@ -136,7 +134,7 @@ export function StyleControls({
           </AccordionItem>
 
           <AccordionItem value="appearance">
-            <AccordionTrigger className="text-xs py-2">
+            <AccordionTrigger className="text-xs pb-3 cursor-pointer">
               Appearance
             </AccordionTrigger>
             <AccordionContent>
@@ -173,7 +171,7 @@ export function StyleControls({
                         htmlFor={`outer-${radius.value}`}
                         className={`flex items-center justify-center border rounded-md p-2 cursor-pointer text-xs transition-all duration-300 ease-in-out ${
                           options.outerRadius === radius.value
-                            ? "bg-muted border-primary"
+                            ? "bg-muted border-zinc-300"
                             : ""
                         }`}
                       >
@@ -203,7 +201,7 @@ export function StyleControls({
                         htmlFor={`image-${radius.value}`}
                         className={`flex items-center justify-center border rounded-md p-2 cursor-pointer text-xs transition-all duration-300 ease-in-out ${
                           options.imageRadius === radius.value
-                            ? "bg-muted border-primary"
+                            ? "bg-muted border-zinc-300"
                             : ""
                         }`}
                       >
@@ -231,7 +229,7 @@ export function StyleControls({
                         htmlFor={`shadow-${shadow.value}`}
                         className={`flex items-center justify-center border rounded-md p-2 cursor-pointer text-xs transition-all duration-300 ease-in-out ${
                           options.shadow === shadow.value
-                            ? "bg-muted border-primary"
+                            ? "bg-muted border-zinc-300"
                             : ""
                         }`}
                       >
@@ -250,7 +248,7 @@ export function StyleControls({
           </AccordionItem>
 
           <AccordionItem value="window">
-            <AccordionTrigger className="text-xs py-2">
+            <AccordionTrigger className="text-xs pb-3 cursor-pointer">
               Window Style
             </AccordionTrigger>
             <AccordionContent>
@@ -294,18 +292,7 @@ export function StyleControls({
             </AccordionContent>
           </AccordionItem>
         </Accordion>
-      </Card>
-
-      <Button
-        variant="destructive"
-        size="sm"
-        className="w-full text-xs"
-        onClick={onReset}
-        disabled={disabled}
-      >
-        <Trash className="h-3 w-3 mr-1" />
-        Reset
-      </Button>
+      </div>
     </div>
   );
 }
