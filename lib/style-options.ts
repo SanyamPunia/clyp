@@ -63,5 +63,4 @@ export const shadowOptions = [
   { value: "shadow-lg", label: "Large" },
   { value: "shadow-xl", label: "X-Large" },
   { value: "shadow-2xl", label: "2X-Large" },
-  { value: "shadow-3xl", label: "3X-Large" },
 ];
