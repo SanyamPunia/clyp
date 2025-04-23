@@ -1,7 +1,7 @@
 "use client";
 
 import { toPng } from "html-to-image";
-import { Camera, Copy, Download, RotateCcw, Trash2 } from "lucide-react";
+import { Camera, Copy, Download, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ExportModal } from "@/components/export-modal";
