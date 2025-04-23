@@ -4,7 +4,7 @@ clyp makes your screenshots look better by allowing you to add beautiful backgro
 
 ### tech stack
 
-built using [next.js](https://nextjs.org/), [shadcn](https://ui.shadcn.com/) & [tailwindcss](https://tailwindcss.com)
+built using [next.js](https://nextjs.org/), [shadcn](https://ui.shadcn.com/), [tailwindcss](https://tailwindcss.com) & [posthog](https://posthog.com/)
 
 
 ### preview
