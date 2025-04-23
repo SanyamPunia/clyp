@@ -140,7 +140,7 @@ export function Clyp() {
                 } flex items-center justify-center relative`}
             >
               <Button
-                variant="destructive"
+                variant="secondary"
                 size="sm"
                 className="text-xs rounded-md shadow-none cursor-pointer absolute top-2 right-2 z-10 active:scale-90 transition-transform"
                 onClick={() => setImage(null)}
@@ -166,21 +166,32 @@ export function Clyp() {
                     customGradientTo={styleOptions.customGradientTo}
                     showNoiseOverlay={styleOptions.showNoiseOverlay}
                   >
-                    <div className="relative">
-                      {styleOptions.showWindowNavbar && (
-                        <WindowNavbar dark={styleOptions.windowNavbarDark} />
-                      )}
-                      <div
-                        style={{ padding: `${styleOptions.padding}px` }}
-                        className="flex items-center justify-center"
-                      >
+                    <div style={{ padding: `${styleOptions.padding}px` }} className="flex items-center justify-center">
+                      <div className="relative inline-block">
+                        {styleOptions.showWindowNavbar && (
+                          <WindowNavbar
+                            dark={styleOptions.windowNavbarDark}
+                            className={styleOptions.imageRadius === "rounded-none" ? "rounded-none" : "rounded-t-md"}
+                          />
+                        )}
                         <img
                           src={image}
                           alt="Screenshot"
                           className={cn(
-                            styleOptions.imageRadius,
+                            styleOptions.showWindowNavbar
+                              ? {
+                                'rounded-none': styleOptions.imageRadius === 'rounded-none',
+                                'rounded-b-sm': styleOptions.imageRadius === 'rounded-sm',
+                                'rounded-b-md': styleOptions.imageRadius === 'rounded-md',
+                                'rounded-b-lg': styleOptions.imageRadius === 'rounded-lg',
+                                'rounded-b-xl': styleOptions.imageRadius === 'rounded-xl',
+                                'rounded-b-2xl': styleOptions.imageRadius === 'rounded-2xl',
+                                'rounded-b-3xl': styleOptions.imageRadius === 'rounded-3xl',
+                              }
+                              : styleOptions.imageRadius,
                             styleOptions.shadow,
-                            "max-w-full h-auto transition-all duration-300 ease-in-out select-none"
+                            "max-w-full h-auto transition-all duration-300 ease-in-out",
+                            "block select-none",
                           )}
                           draggable={false}
                         />
