@@ -12,7 +12,7 @@ export function PostHogProvider({ children }: { children: React.ReactNode }) {
         posthog.init(process.env.NEXT_PUBLIC_POSTHOG_KEY as string, {
             api_host: process.env.NEXT_PUBLIC_POSTHOG_HOST || 'https://us.i.posthog.com',
             person_profiles: 'identified_only',
-            capture_pageview: true
+            capture_pageview: false
         })
     }, [])
 
@@ -29,7 +29,6 @@ function PostHogPageView() {
     const searchParams = useSearchParams()
     const posthog = usePostHog()
 
-    // Track pageviews
     useEffect(() => {
         if (pathname && posthog) {
             let url = window.origin + pathname
