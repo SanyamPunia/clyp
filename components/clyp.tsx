@@ -1,7 +1,7 @@
 "use client";
 
 import { toPng } from "html-to-image";
-import { Camera, Copy, Download, RotateCcw } from "lucide-react";
+import { Camera, Copy, Download, RotateCcw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ExportModal } from "@/components/export-modal";
@@ -136,18 +136,17 @@ export function Clyp() {
             </div>
 
             <div
-              className={`bg-slate-100 rounded-sm ${
-                !image ? "md:p-20 px-6 py-10" : "p-0"
-              } flex items-center justify-center relative`}
+              className={`bg-slate-100 rounded-sm ${!image ? "md:p-20 px-6 py-10" : "p-0"
+                } flex items-center justify-center relative`}
             >
               <Button
                 variant="destructive"
                 size="sm"
-                className="text-xs rounded-full shadow-none cursor-pointer absolute top-2 right-2 z-10 hover:rotate-[360deg] transition-all duration-300 ease-in-out"
+                className="text-xs rounded-md shadow-none cursor-pointer absolute top-2 right-2 z-10 active:scale-90 transition-transform"
                 onClick={() => setImage(null)}
                 disabled={!image}
               >
-                <RotateCcw className="size-3" />
+                <Trash2 className="size-3" />
               </Button>
 
               {image ? (
