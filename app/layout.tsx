@@ -1,7 +1,7 @@
 import type React from "react";
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
-
+import { PostHogProvider } from "./providers";
 export const metadata: Metadata = {
   metadataBase: new URL("https://clyp-omega.vercel.app"),
   title: "clyp - create better screenshots",
@@ -62,7 +62,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body>{children}</body>
+      <body>
+        <PostHogProvider>{children}</PostHogProvider>
+      </body>
     </html>
   );
 }
