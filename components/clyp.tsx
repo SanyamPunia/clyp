@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { WindowNavbar } from "@/components/window-navbar";
 import { cn } from "@/lib/utils";
 import type { ExportOptions, StyleOptions } from "@/types/screenshot";
+import { toast } from "sonner";
 
 export function Clyp() {
   const [image, setImage] = useState<string | null>(null);
@@ -80,7 +81,7 @@ export function Clyp() {
           await navigator.clipboard.write([
             new ClipboardItem({ [blob.type]: blob }),
           ]);
-          alert("Image copied to clipboard!");
+          toast.success("Image copied to clipboard!");
         } else {
           const link = document.createElement("a");
           link.download = options.filename || "beautified-screenshot.png";
