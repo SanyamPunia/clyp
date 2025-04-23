@@ -1,7 +1,6 @@
-import { Clyp } from "@/components/screenshot-beautifier";
+import { Clyp } from "@/components/clyp";
 import Link from "next/link";
 import { Schoolbell } from "next/font/google";
-import { ExternalLink } from "lucide-react";
 
 const schoolbell = Schoolbell({
   weight: "400",
@@ -14,10 +13,10 @@ export default function Home() {
     <main className="p-8">
       <div className="max-w-5xl mx-auto">
         <div className="mb-2">
-          <Link href="/" className="flex items-center justify-between gap-1">
-            <h1 className={`text-xl font-medium mb-1 ${schoolbell.className}`}>
+          <div className="flex items-center justify-between gap-1">
+            <Link href="/" className={`text-xl font-medium mb-1 ${schoolbell.className}`}>
               clyp 📺
-            </h1>
+            </Link>
             <a
               href="https://github.com/SanyamPunia/clyp"
               className="inline-flex items-center gap-1 border px-1 py-0.5 rounded-sm hover:bg-muted transition-colors ml-1.5"
@@ -41,9 +40,8 @@ export default function Home() {
               <span className="text-xs text-muted-foreground font-medium hover:underline">
                 GitHub
               </span>
-              <ExternalLink className="size-3" />
             </a>
-          </Link>
+          </div>
           <p className="text-xs text-muted-foreground">
             upload or paste your screenshot and customize it with beautiful
             backgrounds and styling

@@ -1,8 +1,9 @@
 import type React from "react";
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://clyp-omega.vercel.app"),
   title: "clyp - create better screenshots",
   description:
     "clyp makes your screenshots look better by allowing you to add beautiful backgrounds, custom styling, and various style attributes.",
@@ -22,7 +23,7 @@ export const metadata: Metadata = {
   openGraph: {
     type: "website",
     locale: "en_US",
-    url: "https://clyp.vercel.app",
+    url: "https://clyp-omega.vercel.app",
     title: "clyp - create better screenshots",
     description:
       "clyp makes your screenshots look better by allowing you to add beautiful backgrounds, custom styling, and various style attributes.",
@@ -43,14 +44,15 @@ export const metadata: Metadata = {
       "clyp makes your screenshots look better by allowing you to add beautiful backgrounds, custom styling, and various style attributes.",
     images: ["/og-image.png"],
   },
-  viewport: {
-    width: "device-width",
-    initialScale: 1,
-  },
   robots: {
     index: true,
     follow: true,
   },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
 };
 
 export default function RootLayout({
