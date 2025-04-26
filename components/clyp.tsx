@@ -208,8 +208,7 @@ export function Clyp() {
                       No screenshot yet
                     </h3>
                     <p className="text-xs text-muted-foreground mb-4">
-                      Upload a screenshot or paste from clipboard{" "}
-                      <span className="font-medium">(Ctrl+V / Cmd+V)</span>
+                      Upload, paste <span className="font-medium">(Ctrl+V/Cmd+V)</span>, or drag & drop your image here.
                     </p>
                   </div>
                   <ImageUploader onImageUpload={handleImageUpload} />
