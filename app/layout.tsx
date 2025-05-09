@@ -32,7 +32,7 @@ export const metadata: Metadata = {
     siteName: "clyp",
     images: [
       {
-        url: "/og-image.png",
+        url: "/opengraph-image.png",
         width: 1200,
         height: 630,
         alt: "clyp",
@@ -44,7 +44,7 @@ export const metadata: Metadata = {
     title: "clyp - create better screenshots",
     description:
       "clyp makes your screenshots look better by allowing you to add beautiful backgrounds, custom styling, and various style attributes.",
-    images: ["/og-image.png"],
+    images: ["/opengraph-image.png"],
   },
   robots: {
     index: true,
