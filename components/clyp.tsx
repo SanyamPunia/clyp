@@ -278,7 +278,7 @@ export function Clyp() {
         setExporting(false);
       }
     },
-    [exportAction],
+    [exportAction, image],
   );
 
   const handleStyleChange = useCallback(
