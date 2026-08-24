@@ -136,6 +136,46 @@
   }
 }
 
+@layer components {
+  /*
+   * Edge fade for a scroll region, driven by the data attributes that
+   * `ScrollFade` sets.
+   *
+   * `mask-image` rather than an overlaid gradient element: it works over any
+   * background, survives a scroll without moving, and adds no node. 1.5rem is
+   * wide enough to read as deliberate and narrow enough not to swallow a row.
+   */
+  .scroll-fade {
+    --scroll-fade: 1.5rem;
+  }
+
+  .scroll-fade[data-fade-top][data-fade-bottom] {
+    mask-image: linear-gradient(
+      to bottom,
+      transparent 0,
+      #000 var(--scroll-fade),
+      #000 calc(100% - var(--scroll-fade)),
+      transparent 100%
+    );
+  }
+
+  .scroll-fade[data-fade-top]:not([data-fade-bottom]) {
+    mask-image: linear-gradient(
+      to bottom,
+      transparent 0,
+      #000 var(--scroll-fade)
+    );
+  }
+
+  .scroll-fade:not([data-fade-top])[data-fade-bottom] {
+    mask-image: linear-gradient(
+      to bottom,
+      #000 calc(100% - var(--scroll-fade)),
+      transparent 100%
+    );
+  }
+}
+
 @keyframes gradient-in {
   from { opacity: 0; }
   to { opacity: 1; }
