@@ -1,74 +1,85 @@
 import type React from "react";
-import { cn } from "@/lib/utils";
+
+import { NOISE_TILE_SIZE, NOISE_TILE_URL } from "@/lib/noise";
+
+/* ─────────────────────────────────────────────────────────
+ * ANIMATION STORYBOARD - gradient swap
+ *
+ *    0ms   user picks a new preset
+ *          outgoing layer stays painted underneath
+ *          incoming layer mounts at opacity 0 on top
+ *  400ms   incoming layer reaches full opacity
+ * ─────────────────────────────────────────────────────────
+ * Background-image is not an animatable CSS property, so a cross-fade needs
+ * two stacked layers rather than a transition on a single element.
+ *
+ * Which gradient was showing before is remembered by the parent, in the event
+ * handler that changed it. That keeps this component free of state and of any
+ * effect that would have to watch a prop.
+ * ───────────────────────────────────────────────────────── */
+
+const CROSS_FADE_MS = 400;
+
+/** Layer opacity at intensity 100. Past this the grain buries the artwork. */
+const MAX_NOISE_OPACITY = 0.55;
 
 interface GradientBackgroundProps {
-  gradientStyle: string;
-  useCustomGradient?: boolean;
-  customGradientFrom?: string;
-  customGradientTo?: string;
+  /** Full CSS background-image value, from `resolveGradientCss`. */
+  css: string;
+  /** What was painted before `css`, held during the fade. */
+  previousCss: string;
   showNoiseOverlay?: boolean;
+  /** Grain strength, 0 to 100. */
+  noiseIntensity?: number;
   children: React.ReactNode;
 }
 
 export function GradientBackground({
-  gradientStyle,
-  useCustomGradient = false,
-  customGradientFrom = "#3b82f6",
-  customGradientTo = "#8b5cf6",
+  css,
+  previousCss,
   showNoiseOverlay = false,
+  noiseIntensity = 55,
   children,
 }: GradientBackgroundProps) {
+  const grain = showNoiseOverlay
+    ? (noiseIntensity / 100) * MAX_NOISE_OPACITY
+    : 0;
+
   return (
-    <div
-      className={cn(
-        "relative transition-all duration-300 ease-in-out",
-        useCustomGradient ? "" : getGradientClass(gradientStyle)
-      )}
-      style={
-        useCustomGradient
-          ? {
-              background: `linear-gradient(to bottom right, ${customGradientFrom}, ${customGradientTo})`,
-            }
-          : {}
-      }
-    >
-      {showNoiseOverlay && (
+    <div className="relative">
+      {/* Outgoing gradient holds the frame while the new one fades in. Every
+          generated layer is opaque, so this never shows through once the
+          incoming layer settles, including in the export. */}
+      <div
+        aria-hidden="true"
+        className="absolute inset-0 z-0"
+        style={{ backgroundImage: previousCss }}
+      />
+
+      <div
+        aria-hidden="true"
+        key={css}
+        className="animate-gradient-in absolute inset-0 z-10"
+        style={{
+          backgroundImage: css,
+          animationDuration: `${CROSS_FADE_MS}ms`,
+        }}
+      />
+
+      {grain > 0 && (
         <div
-          className="absolute inset-0 opacity-20 mix-blend-overlay"
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 z-20 mix-blend-overlay"
           style={{
-            backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.2' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E")`,
+            opacity: grain,
+            backgroundImage: `url("${NOISE_TILE_URL}")`,
             backgroundRepeat: "repeat",
-            width: "100%",
-            height: "100%",
+            backgroundSize: `${NOISE_TILE_SIZE}px ${NOISE_TILE_SIZE}px`,
           }}
         />
       )}
-      <div className="relative">{children}</div>
+
+      <div className="relative z-30">{children}</div>
     </div>
   );
-}
-
-function getGradientClass(style: string): string {
-  switch (style) {
-    case "blue-purple":
-      return "bg-gradient-to-br from-blue-500 to-purple-600";
-    case "green-blue":
-      return "bg-gradient-to-br from-green-400 to-blue-500";
-    case "orange-red":
-      return "bg-gradient-to-br from-orange-400 to-red-500";
-    case "pink-purple":
-      return "bg-gradient-to-br from-pink-400 to-purple-600";
-    case "gray-slate":
-      return "bg-gradient-to-br from-gray-200 to-slate-400";
-    case "yellow-orange":
-      return "bg-gradient-to-br from-yellow-300 to-orange-500";
-    case "teal-blue":
-      return "bg-gradient-to-br from-teal-400 to-blue-500";
-    case "indigo-purple":
-      return "bg-gradient-to-br from-indigo-500 to-purple-600";
-    case "red-pink":
-      return "bg-gradient-to-br from-red-500 to-pink-500";
-    default:
-      return "bg-gradient-to-br from-blue-500 to-purple-600";
-  }
 }
