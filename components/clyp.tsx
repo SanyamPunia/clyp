@@ -44,6 +44,14 @@ import {
   zoomOut,
   zoomToFit,
 } from "@/lib/zoom";
+import {
+  deleteImage,
+  deleteStyle,
+  readImage,
+  readStyle,
+  writeImage,
+  writeStyle,
+} from "@/lib/storage";
 import { cn } from "@/lib/utils";
 import type { ExportOptions, StyleOptions } from "@/types/screenshot";
 
@@ -98,6 +106,9 @@ export function Clyp() {
   );
   const [clearOpen, setClearOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
+  // Nothing is written until the stored draft has been read back, otherwise
+  // the first render would overwrite it with defaults.
+  const [restored, setRestored] = useState(false);
 
   const screenshotRef = useRef<HTMLDivElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
@@ -196,6 +207,39 @@ export function Clyp() {
     scroller.addEventListener("wheel", handleWheel, { passive: false });
     return () => scroller.removeEventListener("wheel", handleWheel);
   }, [image]);
+
+  // Restore the draft. Reading on the client only: localStorage does not
+  // exist while rendering on the server, and seeding state from it would
+  // produce a hydration mismatch.
+  useEffect(() => {
+    let cancelled = false;
+
+    readImage()
+      .catch(() => null)
+      .then((dataUrl) => {
+        if (cancelled) return;
+
+        setStyleOptions(readStyle(DEFAULT_STYLE));
+        if (dataUrl) loadImage(dataUrl);
+        setRestored(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loadImage]);
+
+  // Persist. Both skip until the restore has run.
+  useEffect(() => {
+    if (!restored) return;
+    if (image) writeImage(image);
+    else deleteImage();
+  }, [image, restored]);
+
+  useEffect(() => {
+    if (!restored) return;
+    writeStyle(styleOptions);
+  }, [styleOptions, restored]);
 
   // Paste anywhere on the page drops an image onto the canvas.
   useEffect(() => {
@@ -298,6 +342,8 @@ export function Clyp() {
     setZoom(1);
     setZoomMode("fit");
     setClearOpen(false);
+    deleteStyle();
+    setStyleOptions(DEFAULT_STYLE);
   }, []);
 
   return (

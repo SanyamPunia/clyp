@@ -144,6 +144,27 @@ The canvas scroll container must never carry `items-center` or
 scroll origin, which makes the top of a tall screenshot unreachable. Center on
 an inner `min-h-full w-max min-w-full` wrapper instead.
 
+## Draft persistence
+
+The screenshot survives a reload. It is stored in **IndexedDB**, not
+localStorage: a data URL of a real capture reaches tens of megabytes against
+localStorage's roughly five, so the images worth keeping are exactly the ones
+that would throw `QuotaExceededError`. Measured: a 2400x3200 incompressible
+screenshot is a 28.6 MB data URL.
+
+Style options are a few hundred bytes and stay in localStorage, merged over
+`DEFAULT_STYLE` on read so an object written by an older build cannot leave a
+field undefined.
+
+Reading happens on the client only, inside a promise rather than the effect
+body. Seeding state from storage during render would break hydration, because
+neither store exists on the server. Nothing is written until the restore has
+run, or the first render would overwrite the draft with defaults.
+
+Every storage call swallows its own errors and reports absence. A private
+window and disabled site data are both normal, and neither should break the
+editor.
+
 ## Responsive behaviour
 
 Below `lg` the two panels stack and the page scrolls. Above it the app fills
