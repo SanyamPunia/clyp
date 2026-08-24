@@ -22,6 +22,7 @@ import { UploadCard } from "@/components/upload-card";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dimensions } from "@/components/ui/dimensions";
+import { ScrollFade } from "@/components/ui/scroll-fade";
 import {
   Tooltip,
   TooltipContent,
@@ -130,8 +131,8 @@ export function Clyp() {
       zoomToFit(
         { width: scroller.clientWidth, height: scroller.clientHeight },
         { width: frame.offsetWidth, height: frame.offsetHeight },
-        CANVAS_PADDING * 2
-      )
+        CANVAS_PADDING * 2,
+      ),
     );
   }, []);
 
@@ -168,8 +169,8 @@ export function Clyp() {
           zoomToFit(
             { width: scroller.clientWidth, height: scroller.clientHeight },
             size,
-            CANVAS_PADDING * 2
-          )
+            CANVAS_PADDING * 2,
+          ),
         );
       }
     };
@@ -303,7 +304,7 @@ export function Clyp() {
     <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[minmax(0,1fr)_380px] xl:grid-cols-[minmax(0,1fr)_440px] 2xl:grid-cols-[minmax(0,1fr)_520px]">
       {/* Canvas panel */}
       <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-stroke bg-panel">
-        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-stroke px-5 py-3.5">
+        <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-stroke px-4 py-3 sm:flex-nowrap sm:px-5 sm:py-3.5">
           <div className="flex items-center gap-1.5">
             <h2 className="text-sm font-medium tracking-tight text-foreground">
               Canvas
@@ -324,73 +325,73 @@ export function Clyp() {
             )}
           </div>
 
-          <div className="flex items-center gap-2">
-            <div className="mr-1 flex items-center gap-0.5 rounded-full bg-track p-0.5">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label="Zoom out"
-                    onClick={() => setManualZoom(zoomOut(zoom))}
-                    disabled={!image || zoom <= MIN_ZOOM}
-                  >
-                    <MinusIcon className="size-4" aria-hidden="true" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Zoom out</TooltipContent>
-              </Tooltip>
+          <div className="flex items-center gap-0.5 rounded-full bg-track p-0.5 sm:ml-auto">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Zoom out"
+                  onClick={() => setManualZoom(zoomOut(zoom))}
+                  disabled={!image || zoom <= MIN_ZOOM}
+                >
+                  <MinusIcon className="size-4" aria-hidden="true" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Zoom out</TooltipContent>
+            </Tooltip>
 
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={() => setManualZoom(1)}
-                    disabled={!image}
-                    className="w-12 cursor-pointer rounded-full text-center text-[13px] tabular-nums text-muted-foreground transition-colors duration-150 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {formatZoom(zoom)}
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent>Reset to 100%</TooltipContent>
-              </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={() => setManualZoom(1)}
+                  disabled={!image}
+                  className="h-7 w-12 cursor-pointer rounded-full text-center text-[13px] tabular-nums text-muted-foreground transition-colors duration-150 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {formatZoom(zoom)}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>Reset to 100%</TooltipContent>
+            </Tooltip>
 
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label="Zoom in"
-                    onClick={() => setManualZoom(zoomIn(zoom))}
-                    disabled={!image || zoom >= MAX_ZOOM}
-                  >
-                    <PlusIcon className="size-4" aria-hidden="true" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Zoom in</TooltipContent>
-              </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Zoom in"
+                  onClick={() => setManualZoom(zoomIn(zoom))}
+                  disabled={!image || zoom >= MAX_ZOOM}
+                >
+                  <PlusIcon className="size-4" aria-hidden="true" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Zoom in</TooltipContent>
+            </Tooltip>
 
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label="Fit to view"
-                    aria-pressed={zoomMode === "fit"}
-                    onClick={fitToView}
-                    disabled={!image}
-                    className={cn(
-                      zoomMode === "fit" &&
-                        "bg-track-active text-foreground shadow-sm"
-                    )}
-                  >
-                    <MaximizeIcon className="size-4" aria-hidden="true" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Fit to view</TooltipContent>
-              </Tooltip>
-            </div>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Fit to view"
+                  aria-pressed={zoomMode === "fit"}
+                  onClick={fitToView}
+                  disabled={!image}
+                  className={cn(
+                    zoomMode === "fit" &&
+                      "bg-track-active text-foreground shadow-sm",
+                  )}
+                >
+                  <MaximizeIcon className="size-4" aria-hidden="true" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Fit to view</TooltipContent>
+            </Tooltip>
+          </div>
 
+          <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -413,7 +414,7 @@ export function Clyp() {
             >
               <CopyIcon className="size-3.5" aria-hidden="true" />
               Copy
-              <kbd className="relative ml-1 flex items-center gap-0.5 text-muted-foreground">
+              <kbd className="relative ml-1 hidden items-center gap-0.5 text-muted-foreground sm:flex">
                 <ArrowBigUpIcon className="size-3" aria-hidden="true" />
                 <CommandIcon className="size-3" aria-hidden="true" />
                 <span className="text-xs font-medium">C</span>
@@ -427,7 +428,7 @@ export function Clyp() {
             >
               <DownloadIcon className="size-3.5" aria-hidden="true" />
               Download
-              <kbd className="relative ml-1 flex items-center gap-0.5 opacity-60">
+              <kbd className="relative ml-1 hidden items-center gap-0.5 opacity-60 sm:flex">
                 <CommandIcon className="size-3" aria-hidden="true" />
                 <span className="text-xs font-medium">S</span>
                 <span className="sr-only">Command S</span>
@@ -439,7 +440,7 @@ export function Clyp() {
         <DropZone
           ref={scrollerRef}
           onFile={loadImage}
-          className="canvas-grid min-h-[420px] flex-1 overflow-auto"
+          className="canvas-grid min-h-[260px] flex-1 overflow-auto sm:min-h-[420px]"
         >
           {/* Centering happens on this inner wrapper, not on the scroll
               container. `items-center` on a scroller strands half the overflow
@@ -470,7 +471,10 @@ export function Clyp() {
                 className="w-max"
                 style={
                   zoomed
-                    ? { transform: `scale(${zoom})`, transformOrigin: "top left" }
+                    ? {
+                        transform: `scale(${zoom})`,
+                        transformOrigin: "top left",
+                      }
                     : undefined
                 }
               >
@@ -484,57 +488,59 @@ export function Clyp() {
                     borderRadius: `${styleOptions.outerRadius}px`,
                   }}
                 >
-              <GradientBackground
-                css={gradientCss}
-                previousCss={previousGradientCss}
-                showNoiseOverlay={styleOptions.showNoiseOverlay}
-                noiseIntensity={styleOptions.noiseIntensity}
-              >
-                <div
-                  className="flex items-center justify-center"
-                  style={{ padding: `${styleOptions.padding}px` }}
-                >
-                  {image ? (
+                  <GradientBackground
+                    css={gradientCss}
+                    previousCss={previousGradientCss}
+                    showNoiseOverlay={styleOptions.showNoiseOverlay}
+                    noiseIntensity={styleOptions.noiseIntensity}
+                  >
                     <div
-                      className="animate-artwork-in relative inline-block"
-                      style={{ animationDelay: `${TIMING.artwork}ms` }}
+                      className="flex items-center justify-center"
+                      style={{ padding: `${styleOptions.padding}px` }}
                     >
-                      {styleOptions.showWindowNavbar && (
-                        <WindowNavbar
-                          dark={styleOptions.windowNavbarDark}
-                          style={{
-                            borderRadius: cornerRadius(
-                              styleOptions.imageRadius,
-                              styleOptions.imageCorners,
-                              "top"
-                            ),
-                          }}
-                        />
-                      )}
-                      {/* eslint-disable-next-line @next/next/no-img-element -- the
+                      {image ? (
+                        <div
+                          className="animate-artwork-in relative inline-block"
+                          style={{ animationDelay: `${TIMING.artwork}ms` }}
+                        >
+                          {styleOptions.showWindowNavbar && (
+                            <WindowNavbar
+                              dark={styleOptions.windowNavbarDark}
+                              style={{
+                                borderRadius: cornerRadius(
+                                  styleOptions.imageRadius,
+                                  styleOptions.imageCorners,
+                                  "top",
+                                ),
+                              }}
+                            />
+                          )}
+                          {/* eslint-disable-next-line @next/next/no-img-element -- the
                         source is a client-side data URL, which next/image cannot
                         optimize and html-to-image cannot serialize. */}
-                      <img
-                        src={image}
-                        alt="Your screenshot"
-                        className={cn(
-                          styleOptions.shadow,
-                          "block h-auto max-w-full select-none"
-                        )}
-                        style={{
-                          borderRadius: cornerRadius(
-                            styleOptions.imageRadius,
-                            styleOptions.imageCorners,
-                            styleOptions.showWindowNavbar ? "bottom" : undefined
-                          ),
-                        }}
-                        draggable={false}
-                      />
+                          <img
+                            src={image}
+                            alt="Your screenshot"
+                            className={cn(
+                              styleOptions.shadow,
+                              "block h-auto max-w-full select-none",
+                            )}
+                            style={{
+                              borderRadius: cornerRadius(
+                                styleOptions.imageRadius,
+                                styleOptions.imageCorners,
+                                styleOptions.showWindowNavbar
+                                  ? "bottom"
+                                  : undefined,
+                              ),
+                            }}
+                            draggable={false}
+                          />
+                        </div>
+                      ) : (
+                        <UploadCard onImageUpload={loadImage} />
+                      )}
                     </div>
-                  ) : (
-                    <UploadCard onImageUpload={loadImage} />
-                  )}
-                </div>
                   </GradientBackground>
                 </div>
               </div>
@@ -546,13 +552,13 @@ export function Clyp() {
       {/* Control panel */}
       <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-stroke bg-panel">
         {/* No header: each section names itself. */}
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <ScrollFade className="min-h-0 flex-1 overflow-y-auto">
           <StyleControls
             options={styleOptions}
             onChange={handleStyleChange}
             disabled={!image}
           />
-        </div>
+        </ScrollFade>
       </section>
 
       <ExportModal
