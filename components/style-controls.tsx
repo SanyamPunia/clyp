@@ -1,22 +1,31 @@
 "use client";
 
+import { CheckIcon } from "lucide-react";
+
 import { ColorPicker } from "@/components/color-picker";
-import {
-  Accordion,
-  AccordionContent,
-  AccordionItem,
-  AccordionTrigger,
-} from "@/components/ui/accordion";
-import { Label } from "@/components/ui/label";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { FieldLabel } from "@/components/ui/field-label";
+import { SegmentedGroup, SegmentedOption } from "@/components/ui/segmented";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
-  gradientOptions,
-  radiusOptions,
+  customGradientToCss,
+  gradientFamilies,
+  gradientPresets,
+  gradientToCss,
+  getGradient,
+  supportsAngle,
+} from "@/lib/gradients";
+import {
+  CORNER_ORDER,
+  cornerPresets,
+  cornerRadius,
+  radiusSizes,
   shadowOptions,
+  type Corner,
+  type Corners,
 } from "@/lib/style-options";
+import { cn } from "@/lib/utils";
 import type { StyleOptions } from "@/types/screenshot";
 
 interface StyleControlsProps {
@@ -30,264 +39,518 @@ export function StyleControls({
   onChange,
   disabled = false,
 }: StyleControlsProps) {
+  const activePreset = getGradient(options.gradientId);
+  const angleApplies = options.useCustomGradient || supportsAngle(activePreset);
+
   return (
-    <div className="space-y-4">
-      <div
-        className={`max-h-[calc(100vh-10rem)] pr-4 ${
-          disabled ? "opacity-50 pointer-events-none" : "md:overflow-y-auto"
-        }`}
+    <div
+      aria-disabled={disabled || undefined}
+      className={cn(
+        "divide-y divide-stroke transition-opacity duration-200",
+        disabled && "pointer-events-none opacity-45 select-none"
+      )}
+    >
+      <Section
+        title="Background"
+        meta={options.useCustomGradient ? "Custom" : activePreset.label}
       >
-        <Accordion type="multiple" defaultValue={["background"]}>
-          <AccordionItem value="background">
-            <AccordionTrigger className="text-xs pb-3 cursor-pointer">
-              Background
-            </AccordionTrigger>
-            <AccordionContent>
-              <div className="space-y-4">
-                <Tabs defaultValue="presets" className="w-full">
-                  <TabsList className="grid grid-cols-2 mb-2 rounded-sm w-full">
-                    <TabsTrigger value="presets" className="text-xs rounded-sm">
-                      Presets
-                    </TabsTrigger>
-                    <TabsTrigger value="custom" className="text-xs rounded-sm">
-                      Custom
-                    </TabsTrigger>
-                  </TabsList>
-                  <TabsContent value="presets">
-                    <div className="grid grid-cols-3 gap-2">
-                      {gradientOptions.map((gradient) => (
+        <Tabs
+          value={options.useCustomGradient ? "custom" : "presets"}
+          onValueChange={(value) =>
+            onChange({ useCustomGradient: value === "custom" })
+          }
+        >
+          <TabsList className="mb-3 grid w-full grid-cols-2">
+            <TabsTrigger value="presets" className="text-xs">
+              Presets
+            </TabsTrigger>
+            <TabsTrigger value="custom" className="text-xs">
+              Custom
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="presets" className="flex flex-col gap-4">
+            {gradientFamilies.map((family) => {
+              const presets = gradientPresets.filter(
+                (preset) => preset.family === family.id
+              );
+
+              return (
+                <div key={family.id} className="flex flex-col gap-2">
+                  <p className="text-[13px] text-muted-foreground">{family.label}</p>
+                  <div className="grid grid-cols-4 gap-2 sm:grid-cols-8">
+                    {presets.map((preset) => {
+                      const selected =
+                        !options.useCustomGradient &&
+                        options.gradientId === preset.id;
+
+                      return (
                         <button
-                          key={gradient.value}
-                          className={`h-9 rounded-sm cursor-pointer overflow-hidden border-2 transition-all duration-300 ease-in-out ${
-                            options.gradientStyle === gradient.value
-                              ? "border-zinc-300 shadow-xl"
-                              : "border-transparent"
-                          }`}
+                          key={preset.id}
+                          type="button"
+                          title={preset.label}
+                          aria-pressed={selected}
                           onClick={() =>
                             onChange({
-                              gradientStyle: gradient.value,
+                              gradientId: preset.id,
                               useCustomGradient: false,
                             })
                           }
+                          className={cn(
+                            "group relative aspect-[4/5] cursor-pointer overflow-hidden rounded-md",
+                            "outline-2 outline-offset-2 transition-all duration-150 active:scale-[0.94]",
+                            selected
+                              ? "outline-brand"
+                              : "outline-transparent hover:outline-stroke-strong"
+                          )}
                         >
-                          <div
-                            className={`w-full h-full ${gradient.previewClass}`}
+                          <span
+                            className="absolute inset-0"
+                            style={{
+                              backgroundImage: gradientToCss(
+                                preset,
+                                supportsAngle(preset)
+                                  ? options.gradientAngle
+                                  : undefined
+                              ),
+                            }}
                           />
+                          {selected && (
+                            <span className="absolute inset-0 flex items-center justify-center">
+                              <span className="rounded-full bg-black/35 p-0.5 backdrop-blur-sm">
+                                <CheckIcon
+                                  className="size-3"
+                                  style={{ color: "#fff" }}
+                                  aria-hidden="true"
+                                />
+                              </span>
+                            </span>
+                          )}
+                          <span className="sr-only">{preset.label}</span>
                         </button>
-                      ))}
-                    </div>
-                  </TabsContent>
-                  <TabsContent value="custom">
-                    <div className="space-y-3">
-                      <div>
-                        <Label className="text-xs mb-1 block">
-                          Start Color
-                        </Label>
-                        <ColorPicker
-                          color={options.customGradientFrom}
-                          onChange={(color) =>
-                            onChange({
-                              customGradientFrom: color,
-                              useCustomGradient: true,
-                            })
-                          }
-                        />
-                      </div>
-                      <div>
-                        <Label className="text-xs mb-1 block">End Color</Label>
-                        <ColorPicker
-                          color={options.customGradientTo}
-                          onChange={(color) =>
-                            onChange({
-                              customGradientTo: color,
-                              useCustomGradient: true,
-                            })
-                          }
-                        />
-                      </div>
-                    </div>
-                  </TabsContent>
-                </Tabs>
-
-                <div className="flex items-center justify-between">
-                  <Label
-                    htmlFor="noise-overlay"
-                    className="text-xs cursor-pointer"
-                  >
-                    Noise Overlay
-                  </Label>
-                  <Switch
-                    id="noise-overlay"
-                    checked={options.showNoiseOverlay}
-                    onCheckedChange={(checked) =>
-                      onChange({ showNoiseOverlay: checked })
-                    }
-                  />
-                </div>
-              </div>
-            </AccordionContent>
-          </AccordionItem>
-
-          <AccordionItem value="appearance">
-            <AccordionTrigger className="text-xs pb-3 cursor-pointer">
-              Appearance
-            </AccordionTrigger>
-            <AccordionContent>
-              <div className="space-y-4">
-                <div>
-                  <Label className="text-xs mb-2 block">Padding</Label>
-                  <div className="flex items-center gap-4">
-                    <Slider
-                      value={[options.padding]}
-                      min={0}
-                      max={100}
-                      step={4}
-                      onValueChange={(value) => onChange({ padding: value[0] })}
-                      className="flex-1"
-                    />
-                    <span className="text-xs w-8 text-right">
-                      {options.padding}px
-                    </span>
+                      );
+                    })}
                   </div>
                 </div>
+              );
+            })}
+          </TabsContent>
 
-                <div>
-                  <Label className="text-xs mb-2 block">
-                    Outer Border Radius
-                  </Label>
-                  <RadioGroup
-                    value={options.outerRadius}
-                    onValueChange={(value) => onChange({ outerRadius: value })}
-                    className="grid grid-cols-3 gap-2"
-                  >
-                    {radiusOptions.map((radius) => (
-                      <Label
-                        key={radius.value}
-                        htmlFor={`outer-${radius.value}`}
-                        className={`flex items-center justify-center border rounded-md p-2 cursor-pointer text-xs transition-all duration-300 ease-in-out ${
-                          options.outerRadius === radius.value
-                            ? "bg-muted border-zinc-300"
-                            : ""
-                        }`}
-                      >
-                        <RadioGroupItem
-                          value={radius.value}
-                          id={`outer-${radius.value}`}
-                          className="sr-only"
-                        />
-                        {radius.label}
-                      </Label>
-                    ))}
-                  </RadioGroup>
-                </div>
+          <TabsContent value="custom" className="grid gap-3 sm:grid-cols-2">
+            <div
+              className="h-24 w-full rounded-md border border-stroke sm:col-span-2"
+              style={{
+                backgroundImage: customGradientToCss(
+                  options.customGradientFrom,
+                  options.customGradientTo,
+                  options.gradientAngle
+                ),
+              }}
+              aria-hidden="true"
+            />
+            <div className="flex flex-col gap-1.5">
+              <FieldLabel>Start</FieldLabel>
+              <ColorPicker
+                color={options.customGradientFrom}
+                onChange={(color) =>
+                  onChange({
+                    customGradientFrom: color,
+                    useCustomGradient: true,
+                  })
+                }
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <FieldLabel>End</FieldLabel>
+              <ColorPicker
+                color={options.customGradientTo}
+                onChange={(color) =>
+                  onChange({ customGradientTo: color, useCustomGradient: true })
+                }
+              />
+            </div>
+          </TabsContent>
+        </Tabs>
 
-                <div>
-                  <Label className="text-xs mb-2 block">
-                    Image Border Radius
-                  </Label>
-                  <RadioGroup
-                    value={options.imageRadius}
-                    onValueChange={(value) => onChange({ imageRadius: value })}
-                    className="grid grid-cols-3 gap-2"
-                  >
-                    {radiusOptions.map((radius) => (
-                      <Label
-                        key={radius.value}
-                        htmlFor={`image-${radius.value}`}
-                        className={`flex items-center justify-center border rounded-md p-2 cursor-pointer text-xs transition-all duration-300 ease-in-out ${
-                          options.imageRadius === radius.value
-                            ? "bg-muted border-zinc-300"
-                            : ""
-                        }`}
-                      >
-                        <RadioGroupItem
-                          value={radius.value}
-                          id={`image-${radius.value}`}
-                          className="sr-only"
-                        />
-                        {radius.label}
-                      </Label>
-                    ))}
-                  </RadioGroup>
-                </div>
+        <div className="flex flex-col gap-4 border-t border-stroke pt-4">
+          {angleApplies ? (
+            <SliderRow
+              label="Angle"
+              value={options.gradientAngle}
+              min={0}
+              max={360}
+              step={15}
+              suffix="deg"
+              onChange={(value) => onChange({ gradientAngle: value })}
+            />
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Mesh gradients do not use an angle.
+            </p>
+          )}
 
-                <div>
-                  <Label className="text-xs mb-2 block">Shadow</Label>
-                  <RadioGroup
-                    value={options.shadow}
-                    onValueChange={(value) => onChange({ shadow: value })}
-                    className="grid grid-cols-3 gap-2"
-                  >
-                    {shadowOptions.map((shadow) => (
-                      <Label
-                        key={shadow.value}
-                        htmlFor={`shadow-${shadow.value}`}
-                        className={`flex items-center justify-center border rounded-md p-2 cursor-pointer text-xs transition-all duration-300 ease-in-out ${
-                          options.shadow === shadow.value
-                            ? "bg-muted border-zinc-300"
-                            : ""
-                        }`}
-                      >
-                        <RadioGroupItem
-                          value={shadow.value}
-                          id={`shadow-${shadow.value}`}
-                          className="sr-only"
-                        />
-                        {shadow.label}
-                      </Label>
-                    ))}
-                  </RadioGroup>
-                </div>
-              </div>
-            </AccordionContent>
-          </AccordionItem>
+          <ToggleRow
+            id="noise-overlay"
+            label="Grain"
+            checked={options.showNoiseOverlay}
+            onCheckedChange={(checked) =>
+              onChange({ showNoiseOverlay: checked })
+            }
+          />
 
-          <AccordionItem value="window">
-            <AccordionTrigger className="text-xs pb-3 cursor-pointer">
-              Window Style
-            </AccordionTrigger>
-            <AccordionContent>
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <Label
-                    htmlFor="window-navbar"
-                    className="text-xs cursor-pointer"
-                  >
-                    Window Navbar
-                  </Label>
-                  <Switch
-                    id="window-navbar"
-                    checked={options.showWindowNavbar}
-                    onCheckedChange={(checked) =>
-                      onChange({ showWindowNavbar: checked })
-                    }
-                  />
-                </div>
+          <SliderRow
+            label="Grain amount"
+            value={options.noiseIntensity}
+            min={5}
+            max={100}
+            step={5}
+            suffix="%"
+            disabled={!options.showNoiseOverlay}
+            onChange={(value) => onChange({ noiseIntensity: value })}
+          />
+        </div>
+      </Section>
 
-                {options.showWindowNavbar && (
-                  <div className="pl-4 border-l-2 border-muted">
-                    <div className="flex items-center justify-between">
-                      <Label
-                        htmlFor="window-navbar-theme"
-                        className="text-xs cursor-pointer"
-                      >
-                        Dark Theme
-                      </Label>
-                      <Switch
-                        id="window-navbar-theme"
-                        checked={options.windowNavbarDark}
-                        onCheckedChange={(checked) =>
-                          onChange({ windowNavbarDark: checked })
-                        }
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-            </AccordionContent>
-          </AccordionItem>
-        </Accordion>
+      <Section title="Frame">
+        <SliderRow
+          label="Padding"
+          value={options.padding}
+          min={0}
+          max={160}
+          step={4}
+          suffix="px"
+          onChange={(value) => onChange({ padding: value })}
+        />
+
+        <SizeRow
+          label="Outer radius"
+          name="outer"
+          value={options.outerRadius}
+          onChange={(value) => onChange({ outerRadius: value })}
+        />
+
+        <SizeRow
+          label="Image radius"
+          name="image"
+          value={options.imageRadius}
+          onChange={(value) => onChange({ imageRadius: value })}
+        />
+
+        <CornerRow
+          radius={options.imageRadius}
+          corners={options.imageCorners}
+          onChange={(imageCorners) => onChange({ imageCorners })}
+        />
+      </Section>
+
+      <Section title="Depth">
+        <ChoiceRow
+          label="Shadow"
+          name="shadow"
+          value={options.shadow}
+          options={shadowOptions}
+          onChange={(value) => onChange({ shadow: value })}
+        />
+
+        <div className="flex flex-col gap-3 border-t border-stroke pt-4">
+          <ToggleRow
+            id="window-navbar"
+            label="Title bar"
+            checked={options.showWindowNavbar}
+            onCheckedChange={(checked) =>
+              onChange({ showWindowNavbar: checked })
+            }
+          />
+
+          <ToggleRow
+            id="window-navbar-theme"
+            label="Dark title bar"
+            checked={options.windowNavbarDark}
+            disabled={!options.showWindowNavbar}
+            onCheckedChange={(checked) =>
+              onChange({ windowNavbarDark: checked })
+            }
+          />
+        </div>
+      </Section>
+    </div>
+  );
+}
+
+function Section({
+  title,
+  meta,
+  children,
+}: {
+  title: string;
+  meta?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="flex flex-col gap-4 px-5 py-5">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-sm font-medium tracking-tight text-foreground">
+          {title}
+        </h3>
+        {meta && (
+          <span className="text-[13px] text-muted-foreground">{meta}</span>
+        )}
       </div>
+      {children}
+    </section>
+  );
+}
+
+function SliderRow({
+  label,
+  value,
+  min,
+  max,
+  step,
+  suffix,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  suffix: string;
+  disabled?: boolean;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex flex-col gap-2 transition-opacity duration-150",
+        disabled && "opacity-50"
+      )}
+    >
+      <div className="flex items-center justify-between">
+        <FieldLabel>{label}</FieldLabel>
+        <span className="text-[13px] tabular-nums text-foreground">
+          {value}
+          {suffix}
+        </span>
+      </div>
+      <Slider
+        value={[value]}
+        min={min}
+        max={max}
+        step={step}
+        disabled={disabled}
+        onValueChange={(next) => onChange(next[0])}
+      />
+    </div>
+  );
+}
+
+function SizeRow({
+  label,
+  name,
+  value,
+  onChange,
+}: {
+  label: string;
+  name: string;
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <FieldLabel>{label}</FieldLabel>
+      <SegmentedGroup
+        value={String(value)}
+        onValueChange={(next) => onChange(Number(next))}
+        className="grid-cols-3"
+      >
+        {radiusSizes.map((size) => (
+          <SegmentedOption
+            key={size.value}
+            id={`${name}-${size.value}`}
+            value={String(size.value)}
+            selected={value === size.value}
+            className="h-8"
+          >
+            {size.label}
+          </SegmentedOption>
+        ))}
+      </SegmentedGroup>
+    </div>
+  );
+}
+
+/**
+ * Corner picker. Each toggle previews the corner it controls by rounding that
+ * one corner of a small square, so no icon or glyph is needed to name it.
+ */
+function CornerRow({
+  radius,
+  corners,
+  onChange,
+}: {
+  radius: number;
+  corners: Corners;
+  onChange: (corners: Corners) => void;
+}) {
+  const disabled = radius === 0;
+  const toggle = (key: Corner) =>
+    onChange({ ...corners, [key]: !corners[key] });
+
+  return (
+    <div
+      className={cn(
+        "flex flex-col gap-2 transition-opacity duration-150",
+        disabled && "opacity-50"
+      )}
+    >
+      <div className="flex items-center justify-between">
+        <FieldLabel>Rounded corners</FieldLabel>
+        <span className="text-[13px] tabular-nums text-foreground">
+          {CORNER_ORDER.filter((corner) => corners[corner.key]).length} of 4
+        </span>
+      </div>
+
+      <div className="flex items-center gap-3">
+        <div className="grid shrink-0 grid-cols-2 gap-1 rounded-lg bg-track p-1">
+          {CORNER_ORDER.map((corner) => (
+            <button
+              key={corner.key}
+              type="button"
+              aria-label={corner.label}
+              aria-pressed={corners[corner.key]}
+              disabled={disabled}
+              onClick={() => toggle(corner.key)}
+              className={cn(
+                "grid size-7 cursor-pointer place-items-center rounded-md",
+                "transition-all duration-150 active:scale-[0.94]",
+                "disabled:cursor-not-allowed",
+                corners[corner.key]
+                  ? "bg-track-active shadow-sm"
+                  : "hover:bg-panel/60"
+              )}
+            >
+              <span
+                aria-hidden="true"
+                className={cn(
+                  "block size-3.5 border-t-2 border-l-2",
+                  corners[corner.key]
+                    ? "border-foreground"
+                    : "border-muted-foreground",
+                  corner.key === "tr" && "rotate-90",
+                  corner.key === "br" && "rotate-180",
+                  corner.key === "bl" && "-rotate-90"
+                )}
+                style={{
+                  borderTopLeftRadius: corners[corner.key] ? "6px" : "0px",
+                }}
+              />
+            </button>
+          ))}
+        </div>
+
+        <div className="grid flex-1 grid-cols-2 gap-1 rounded-lg bg-track p-1">
+          {cornerPresets.map((preset) => (
+            <button
+              key={preset.label}
+              type="button"
+              disabled={disabled}
+              onClick={() => onChange(preset.corners)}
+              className={cn(
+                "h-7 cursor-pointer rounded-md text-[13px]",
+                "transition-all duration-150 active:scale-[0.97]",
+                "disabled:cursor-not-allowed",
+                isSameCorners(preset.corners, corners)
+                  ? "bg-track-active text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div
+        aria-hidden="true"
+        className="h-10 w-full border border-stroke bg-elevated"
+        style={{ borderRadius: cornerRadius(radius, corners) }}
+      />
+    </div>
+  );
+}
+
+function isSameCorners(a: Corners, b: Corners): boolean {
+  return CORNER_ORDER.every((corner) => a[corner.key] === b[corner.key]);
+}
+
+function ChoiceRow({
+  label,
+  name,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  name: string;
+  value: string;
+  options: { value: string; label: string }[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <FieldLabel>{label}</FieldLabel>
+      <SegmentedGroup
+        value={value}
+        onValueChange={onChange}
+        className="grid-cols-3"
+      >
+        {options.map((option) => (
+          <SegmentedOption
+            key={option.value}
+            id={`${name}-${option.value}`}
+            value={option.value}
+            selected={value === option.value}
+            className="h-8"
+          >
+            {option.label}
+          </SegmentedOption>
+        ))}
+      </SegmentedGroup>
+    </div>
+  );
+}
+
+function ToggleRow({
+  id,
+  label,
+  checked,
+  disabled,
+  onCheckedChange,
+}: {
+  id: string;
+  label: string;
+  checked: boolean;
+  disabled?: boolean;
+  onCheckedChange: (checked: boolean) => void;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex items-center justify-between transition-opacity duration-150",
+        disabled && "opacity-50"
+      )}
+    >
+      <FieldLabel htmlFor={id} className="cursor-pointer">
+        {label}
+      </FieldLabel>
+      <Switch
+        id={id}
+        checked={checked}
+        disabled={disabled}
+        onCheckedChange={onCheckedChange}
+      />
     </div>
   );
 }

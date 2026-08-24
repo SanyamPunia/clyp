@@ -1,8 +1,17 @@
 import type React from "react";
 import type { Metadata, Viewport } from "next";
+import { Inter } from "next/font/google";
+import Script from "next/script";
+
 import "./globals.css";
-import { PostHogProvider } from "./providers";
-import { Toaster } from "@/components/ui/sonner"
+import { Providers } from "./providers";
+import { Toaster } from "@/components/ui/sonner";
+import { cn } from "@/lib/utils";
+
+const inter = Inter({
+  variable: "--font-inter",
+  subsets: ["latin"],
+});
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://clyp-omega.vercel.app"),
@@ -55,6 +64,9 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
+  // Browser chrome cannot read a CSS variable, so this mirrors the
+  // `--gray-100` app background in globals.css and must change with it.
+  themeColor: "#0f0e0d",
 };
 
 export default function RootLayout({
@@ -63,10 +75,19 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
-      <body>
-        <PostHogProvider>{children}</PostHogProvider>
-        <Toaster />
+    <html lang="en">
+      <body
+        className={cn(inter.variable, "font-sans")}
+      >
+        <Providers>
+          {children}
+          <Toaster />
+        </Providers>
+        <Script
+          defer
+          src="https://assets.onedollarstats.com/stonks.js"
+          strategy="afterInteractive"
+        />
       </body>
     </html>
   );
