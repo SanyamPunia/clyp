@@ -1,26 +1,12 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
-@custom-variant dark (&:is(.dark *));
-
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-  --color-sidebar-ring: var(--sidebar-ring);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar: var(--sidebar);
-  --color-chart-5: var(--chart-5);
-  --color-chart-4: var(--chart-4);
-  --color-chart-3: var(--chart-3);
-  --color-chart-2: var(--chart-2);
-  --color-chart-1: var(--chart-1);
+
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);
@@ -37,80 +23,97 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
+
+  /* Numbered gray scale, Radix-style: 100 app background through 1200
+     high-contrast text. Components never use these directly. The semantic
+     tokens below map onto them, so a palette change is one edit here. */
+  --color-gray-100: var(--gray-100);
+  --color-gray-200: var(--gray-200);
+  --color-gray-300: var(--gray-300);
+  --color-gray-400: var(--gray-400);
+  --color-gray-500: var(--gray-500);
+  --color-gray-600: var(--gray-600);
+  --color-gray-700: var(--gray-700);
+  --color-gray-800: var(--gray-800);
+  --color-gray-900: var(--gray-900);
+  --color-gray-1000: var(--gray-1000);
+  --color-gray-1100: var(--gray-1100);
+  --color-gray-1200: var(--gray-1200);
+
+  /* App surfaces. `panel` fills the two bordered containers, `canvas` is the
+     recessed stage inside the left one, `elevated` is a control on a panel. */
+  --color-canvas: var(--canvas);
+  --color-canvas-dot: var(--canvas-dot);
+  --color-panel: var(--panel);
+  --color-elevated: var(--elevated);
+  --color-stroke: var(--stroke);
+  --color-stroke-strong: var(--stroke-strong);
+  --color-selected: var(--selected);
+  --color-brand: var(--brand);
+  /* Segmented controls: a recessed track with one lifted option. */
+  --color-track: var(--track);
+  --color-track-active: var(--track-active);
+
+  /* Descriptive copy is 15/24, matching the reference. */
+  --text-copy: 0.9375rem;
+  --text-copy--line-height: 1.5rem;
+
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
 }
 
+/* Single dark palette. The app has no light mode, so these are the only
+   values and nothing is behind a variant. */
 :root {
+  color-scheme: dark;
   --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.141 0.005 285.823);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.141 0.005 285.823);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.141 0.005 285.823);
-  --primary: oklch(0.21 0.006 285.885);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.967 0.001 286.375);
-  --secondary-foreground: oklch(0.21 0.006 285.885);
-  --muted: oklch(0.967 0.001 286.375);
-  --muted-foreground: oklch(0.552 0.016 285.938);
-  --accent: oklch(0.967 0.001 286.375);
-  --accent-foreground: oklch(0.21 0.006 285.885);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.92 0.004 286.32);
-  --input: oklch(0.92 0.004 286.32);
-  --ring: oklch(0.705 0.015 286.067);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.141 0.005 285.823);
-  --sidebar-primary: oklch(0.21 0.006 285.885);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.967 0.001 286.375);
-  --sidebar-accent-foreground: oklch(0.21 0.006 285.885);
-  --sidebar-border: oklch(0.92 0.004 286.32);
-  --sidebar-ring: oklch(0.705 0.015 286.067);
+
+  --gray-100: oklch(0.165 0.0035 60);
+  --gray-200: oklch(0.195 0.004 55);
+  --gray-300: oklch(0.23 0.005 50);
+  --gray-400: oklch(0.265 0.0055 48);
+  --gray-500: oklch(0.3 0.006 46);
+  --gray-600: oklch(0.34 0.0065 45);
+  --gray-700: oklch(0.4 0.007 45);
+  --gray-800: oklch(0.49 0.008 45);
+  --gray-900: oklch(0.55 0.013 58);
+  --gray-1000: oklch(0.62 0.012 60);
+  --gray-1100: oklch(0.77 0.01 65);
+  --gray-1200: oklch(0.97 0.002 106);
+
+  --background: var(--gray-100);
+  --foreground: var(--gray-1200);
+  --card: var(--gray-200);
+  --card-foreground: var(--gray-1200);
+  --popover: var(--gray-200);
+  --popover-foreground: var(--gray-1200);
+  --primary: var(--gray-1200);
+  --primary-foreground: var(--gray-100);
+  --secondary: var(--gray-400);
+  --secondary-foreground: var(--gray-1200);
+  --muted: var(--gray-400);
+  --muted-foreground: var(--gray-1100);
+  --accent: var(--gray-400);
+  --accent-foreground: var(--gray-1200);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: var(--gray-600);
+  --input: var(--gray-700);
+  --ring: var(--gray-800);
+
+  --canvas: oklch(0.135 0.003 60);
+  --canvas-dot: var(--gray-500);
+  --panel: var(--gray-200);
+  --elevated: var(--gray-300);
+  --stroke: var(--gray-600);
+  --stroke-strong: var(--gray-700);
+  --selected: var(--gray-1200);
+  --brand: oklch(0.7 0.176 40);
+  --track: var(--gray-100);
+  --track-active: var(--gray-400);
 }
 
-.dark {
-  --background: oklch(0.141 0.005 285.823);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.21 0.006 285.885);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.21 0.006 285.885);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.92 0.004 286.32);
-  --primary-foreground: oklch(0.21 0.006 285.885);
-  --secondary: oklch(0.274 0.006 286.033);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.274 0.006 286.033);
-  --muted-foreground: oklch(0.705 0.015 286.067);
-  --accent: oklch(0.274 0.006 286.033);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.552 0.016 285.938);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.21 0.006 285.885);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.274 0.006 286.033);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.552 0.016 285.938);
-}
 
 @layer base {
   * {
@@ -118,18 +121,49 @@
   }
   body {
     @apply bg-background text-foreground;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+}
+
+@layer components {
+  /* Dot grid the artwork floats on. Sized so it stays legible at any zoom. */
+  .canvas-grid {
+    background-color: var(--canvas);
+    background-image: radial-gradient(var(--canvas-dot) 1px, transparent 1px);
+    background-size: 16px 16px;
+    background-position: -1px -1px;
+  }
+}
+
+@keyframes gradient-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes artwork-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
+
+.animate-gradient-in { animation: gradient-in 400ms ease-out both; }
+.animate-rise-in { animation: rise-in 320ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.animate-artwork-in { animation: artwork-in 420ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-gradient-in,
+  .animate-rise-in,
+  .animate-artwork-in {
+    animation: none;
   }
 }
 
 /* scrollbar */
-::-webkit-scrollbar {
-  width: 5px;
-}
-
-::-webkit-scrollbar-track {
-  background: var(--background);
-}
-
-::-webkit-scrollbar-thumb {
-  background: var(--muted);
-}
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--stroke-strong); border-radius: 999px; }
