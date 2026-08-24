@@ -1,66 +1,67 @@
-export const gradientOptions = [
-  {
-    value: "blue-purple",
-    label: "Blue Purple",
-    previewClass: "bg-gradient-to-br from-blue-500 to-purple-600",
-  },
-  {
-    value: "green-blue",
-    label: "Green Blue",
-    previewClass: "bg-gradient-to-br from-green-400 to-blue-500",
-  },
-  {
-    value: "orange-red",
-    label: "Orange Red",
-    previewClass: "bg-gradient-to-br from-orange-400 to-red-500",
-  },
-  {
-    value: "pink-purple",
-    label: "Pink Purple",
-    previewClass: "bg-gradient-to-br from-pink-400 to-purple-600",
-  },
-  {
-    value: "gray-slate",
-    label: "Gray Slate",
-    previewClass: "bg-gradient-to-br from-gray-200 to-slate-400",
-  },
-  {
-    value: "yellow-orange",
-    label: "Yellow Orange",
-    previewClass: "bg-gradient-to-br from-yellow-300 to-orange-500",
-  },
-  {
-    value: "teal-blue",
-    label: "Teal Blue",
-    previewClass: "bg-gradient-to-br from-teal-400 to-blue-500",
-  },
-  {
-    value: "indigo-purple",
-    label: "Indigo Purple",
-    previewClass: "bg-gradient-to-br from-indigo-500 to-purple-600",
-  },
-  {
-    value: "red-pink",
-    label: "Red Pink",
-    previewClass: "bg-gradient-to-br from-red-500 to-pink-500",
-  },
-];
-
-export const radiusOptions = [
-  { value: "rounded-none", label: "None" },
-  { value: "rounded-sm", label: "Small" },
-  { value: "rounded-md", label: "Medium" },
-  { value: "rounded-lg", label: "Large" },
-  { value: "rounded-xl", label: "X-Large" },
-  { value: "rounded-2xl", label: "2X-Large" },
-  { value: "rounded-3xl", label: "3X-Large" },
+export const radiusSizes = [
+  { value: 0, label: "None" },
+  { value: 4, label: "Small" },
+  { value: 8, label: "Medium" },
+  { value: 12, label: "Large" },
+  { value: 18, label: "X-Large" },
+  { value: 26, label: "2X-Large" },
 ];
 
 export const shadowOptions = [
   { value: "shadow-none", label: "None" },
-  { value: "shadow-sm", label: "Small" },
   { value: "shadow-md", label: "Medium" },
   { value: "shadow-lg", label: "Large" },
   { value: "shadow-xl", label: "X-Large" },
   { value: "shadow-2xl", label: "2X-Large" },
+  // Arbitrary value: this drop is deeper and more diffuse than shadow-2xl,
+  // which is the largest shadow Tailwind ships a token for.
+  { value: "shadow-[0_40px_80px_-20px_rgba(0,0,0,0.45)]", label: "Deep" },
 ];
+
+export type Corner = "tl" | "tr" | "br" | "bl";
+
+export interface Corners {
+  tl: boolean;
+  tr: boolean;
+  br: boolean;
+  bl: boolean;
+}
+
+export const ALL_CORNERS: Corners = { tl: true, tr: true, br: true, bl: true };
+
+/** Order matters: this is the 2x2 order the corner picker renders in. */
+export const CORNER_ORDER: { key: Corner; label: string }[] = [
+  { key: "tl", label: "Top left" },
+  { key: "tr", label: "Top right" },
+  { key: "bl", label: "Bottom left" },
+  { key: "br", label: "Bottom right" },
+];
+
+export const cornerPresets: { label: string; corners: Corners }[] = [
+  { label: "All", corners: { tl: true, tr: true, br: true, bl: true } },
+  { label: "Top", corners: { tl: true, tr: true, br: false, bl: false } },
+  { label: "Bottom", corners: { tl: false, tr: false, br: true, bl: true } },
+  { label: "None", corners: { tl: false, tr: false, br: false, bl: false } },
+];
+
+/**
+ * `border-radius` shorthand for the corners that are switched on.
+ * `only` restricts it further, which is how the title bar takes the top
+ * corners and the screenshot underneath takes the bottom ones.
+ */
+export function cornerRadius(
+  radius: number,
+  corners: Corners,
+  only?: "top" | "bottom"
+): string {
+  const on = (key: Corner, allowed: boolean) =>
+    corners[key] && allowed ? `${radius}px` : "0px";
+  const top = only !== "bottom";
+  const bottom = only !== "top";
+  return [
+    on("tl", top),
+    on("tr", top),
+    on("br", bottom),
+    on("bl", bottom),
+  ].join(" ");
+}
