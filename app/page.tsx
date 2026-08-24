@@ -10,9 +10,9 @@ export default function Home() {
        panels below owns its own scroll region. Below lg the panels stack and
        the page scrolls normally. */
     <div className="flex min-h-svh flex-col gap-3 p-3 lg:h-svh lg:overflow-hidden">
-      {/* px-4 puts the wordmark on the same left edge as the panel headings
-          below it, which sit inside a 1px border plus px-4. */}
-      <header className="flex shrink-0 items-center justify-between gap-4 px-4">
+      {/* Padding tracks the panel toolbars below, so the wordmark and the panel
+          headings share a left edge. The remaining 1px is the panel border. */}
+      <header className="flex shrink-0 items-center justify-between gap-4 px-4 sm:px-5">
         <div className="flex items-center">
           <Link
             href="/"
