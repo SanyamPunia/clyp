@@ -247,7 +247,7 @@ export function Clyp() {
 
   const handleExport = useCallback(
     async (options: ExportOptions) => {
-      if (!screenshotRef.current) return;
+      if (!image || !screenshotRef.current) return;
 
       setExporting(true);
       try {
@@ -304,8 +304,8 @@ export function Clyp() {
     <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[minmax(0,1fr)_380px] xl:grid-cols-[minmax(0,1fr)_440px] 2xl:grid-cols-[minmax(0,1fr)_520px]">
       {/* Canvas panel */}
       <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-stroke bg-panel">
-        <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-stroke px-4 py-3 sm:flex-nowrap sm:px-5 sm:py-3.5">
-          <div className="flex items-center gap-1.5">
+        <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2.5 border-b border-stroke px-4 py-3 sm:flex-nowrap sm:px-5 sm:py-3.5">
+          <div className="flex items-center gap-1.5 max-sm:w-full">
             <h2 className="text-sm font-medium tracking-tight text-foreground">
               Canvas
             </h2>
@@ -325,7 +325,7 @@ export function Clyp() {
             )}
           </div>
 
-          <div className="flex items-center gap-0.5 rounded-full bg-track p-0.5 sm:ml-auto">
+          <div className="flex items-center gap-0.5 rounded-full bg-track p-0.5 max-sm:order-2 sm:ml-auto">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -391,7 +391,7 @@ export function Clyp() {
             </Tooltip>
           </div>
 
-          <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
+          <div className="flex items-center gap-2 max-sm:order-2 max-sm:ml-auto sm:w-auto">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -413,7 +413,7 @@ export function Clyp() {
               disabled={!image}
             >
               <CopyIcon className="size-3.5" aria-hidden="true" />
-              Copy
+              <span className="sr-only sm:not-sr-only">Copy</span>
               <kbd className="relative ml-1 hidden items-center gap-0.5 text-muted-foreground sm:flex">
                 <ArrowBigUpIcon className="size-3" aria-hidden="true" />
                 <CommandIcon className="size-3" aria-hidden="true" />
@@ -427,7 +427,7 @@ export function Clyp() {
               disabled={!image}
             >
               <DownloadIcon className="size-3.5" aria-hidden="true" />
-              Download
+              <span className="sr-only sm:not-sr-only">Download</span>
               <kbd className="relative ml-1 hidden items-center gap-0.5 opacity-60 sm:flex">
                 <CommandIcon className="size-3" aria-hidden="true" />
                 <span className="text-xs font-medium">S</span>
@@ -479,10 +479,12 @@ export function Clyp() {
                 }
               >
                 {/* The frame renders with or without an image, so every style
-                    control previews before anything is uploaded. Only a real
-                    screenshot gets the export ref. */}
+                    control previews before anything is uploaded. The ref is
+                    always attached: without it the empty state never gets
+                    measured and so never fits the canvas. Export is gated on
+                    the image, not on the ref. */}
                 <div
-                  ref={image ? screenshotRef : undefined}
+                  ref={screenshotRef}
                   className="w-max overflow-hidden"
                   style={{
                     borderRadius: `${styleOptions.outerRadius}px`,
