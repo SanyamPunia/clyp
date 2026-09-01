@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/tooltip";
 import { AUDIO_ACCEPT, formatPrecise } from "@/lib/media";
 import { drawWaveform, readWaveform, type Waveform } from "@/lib/waveform";
-import { MAX_FPS } from "@/lib/video-export";
+import { EDIT_FPS } from "@/lib/video-export";
 import { cn } from "@/lib/utils";
 import type { Soundtrack, Trim } from "@/types/screenshot";
 
@@ -52,11 +52,23 @@ const INSET = HANDLE / 2;
  * that lies by up to 33ms. Both handles snap to this, dragged or nudged, which
  * is invisible at any zoom (a frame is 1.5px on a 20s clip across 880px) and
  * is what makes the millisecond readout mean something.
+ *
+ * `EDIT_FPS` is the coarser of the two export rates on purpose. See its own
+ * note: a point on that grid is exact at either rate.
  */
-const FRAME = 1 / MAX_FPS;
+const FRAME = 1 / EDIT_FPS;
 const COARSE_STEP = 1;
 
 const snap = (seconds: number) => Math.round(seconds / FRAME) * FRAME;
+
+/** Elements that do something with a space of their own. */
+const SPACE_IS_THEIRS = new Set([
+  "INPUT",
+  "TEXTAREA",
+  "SELECT",
+  "BUTTON",
+  "A",
+]);
 
 /**
  * The axis under the lane.
@@ -516,6 +528,42 @@ export function TrimBar({
   }, [disabled, duration, slip, placed]);
 
   /**
+   * Space plays and pauses, from anywhere on the page.
+   *
+   * Bound to the window rather than to the bar, since the point is not having
+   * to find the bar first, and this component only exists while a clip does,
+   * which is the whole of the gating it needs. A field being typed in keeps its
+   * spaces, and a focused `<button>` keeps its own native activation, or
+   * tabbing to Play and pressing space would toggle twice.
+   */
+  const toggleRef = useRef(toggle);
+
+  // Mirrored in an effect rather than during render, which is not a ref's to
+  // do. No dependency list: it is a new function every render and this is the
+  // cheapest way to keep the one binding below pointing at the current one.
+  useEffect(() => {
+    toggleRef.current = toggle;
+  });
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.code !== "Space") return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+
+      const target = event.target as HTMLElement | null;
+      if (target?.isContentEditable) return;
+      if (target && SPACE_IS_THEIRS.has(target.tagName)) return;
+
+      // Taken from the page, which would otherwise scroll.
+      event.preventDefault();
+      toggleRef.current();
+    };
+
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  /**
    * The soundtrack's body and its two edges.
    *
    * `body` slides the region along the clip. `head` brings the left edge in
@@ -645,7 +693,10 @@ export function TrimBar({
           <Transport label="Step back one frame" onClick={() => step(-FRAME)}>
             <StepBackIcon className="size-4" aria-hidden="true" />
           </Transport>
-          <Transport label={playing ? "Pause" : "Play"} onClick={toggle}>
+          <Transport
+            label={playing ? "Pause (Space)" : "Play (Space)"}
+            onClick={toggle}
+          >
             {/* Stacked and cross-faded rather than swapped. This control is
                 pressed twice in a row more than any other here, and a glyph
                 that pops in reads as the button flickering. Both sit in the
