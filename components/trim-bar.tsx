@@ -1,10 +1,24 @@
 "use client";
 
 import type React from "react";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  PauseIcon,
+  PlayIcon,
+  SquareIcon,
+  StepBackIcon,
+  StepForwardIcon,
+} from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { FieldLabel } from "@/components/ui/field-label";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { formatDuration } from "@/lib/media";
+import { MAX_FPS } from "@/lib/video-export";
 import { cn } from "@/lib/utils";
 import type { Trim } from "@/types/screenshot";
 
@@ -26,6 +40,13 @@ const INSET = HANDLE / 2;
 
 const STEP = 0.1;
 const COARSE_STEP = 1;
+
+/**
+ * One frame, for the step controls. The source's own rate is not exposed by a
+ * `<video>` element, so a frame here is a frame of the export, which is what a
+ * step is being used to inspect.
+ */
+const FRAME = 1 / MAX_FPS;
 
 interface TrimBarProps {
   /**
@@ -62,6 +83,7 @@ export function TrimBar({
   onPlayback,
   disabled = false,
 }: TrimBarProps) {
+  const [playing, setPlaying] = useState(true);
   const laneRef = useRef<HTMLDivElement>(null);
   const playheadRef = useRef<HTMLDivElement>(null);
   // The lane's usable span in px, kept in a ref because the playhead is
@@ -121,6 +143,38 @@ export function TrimBar({
     frame = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(frame);
   }, [video, duration]);
+
+  // Read from the element rather than tracked alongside it, so a pause from
+  // anywhere, including a handle drag, keeps the button honest.
+  useEffect(() => {
+    const element = video.current;
+    if (!element) return;
+
+    const sync = () => setPlaying(!element.paused);
+    sync();
+
+    element.addEventListener("play", sync);
+    element.addEventListener("pause", sync);
+    return () => {
+      element.removeEventListener("play", sync);
+      element.removeEventListener("pause", sync);
+    };
+  }, [video]);
+
+  // Plain functions: they are only handed to buttons in this component's own
+  // render and feed no effect, so the compiler memoizes them on its own.
+  const step = (by: number) => {
+    const element = video.current;
+    if (!element) return;
+
+    onPlayback(false);
+    onSeek(clamp(element.currentTime + by, trim.start, trim.end - FRAME));
+  };
+
+  const stop = () => {
+    onPlayback(false);
+    onSeek(trim.start);
+  };
 
   /** Where a client x lands on the lane, in seconds. */
   const timeAt = useCallback(
@@ -231,8 +285,36 @@ export function TrimBar({
         disabled && "pointer-events-none opacity-50",
       )}
     >
-      <div className="flex items-center justify-between gap-2 pb-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 pb-2">
         <FieldLabel>Trim</FieldLabel>
+
+        {/* The same recessed pill the canvas toolbar gives its zoom cluster, so
+            the two groups of icon buttons read as the same kind of thing. */}
+        <div className="flex items-center gap-0.5 rounded-full bg-track p-0.5">
+          <Transport label="Back to the start" onClick={stop}>
+            <SquareIcon className="size-3.5" aria-hidden="true" />
+          </Transport>
+          <Transport label="Step back one frame" onClick={() => step(-FRAME)}>
+            <StepBackIcon className="size-4" aria-hidden="true" />
+          </Transport>
+          <Transport
+            label={playing ? "Pause" : "Play"}
+            onClick={() => onPlayback(!playing)}
+          >
+            {playing ? (
+              <PauseIcon className="size-4" aria-hidden="true" />
+            ) : (
+              <PlayIcon className="size-4" aria-hidden="true" />
+            )}
+          </Transport>
+          <Transport
+            label="Step forward one frame"
+            onClick={() => step(FRAME)}
+          >
+            <StepForwardIcon className="size-4" aria-hidden="true" />
+          </Transport>
+        </div>
+
         <span className="text-[13px] text-muted-foreground">
           <span className="tabular-nums text-foreground">
             {formatDuration(trim.end - trim.start)}
@@ -291,6 +373,27 @@ export function TrimBar({
         />
       </div>
     </div>
+  );
+}
+
+function Transport({
+  label,
+  onClick,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button variant="ghost" size="icon-sm" aria-label={label} onClick={onClick}>
+          {children}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
   );
 }
 
