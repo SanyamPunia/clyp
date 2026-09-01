@@ -155,6 +155,7 @@ export function ExportModal({
       ? Math.min(...QUALITY_OPTIONS.map((o) => o.value))
       : Math.max(...usable);
 
+  const refused = QUALITY_OPTIONS.map((o) => o.value).filter((v) => !fits(v));
   const fps = options.fps ?? DEFAULT_FPS;
   const output = outputSize(frameSize, quality);
   const bytes = isVideo
@@ -187,35 +188,45 @@ export function ExportModal({
             )}
             {title}
           </DialogTitle>
-          <DialogDescription>
+          {/* Not rendered, but not removed: the dialog needs something to be
+              described by, and the visible version was two lines saying that
+              longer clips take longer to render, which is true of every
+              encoder ever written. The summary below says what you get. */}
+          <DialogDescription className="sr-only">
             {isVideo
-              ? "The clip is re-encoded as an MP4 at the styled size. Longer clips and higher scales take longer to render."
+              ? "Export the clip as an MP4 at the styled size."
               : kind === "video"
-                ? "The clip's current frame is captured as a PNG, with the frame styled around it."
-                : "Higher scales render more pixels and take longer. The file size is an estimate."}
+                ? "Capture the clip's current frame as a PNG, styled."
+                : "Export the image as a PNG at the styled size."}
           </DialogDescription>
         </DialogHeader>
 
         <DialogBody className="flex flex-col gap-4 pb-4">
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between gap-2">
-              <FieldLabel>Scale</FieldLabel>
-              {output.width > 0 && (
-                <span className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
-                  <Dimensions width={output.width} height={output.height} />
-                  {isVideo && seconds > 0 && (
-                    <>
-                      <Dot />
-                      <span className="tabular-nums">
-                        {formatDuration(seconds)}
-                      </span>
-                    </>
-                  )}
+          {/* What you get, in one place. It used to sit on the Scale row, where
+              only the first value belonged: the duration comes from the trim
+              and the estimate moves with the frame rate too. */}
+          {output.width > 0 && (
+            <p className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
+              <Dimensions width={output.width} height={output.height} />
+              {isVideo && (
+                <>
                   <Dot />
-                  <span className="tabular-nums">~{formatBytes(bytes)}</span>
-                </span>
+                  <span className="tabular-nums">{fps} fps</span>
+                </>
               )}
-            </div>
+              {isVideo && seconds > 0 && (
+                <>
+                  <Dot />
+                  <span className="tabular-nums">{formatDuration(seconds)}</span>
+                </>
+              )}
+              <Dot />
+              <span className="tabular-nums">~{formatBytes(bytes)}</span>
+            </p>
+          )}
+
+          <div className="flex flex-col gap-2">
+            <FieldLabel>Scale</FieldLabel>
             <SegmentedGroup
               value={quality.toString()}
               onValueChange={(value) =>
@@ -241,10 +252,20 @@ export function ExportModal({
                 </SegmentedOption>
               ))}
             </SegmentedGroup>
-            {stuck && (
-              <p className="text-xs text-destructive">
-                This browser cannot encode a frame this large at any scale.
-                Reduce the padding, or start from a smaller recording.
+
+            {/* Named whenever anything is refused, not only when everything is.
+                "Too large" is a state, and on its own it leaves the reader
+                unable to tell whether the limit is their file, their browser or
+                this app, and with no idea that padding is the way back. */}
+            {refused.length > 0 && (
+              <p className="text-xs text-muted-foreground">
+                {stuck
+                  ? "This frame is past what this browser can encode at any scale. Less padding, or a smaller recording, will do it."
+                  : `${list(refused.map((v) => `${v}x`))} ${
+                      refused.length > 1 ? "are" : "is"
+                    } more than this browser can encode. Less padding brings ${
+                      refused.length > 1 ? "them" : "it"
+                    } back.`}
               </p>
             )}
           </div>
@@ -283,27 +304,28 @@ export function ExportModal({
           )}
 
           {/* Offered only when there is something to keep, so the control is
-              never a switch over silence. */}
+              never a switch over silence. A label and a switch, which is the
+              shape every other toggle in the app takes: the filled card this
+              used to sit in gave sound more weight than scale. */}
           {isVideo && hasAudio && (
-            <label
-              htmlFor="keep-audio"
-              className="flex cursor-pointer items-center justify-between gap-4 rounded-lg bg-track px-3 py-2.5"
-            >
-              <span className="flex min-w-0 flex-col gap-0.5">
-                <span className="text-[13px] font-medium">Keep the audio</span>
-                <span className="truncate text-xs text-muted-foreground">
-                  {soundtrackName
-                    ? `${soundtrackName}, in place of the clip's own.`
-                    : "Re-encoded as AAC alongside the video."}
-                </span>
-              </span>
-              <Switch
-                id="keep-audio"
-                checked={options.audio ?? true}
-                onCheckedChange={(audio) => setOptions({ ...options, audio })}
-                disabled={pending}
-              />
-            </label>
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between gap-4">
+                <FieldLabel htmlFor="keep-audio" className="cursor-pointer">
+                  Keep the audio
+                </FieldLabel>
+                <Switch
+                  id="keep-audio"
+                  checked={options.audio ?? true}
+                  onCheckedChange={(audio) => setOptions({ ...options, audio })}
+                  disabled={pending}
+                />
+              </div>
+              {soundtrackName && (
+                <p className="truncate text-xs text-muted-foreground">
+                  {`Plays ${soundtrackName} in place of the clip's own sound.`}
+                </p>
+              )}
+            </div>
           )}
 
           {!isCopy && (
@@ -373,6 +395,12 @@ export function ExportModal({
       </DialogContent>
     </Dialog>
   );
+}
+
+/** "2x", "2x and 3x", "1x, 2x and 3x". */
+function list(items: string[]): string {
+  if (items.length < 2) return items.join("");
+  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }
 
 function Dot() {

@@ -126,11 +126,20 @@ up in the PNG. Two consequences:
   never reach the export.
 
 Both exports leave through `download` or `downloadBlob` in `lib/download.ts`,
-and the extension is imposed by `filenameFor` in `components/clyp.tsx` rather
-than trusted from the field, so a clip saved as `demo.png` cannot happen. What
-the user typed wins, then the dropped file's own name, then `clyp`. The modal
-shows that fallback as the field's placeholder rather than prefilling it, so
-the field stays empty until someone means to rename something.
+and the extension is imposed by `filenameFor` in the same file rather than
+trusted from the field, so a clip saved as `demo.png` cannot happen. What the
+user typed wins, then the dropped file's own name, then `clyp`. The modal shows
+that fallback as the field's placeholder rather than prefilling it, so the
+field stays empty until someone means to rename something.
+
+**A machine-written source name is skipped.** The source name is the right
+default for a file someone named deliberately and the wrong one for whatever
+the OS called a capture: macOS hands over `Screen Recording 2026-09-01 at
+6.28.06 PM`, which is 41 characters of bookkeeping on the artifact about to be
+posted. `machineNamed` catches the screen recording and screenshot prefixes,
+CleanShot, camera-roll numbering, bare dates and timestamps, and falls through
+to `clyp`. `demo.mp4`, `onboarding-flow.mp4` and `my recording of the thing.mp4`
+all survive, and a typed name always wins.
 
 **Copy always produces a PNG and Download decides the format.** The clipboard
 has no MP4 flavour, so copying a clip captures its current frame with the
@@ -141,6 +150,34 @@ modal derives its own `isVideo` the same way.
 The size readout is measured, not guessed. `lib/export-size.ts` carries the
 sample tables both fits came from. Re-measure rather than adjusting a
 coefficient by eye.
+
+## The export dialog
+
+**It says what you get, not what it is doing.** One summary line under the
+title owns every value that describes the output: dimensions, frame rate,
+duration, estimated size. That line used to sit on the Scale row, where only
+the first value belonged, since the duration comes from the trim and the
+estimate moves with the frame rate too.
+
+- **The visible description is gone and the `DialogDescription` is `sr-only`.**
+  The dialog still needs something to be described by. What it does not need is
+  two lines at the top saying that longer clips take longer to render, which is
+  true of every encoder ever written and is not something a reader acts on.
+- **A refused scale says why, whenever anything is refused.** "Too large" is a
+  state: on its own it leaves the reader unable to tell whether the limit is
+  their file, their browser or this app, and with no idea that padding is the
+  way back. The line names which scales and the remedy, and agrees in number,
+  so one refusal reads "3x is more than this browser can encode" and two read
+  "2x and 3x are". Every scale failing gets its own sentence, since less padding
+  alone may not be enough there.
+- **Every setting takes the same shape: a label, then its control.** The audio
+  toggle used to sit in a filled `bg-track` card with a title and a subtitle,
+  which gave sound more visual weight than scale and made the switch the
+  brightest thing in the body. It is now a `FieldLabel` and a `Switch` on one
+  row, which is what every other toggle in the app is.
+- **Copy is worded for what the reader gets, not for the codec.** "Re-encoded
+  as AAC alongside the video" became a line that only appears when a soundtrack
+  is placed, naming the file it will play instead of the clip's own sound.
 
 ## Video
 
