@@ -66,7 +66,7 @@ import {
   writeStyle,
 } from "@/lib/storage";
 import { canExportVideo, exportVideo } from "@/lib/video-export";
-import { download, downloadBlob } from "@/lib/download";
+import { download, downloadBlob, filenameFor } from "@/lib/download";
 import { cn } from "@/lib/utils";
 import type {
   ExportOptions,
@@ -113,22 +113,6 @@ function Hint({
       <TooltipContent>{reason}</TooltipContent>
     </Tooltip>
   );
-}
-
-/**
- * The modal's field carries whatever the user typed, so the extension is
- * imposed here rather than trusted: a clip saved as `demo.png` is a file no
- * player opens. What the user typed wins, then the dropped file's own name,
- * which is what you want when exporting three recordings in a row.
- */
-function filenameFor(
-  typed: string | undefined,
-  extension: "png" | "mp4",
-  source?: string,
-): string {
-  const base = (value: string) => value.trim().replace(/\.[^./\\]+$/, "");
-  const name = base(typed ?? "") || base(source ?? "") || "clyp";
-  return `${name}.${extension}`;
 }
 
 /* ─────────────────────────────────────────────────────────
