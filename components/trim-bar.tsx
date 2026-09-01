@@ -447,6 +447,11 @@ export function TrimBar({
    * while the sound stays where it is, which is why it moves `offset` and
    * `start` together. `tail` is the only one that changes the region's length
    * alone.
+   *
+   * All three keep the region inside the clip. A part hanging off either end
+   * is a part that cannot be heard, so drawing it outside the lane says the
+   * control is broken rather than that the sound runs on. Hearing a later
+   * stretch of the file is what `head` is for.
    */
   const dragSound = useCallback(
     (part: "body" | "head" | "tail") =>
@@ -459,18 +464,27 @@ export function TrimBar({
         const from = soundtrack;
         event.currentTarget.setPointerCapture(event.pointerId);
 
+        const length = from.end - from.start;
+
         const move = (moved: PointerEvent) => {
           const by = timeAt(moved.clientX) - origin;
 
           if (part === "body") {
-            onSoundtrackChange({ ...from, offset: snap(from.offset + by) });
+            onSoundtrackChange({
+              ...from,
+              offset: snap(clamp(from.offset + by, 0, duration - length)),
+            });
             return;
           }
 
           if (part === "head") {
-            // Bounded by what is left of the file at the head and by the
-            // minimum the region may be at the tail.
-            const room = clamp(by, -from.start, from.end - from.start - MIN_TRIM);
+            // Bounded three ways: by what is left of the file behind the head,
+            // by the clip's own start, and by the minimum the region may be.
+            const room = clamp(
+              by,
+              -Math.min(from.start, from.offset),
+              length - MIN_TRIM,
+            );
             onSoundtrackChange({
               ...from,
               offset: snap(from.offset + room),
@@ -482,7 +496,12 @@ export function TrimBar({
           onSoundtrackChange({
             ...from,
             end: snap(
-              clamp(from.end + by, from.start + MIN_TRIM, from.duration),
+              clamp(
+                from.end + by,
+                from.start + MIN_TRIM,
+                // The file's own end, or the clip's, whichever comes first.
+                Math.min(from.duration, from.start + duration - from.offset),
+              ),
             ),
           });
         };
@@ -497,7 +516,7 @@ export function TrimBar({
         window.addEventListener("pointerup", release);
         window.addEventListener("pointercancel", release);
       },
-    [disabled, onSoundtrackChange, soundtrack, timeAt],
+    [disabled, duration, onSoundtrackChange, soundtrack, timeAt],
   );
 
 
@@ -672,7 +691,11 @@ export function TrimBar({
       {/* The axis is what turns the lane from two proportions into a length.
           It is `aria-hidden` because both handles already report their value in
           seconds, so a reader hears the numbers that matter. */}
-      <div aria-hidden="true" className="relative mt-1.5 h-4">
+      {/* `h-5` is what the row actually occupies: a 4px tick, 2px of gap, and
+          an 11px label. At `h-4` the numbers painted outside their own box, so
+          the margin below could not see them and the control under the axis sat
+          against the labels however much it was given. */}
+      <div aria-hidden="true" className="relative mt-1.5 h-5">
         {ticks(duration, laneWidth).map(({ at, major, label }) => (
           <div
             key={at}
@@ -713,7 +736,7 @@ export function TrimBar({
         }}
       />
 
-      <div className="mt-1.5 flex items-center gap-1">
+      <div className="mt-2.5 flex items-center gap-1">
         {soundtrack ? (
           <>
             <MusicIcon

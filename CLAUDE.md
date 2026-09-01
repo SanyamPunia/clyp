@@ -381,6 +381,18 @@ the region's length on its own.
 - **The lane shares the video lane's axis and the same `at()` geometry**, so
   where the sound starts is read against where the clip does rather than
   described in a number. Both its edges snap to the same frame grid.
+- **All three drags keep the region inside the clip.** A part hanging off
+  either end cannot be heard, so drawing it outside the lane says the control
+  is broken rather than that the sound runs on. The body is bounded by
+  `duration - length`, the head by whichever of the file's start and the clip's
+  it reaches first, and the tail by whichever of the file's end and the clip's
+  comes first. Verified against the hard case, a 12 s track on a 3 s clip:
+  dragged hard in every direction, the region never leaves the lane, and the
+  head still trims the front with the sound behind it staying put.
+- **The axis row is `h-5`, which is what it occupies**: a 4px tick, 2px of gap
+  and an 11px label. At `h-4` the numbers painted outside their own box, so the
+  margin below could not see them and the control under the axis sat against
+  the labels however much it was given. Measured after: 13px of clear space.
 - **It replaces the source's own audio rather than mixing with it.** Mixing
   means decoding both to PCM and summing, and a laid-over track is almost
   always meant to be the sound rather than an addition to it.
