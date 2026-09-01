@@ -46,8 +46,10 @@ interface ExportModalProps {
   kind: MediaKind;
   /** Video only, in seconds. */
   duration?: number;
-  /** Video only. Whether the source has a track worth offering to keep. */
+  /** Video only. Whether there is a track worth offering to keep. */
   hasAudio?: boolean;
+  /** Set when a soundtrack was laid over the clip, which replaces its own. */
+  soundtrackName?: string;
   /** 0 to 1 while a video encodes, null while a PNG renders. */
   progress?: number | null;
   /** What the filename field falls back to, shown as its placeholder. */
@@ -67,6 +69,7 @@ export function ExportModal({
   kind,
   duration,
   hasAudio = false,
+  soundtrackName,
   progress = null,
   defaultFilename,
   onCancel,
@@ -189,10 +192,12 @@ export function ExportModal({
               htmlFor="keep-audio"
               className="flex cursor-pointer items-center justify-between gap-4 rounded-lg bg-track px-3 py-2.5"
             >
-              <span className="flex flex-col gap-0.5">
+              <span className="flex min-w-0 flex-col gap-0.5">
                 <span className="text-[13px] font-medium">Keep the audio</span>
-                <span className="text-xs text-muted-foreground">
-                  Re-encoded as AAC alongside the video.
+                <span className="truncate text-xs text-muted-foreground">
+                  {soundtrackName
+                    ? `${soundtrackName}, in place of the clip's own.`
+                    : "Re-encoded as AAC alongside the video."}
                 </span>
               </span>
               <Switch

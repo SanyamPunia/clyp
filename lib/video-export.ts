@@ -21,9 +21,10 @@
  */
 
 import { toPng } from "html-to-image";
-import type { Trim } from "@/types/screenshot";
+import type { Soundtrack, Trim } from "@/types/screenshot";
 import {
   ALL_FORMATS,
+  AudioSample,
   AudioSampleSink,
   AudioSampleSource,
   BlobSource,
@@ -58,8 +59,10 @@ export interface VideoExportRequest {
   scale: number;
   /** The clip's in and out points. Absent exports the whole file. */
   trim?: Trim;
-  /** Carry the source's audio across. Ignored when it has none. */
+  /** Carry the audio across. Ignored when there is none to carry. */
   audio?: boolean;
+  /** A track laid over the clip, which replaces the source's own. */
+  soundtrack?: Soundtrack;
   onProgress?: (fraction: number) => void;
   signal?: AbortSignal;
 }
@@ -74,14 +77,28 @@ export interface RenderRequest {
   source: Blob;
   /** The clip's in and out points. Absent exports the whole file. */
   trim?: Trim;
-  /** Carry the source's audio across. Ignored when it has none. */
+  /** Carry the audio across. Ignored when there is none to carry. */
   audio?: boolean;
+  /** A track laid over the clip, which replaces the source's own. */
+  soundtrack?: Soundtrack;
   onProgress?: (fraction: number) => void;
   signal?: AbortSignal;
 }
 
 /** What the audio track is re-encoded as, when there is one to carry. */
 const AUDIO_CODEC = "aac";
+
+/**
+ * The chunk silence is written in, in seconds.
+ *
+ * A soundtrack placed part way through a clip leaves the audio track empty
+ * before it, and an empty stretch is not the same as a quiet one: the track's
+ * own `start_time` carries the offset, and a tool that ignores it plays the
+ * music from the top of the file instead of where it was placed. Measured on
+ * an export with the region at 5.2s: `start_time=5.066667` with 3.97s of
+ * samples, and a straight decode put the music at zero. So the gap is filled.
+ */
+const SILENCE_CHUNK = 0.1;
 
 /**
  * The longest edge an export may have.
@@ -122,6 +139,7 @@ export async function renderVideo({
   source,
   trim,
   audio = true,
+  soundtrack,
   onProgress,
   signal,
 }: RenderRequest): Promise<Blob> {
@@ -161,7 +179,12 @@ export async function renderVideo({
   // Declared before the output starts, because a track cannot be added to a
   // running output. A source with no encoder for it is worse than no sound, so
   // the capability is checked here rather than assumed.
-  const audioTrack = audio ? await input.getPrimaryAudioTrack() : null;
+  //
+  // A soundtrack replaces the source's own audio rather than mixing with it.
+  // Mixing means decoding both to PCM and summing, and a laid-over track is
+  // almost always meant to be the sound rather than an addition to it.
+  const laid = audio && soundtrack ? await openAudio(soundtrack.blob) : null;
+  const audioTrack = laid ?? (audio ? await input.getPrimaryAudioTrack() : null);
   const sound =
     audioTrack && (await canEncodeAudio(AUDIO_CODEC))
       ? new AudioSampleSource({ codec: AUDIO_CODEC, quality: QUALITY_HIGH })
@@ -233,14 +256,49 @@ export async function renderVideo({
     // phase to report.
     if (sound && audioTrack) {
       const audioSink = new AudioSampleSink(audioTrack);
+      // A soundtrack carries its own slice and its own place on the clip's
+      // axis. The source's own track has neither: it is already in step with
+      // the picture, so its slice is the trim and its place is where it is.
+      const slice = soundtrack && laid
+        ? { from: soundtrack.start, to: soundtrack.end }
+        : { from, to };
+      const shift = soundtrack && laid ? soundtrack.offset - from : -from;
 
-      for await (const sample of audioSink.samples(from, to)) {
+      let filled = false;
+
+      for await (const sample of audioSink.samples(slice.from, slice.to)) {
         if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+
+        // Written from the first real sample, since that is the first point the
+        // source's own rate and channel count are known.
+        if (!filled) {
+          filled = true;
+          const gap = Math.max(sample.timestamp - slice.from + shift, 0);
+          for (let at = 0; at < gap; at += SILENCE_CHUNK) {
+            await sound.add(
+              silence(sample, at, Math.min(SILENCE_CHUNK, gap - at)),
+            );
+          }
+        }
 
         // The same absolute-timestamp problem the video has, and the same
         // answer: a trim starting at six seconds would otherwise write six
-        // seconds of silence before the sound starts.
-        sample.setTimestamp(Math.max(sample.timestamp - from, 0));
+        // seconds of silence before the sound starts. A soundtrack adds its
+        // own placement to that, which is what puts it in sync.
+        const at = sample.timestamp - slice.from + shift;
+
+        // Outside the clip entirely. Before it is dropped rather than faded
+        // in, since a partial sample would land at a negative timestamp.
+        if (at + (sample.duration || 0) <= 0) {
+          sample.close();
+          continue;
+        }
+        if (at >= length) {
+          sample.close();
+          break;
+        }
+
+        sample.setTimestamp(Math.max(at, 0));
         await sound.add(sample);
         sample.close();
       }
@@ -270,6 +328,7 @@ export async function exportVideo({
   scale,
   trim,
   audio,
+  soundtrack,
   onProgress,
   signal,
 }: VideoExportRequest): Promise<Blob> {
@@ -288,6 +347,7 @@ export async function exportVideo({
     source,
     trim,
     audio,
+    soundtrack,
     onProgress,
     signal,
   });
@@ -342,4 +402,35 @@ function measure(
       radius(style.borderBottomLeftRadius),
     ],
   };
+}
+
+/** The laid-over file's own audio track, or null if it has none to read. */
+async function openAudio(blob: Blob) {
+  try {
+    const input = new Input({
+      formats: ALL_FORMATS,
+      source: new BlobSource(blob),
+    });
+    return await input.getPrimaryAudioTrack();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A run of quiet, in the shape of a sample that already exists.
+ *
+ * `f32` interleaved is what a `Float32Array` of zeros already is, whatever the
+ * source's own format was, so nothing has to be converted.
+ */
+function silence(like: AudioSample, timestamp: number, duration: number) {
+  const frames = Math.max(Math.round(duration * like.sampleRate), 1);
+
+  return new AudioSample({
+    data: new Float32Array(frames * like.numberOfChannels),
+    format: "f32",
+    numberOfChannels: like.numberOfChannels,
+    sampleRate: like.sampleRate,
+    timestamp,
+  });
 }
