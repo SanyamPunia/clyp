@@ -36,6 +36,7 @@ import {
   QUALITY_HIGH,
   VideoSampleSink,
   canEncodeAudio,
+  canEncodeVideo,
 } from "mediabunny";
 
 export interface Box {
@@ -105,26 +106,51 @@ const AUDIO_CODEC = "aac";
 const SILENCE_CHUNK = 0.1;
 
 /**
- * The longest edge an export may have.
- *
- * H.264 encoders are specified by level rather than by pixels, and 4096 is
- * where the levels every browser actually ships stop. Past it the encoder
- * refuses to configure, so the scale that would produce it is not offered.
- */
-export const MAX_VIDEO_EDGE = 4096;
-
-/** WebCodecs, which everything here is built on. */
-export function canExportVideo(): boolean {
-  return typeof window !== "undefined" && "VideoEncoder" in window;
-}
-
-/**
  * H.264 requires even dimensions, and a frame measured off the DOM lands on an
  * odd number about half the time. Rounding down loses at most one pixel from
  * each edge, which is invisible, where the alternative is an encoder that
  * refuses to configure.
  */
 const even = (n: number) => Math.max(2, Math.floor(n / 2) * 2);
+
+/**
+ * Whether this browser can encode an output of this size.
+ *
+ * **Asked, never assumed.** The first version of this capped the longest edge
+ * at 4096px, which is not the constraint: an H.264 level is a budget of
+ * macroblocks, so a 3932x3136 frame passes a 4096 edge check while being 48020
+ * macroblocks, needing level 6.0, and the encoder refuses it outright with
+ * "this specific encoder configuration (avc1.64003c ...) is not supported in
+ * this environment". Rewriting that check as a level table would only be a
+ * better guess, and the browser already knows.
+ *
+ * It probes through mediabunny with the same codec and quality the export
+ * uses, so the config asked about is the config that will run. The frame rate
+ * is not part of it: the level is derived from the size alone.
+ */
+export async function canEncodeSize(
+  width: number,
+  height: number,
+): Promise<boolean> {
+  if (!canExportVideo()) return false;
+
+  try {
+    return await canEncodeVideo("avc", {
+      width: even(width),
+      height: even(height),
+      quality: QUALITY_HIGH,
+    });
+  } catch {
+    // A probe that cannot answer is not a reason to block the export. The
+    // encode itself reports a refusal, and it says what to do about it.
+    return true;
+  }
+}
+
+/** WebCodecs, which everything here is built on. */
+export function canExportVideo(): boolean {
+  return typeof window !== "undefined" && "VideoEncoder" in window;
+}
 
 /**
  * What the output's frame rate may be.
@@ -331,6 +357,20 @@ export async function renderVideo({
     // Cancelling releases the encoder. Leaving it open holds on to the decoded
     // frames still in flight, which for a 1080p clip is hundreds of megabytes.
     await output.cancel().catch(() => {});
+
+    // WebCodecs reports a refused configuration by quoting the codec string
+    // back, which tells a reader nothing they can act on. The scale is the
+    // thing they can change, so the message names the size instead. The probe
+    // should have caught this before a frame was drawn, so reaching here means
+    // the encoder changed its mind between being asked and being used.
+    if (
+      error instanceof Error &&
+      /not supported in this environment/i.test(error.message)
+    ) {
+      throw new Error(
+        `This browser cannot encode ${width}x${height}. Try a smaller scale.`,
+      );
+    }
     throw error;
   }
 }
