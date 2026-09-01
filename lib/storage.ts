@@ -1,22 +1,23 @@
 /**
- * Draft persistence, so a reload does not discard the screenshot.
+ * Draft persistence, so a reload does not discard the work.
  *
- * The image goes to IndexedDB rather than localStorage. A data URL of a full
+ * The media goes to IndexedDB rather than localStorage. A data URL of a full
  * page capture runs to tens of megabytes and localStorage caps at roughly five
- * per origin, so large screenshots would throw QuotaExceededError. The style
- * options are a few hundred bytes and stay in localStorage.
+ * per origin, so large screenshots would throw QuotaExceededError. A video is
+ * larger again and is stored as a Blob, which IndexedDB takes directly. The
+ * style options are a few hundred bytes and stay in localStorage.
  *
  * Every call swallows its errors and reports absence instead. Storage is
  * unavailable in a private window and can be switched off entirely, and
  * neither is a reason to break the editor.
  */
 
-import type { StyleOptions } from "@/types/screenshot";
+import type { MediaKind, StyleOptions } from "@/types/screenshot";
 
 const DB_NAME = "clyp";
 const DB_VERSION = 1;
 const STORE = "draft";
-const IMAGE_KEY = "image";
+const MEDIA_KEY = "image";
 const STYLE_KEY = "clyp:style";
 
 function openDatabase(): Promise<IDBDatabase> {
@@ -50,16 +51,38 @@ async function withStore<T>(
   }
 }
 
-export function readImage(): Promise<string | null> {
-  return withStore<string>("readonly", (store) => store.get(IMAGE_KEY));
+export interface StoredMedia {
+  kind: MediaKind;
+  /** A data URL for an image, the file itself for a video. */
+  payload: string | Blob;
+  /** The dropped file's name, so a restored draft still names its export. */
+  name?: string;
 }
 
-export async function writeImage(dataUrl: string): Promise<void> {
-  await withStore("readwrite", (store) => store.put(dataUrl, IMAGE_KEY));
+/**
+ * Reads the draft, tolerating the shape the old build wrote.
+ *
+ * Before videos this key held a bare data URL string. Anyone with a draft open
+ * across the upgrade has one of those, and treating it as an image is both
+ * correct and cheaper than a migration: there is one key and one meaning for
+ * the legacy value.
+ */
+export async function readMedia(): Promise<StoredMedia | null> {
+  const stored = await withStore<StoredMedia | string>("readonly", (store) =>
+    store.get(MEDIA_KEY),
+  );
+
+  if (!stored) return null;
+  if (typeof stored === "string") return { kind: "image", payload: stored };
+  return stored;
 }
 
-export async function deleteImage(): Promise<void> {
-  await withStore("readwrite", (store) => store.delete(IMAGE_KEY));
+export async function writeMedia(media: StoredMedia): Promise<void> {
+  await withStore("readwrite", (store) => store.put(media, MEDIA_KEY));
+}
+
+export async function deleteMedia(): Promise<void> {
+  await withStore("readwrite", (store) => store.delete(MEDIA_KEY));
 }
 
 /**

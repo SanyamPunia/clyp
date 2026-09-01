@@ -4,33 +4,25 @@ import type React from "react";
 import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import { type LoadedMedia, loadMedia } from "@/lib/media";
 import { cn } from "@/lib/utils";
 
-const VALID_TYPES = [
-  "image/jpeg",
-  "image/png",
-  "image/gif",
-  "image/webp",
-  "image/svg+xml",
-  "image/bmp",
-];
-
-export function readImageFile(
+/**
+ * Reads a dropped file and hands the caller the loaded media, or toasts why it
+ * cannot. The validation and probing live in `lib/media.ts`, since a drop zone
+ * has no business knowing which codecs a browser can decode.
+ */
+export function readMediaFile(
   file: File,
-  onLoad: (dataUrl: string) => void
+  onLoad: (loaded: LoadedMedia) => void,
 ): void {
-  if (!VALID_TYPES.includes(file.type)) {
-    toast.error("Only JPEG, PNG, GIF, WEBP, SVG, and BMP images work here");
-    return;
-  }
-
-  const reader = new FileReader();
-  reader.onload = (e) => onLoad(e.target?.result as string);
-  reader.readAsDataURL(file);
+  loadMedia(file)
+    .then(onLoad)
+    .catch((error: Error) => toast.error(error.message));
 }
 
 interface DropZoneProps {
-  onFile: (dataUrl: string) => void;
+  onFile: (loaded: LoadedMedia) => void;
   className?: string;
   children: React.ReactNode;
   ref?: React.Ref<HTMLDivElement>;
@@ -73,7 +65,7 @@ export function DropZone({ onFile, className, children, ref }: DropZoneProps) {
       setIsDragging(false);
 
       const file = e.dataTransfer.files?.[0];
-      if (file) readImageFile(file, onFile);
+      if (file) readMediaFile(file, onFile);
     },
     [onFile]
   );

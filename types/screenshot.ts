@@ -1,5 +1,26 @@
 import type { Corners } from "@/lib/style-options";
 
+export type MediaKind = "image" | "video";
+
+/**
+ * What the canvas is framing.
+ *
+ * An image is a data URL, which is what `html-to-image` can serialize and what
+ * IndexedDB already held. A video is an object URL over a Blob, and the Blob is
+ * kept beside it because the export decodes the original file rather than
+ * scraping the playing element.
+ */
+export interface Media {
+  kind: MediaKind;
+  src: string;
+  /** The dropped file's name, which the export's filename defaults to. */
+  name?: string;
+  /** Video only. The source file, for the export to decode. */
+  blob?: Blob;
+  /** Video only, in seconds. */
+  duration?: number;
+}
+
 export interface StyleOptions {
   gradientId: string;
   gradientAngle: number;
