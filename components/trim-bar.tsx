@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   PauseIcon,
   PlayIcon,
+  RepeatIcon,
   SquareIcon,
   StepBackIcon,
   StepForwardIcon,
@@ -130,6 +131,7 @@ export function TrimBar({
   disabled = false,
 }: TrimBarProps) {
   const [playing, setPlaying] = useState(true);
+  const [looping, setLooping] = useState(true);
   // The axis reads this to choose its interval. The playhead reads the ref, so
   // it still costs no render per frame.
   const [laneWidth, setLaneWidth] = useState(0);
@@ -144,11 +146,15 @@ export function TrimBar({
   // in an effect rather than during render, which is not a ref's to do.
   const rangeRef = useRef(trim);
   const seekRef = useRef(onSeek);
+  const loopRef = useRef(looping);
+  const playbackRef = useRef(onPlayback);
 
   useEffect(() => {
     rangeRef.current = trim;
     seekRef.current = onSeek;
-  }, [trim, onSeek]);
+    loopRef.current = looping;
+    playbackRef.current = onPlayback;
+  }, [trim, onSeek, looping, onPlayback]);
 
   useEffect(() => {
     const lane = laneRef.current;
@@ -184,8 +190,20 @@ export function TrimBar({
       const { start, end } = rangeRef.current;
       const time = element.currentTime;
 
-      if (!element.seeking && (time >= end || time < start - 0.05)) {
+      if (!element.seeking && time < start - 0.05) {
         seekRef.current(start);
+        return;
+      }
+
+      if (!element.seeking && time >= end) {
+        // Not looping means stopping on the last frame that will be in the
+        // export, rather than one past it or back at the top.
+        if (loopRef.current) {
+          seekRef.current(start);
+        } else {
+          playbackRef.current(false);
+          seekRef.current(Math.max(end - FRAME, start));
+        }
         return;
       }
 
@@ -234,6 +252,21 @@ export function TrimBar({
   const stop = () => {
     onPlayback(false);
     onSeek(trim.start);
+  };
+
+  // Pressing play on a clip parked at its own end plays nothing, so it starts
+  // over. Only reachable with looping off, which is the point of that switch.
+  const toggle = () => {
+    if (playing) {
+      onPlayback(false);
+      return;
+    }
+
+    const element = video.current;
+    if (element && element.currentTime >= trim.end - FRAME * 1.5) {
+      onSeek(trim.start);
+    }
+    onPlayback(true);
   };
 
   /** Where a client x lands on the lane, in seconds. */
@@ -398,10 +431,7 @@ export function TrimBar({
           <Transport label="Step back one frame" onClick={() => step(-FRAME)}>
             <StepBackIcon className="size-4" aria-hidden="true" />
           </Transport>
-          <Transport
-            label={playing ? "Pause" : "Play"}
-            onClick={() => onPlayback(!playing)}
-          >
+          <Transport label={playing ? "Pause" : "Play"} onClick={toggle}>
             {/* Stacked and cross-faded rather than swapped. This control is
                 pressed twice in a row more than any other here, and a glyph
                 that pops in reads as the button flickering. Both sit in the
@@ -428,6 +458,15 @@ export function TrimBar({
             onClick={() => step(FRAME)}
           >
             <StepForwardIcon className="size-4" aria-hidden="true" />
+          </Transport>
+          {/* A toggle's label names what a press will do, not what is true:
+              the pressed styling and `aria-pressed` already say the state. */}
+          <Transport
+            label={looping ? "Stop looping" : "Loop the clip"}
+            onClick={() => setLooping(!looping)}
+            pressed={looping}
+          >
+            <RepeatIcon className="size-4" aria-hidden="true" />
           </Transport>
         </div>
 
@@ -554,16 +593,27 @@ function ticks(duration: number, width: number): Tick[] {
 function Transport({
   label,
   onClick,
+  pressed,
   children,
 }: {
   label: string;
   onClick: () => void;
+  pressed?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button variant="ghost" size="icon-sm" aria-label={label} onClick={onClick}>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={label}
+          aria-pressed={pressed}
+          onClick={onClick}
+          className={cn(
+            pressed && "bg-track-active text-foreground shadow-sm",
+          )}
+        >
           {children}
         </Button>
       </TooltipTrigger>

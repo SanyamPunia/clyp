@@ -316,6 +316,13 @@ have to agree about where a second is.
 - **Play state is read off the element's own `play` and `pause` events**, never
   tracked alongside it. A handle drag pauses the preview too, and a button that
   disagreed with the video would be worse than no button.
+- **Looping is the trim bar's, never the element's.** The `<video>` carries no
+  `loop` attribute: that loops at the file's end, which is not the clip's end
+  once there is a trim, so the two would compete. The frame loop wraps at the
+  out point, and its loop control switches that off, in which case playback
+  stops on the last frame that will be in the export rather than one past it.
+  Pressing play on a clip parked there starts it over, since otherwise it plays
+  nothing.
 - **Play and pause are stacked and cross-faded, not swapped.** That control is
   pressed twice in a row more than any other here, and a glyph that pops in
   reads as the button flickering. Both sit in the same box, so it is never

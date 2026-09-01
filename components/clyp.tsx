@@ -793,16 +793,18 @@ export function Clyp() {
                             /*
                              * Muted and inline, or a browser refuses to play it
                              * without a gesture and the canvas shows a frozen
-                             * first frame. Looping, since the canvas is a
-                             * preview of styling rather than a player: there are
-                             * no controls, and stopping at the end would leave
-                             * the frame looking broken.
+                             * first frame.
+                             *
+                             * No `loop` attribute: it loops at the file's end,
+                             * which is not the clip's end once there is a trim,
+                             * so the two would compete. The trim bar's own
+                             * frame loop owns it instead, and its loop control
+                             * switches it off.
                              */
                             <video
                               ref={videoRef}
                               src={media.src}
                               autoPlay
-                              loop
                               muted
                               playsInline
                               className={cn(
