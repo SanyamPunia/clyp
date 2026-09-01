@@ -24,6 +24,7 @@ import { DropZone, readMediaFile } from "@/components/drop-zone";
 import { ExportModal } from "@/components/export-modal";
 import { GradientBackground } from "@/components/gradient-background";
 import { StyleControls } from "@/components/style-controls";
+import { TrimBar } from "@/components/trim-bar";
 import { UploadCard } from "@/components/upload-card";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -62,7 +63,12 @@ import {
 import { canExportVideo, exportVideo } from "@/lib/video-export";
 import { download, downloadBlob } from "@/lib/download";
 import { cn } from "@/lib/utils";
-import type { ExportOptions, Media, StyleOptions } from "@/types/screenshot";
+import type {
+  ExportOptions,
+  Media,
+  StyleOptions,
+  Trim,
+} from "@/types/screenshot";
 
 /**
  * The modal's field carries whatever the user typed, so the extension is
@@ -158,6 +164,10 @@ export function Clyp() {
   const [dimensions, setDimensions] = useState<{ w: number; h: number } | null>(
     null,
   );
+  // The clip's in and out points, null for an image. Not persisted, the same
+  // call zoom makes: it is an edit on the draft rather than part of it, and
+  // writing it would rewrite the whole Blob on every drag of a handle.
+  const [trim, setTrim] = useState<Trim | null>(null);
   const [styleOptions, setStyleOptions] = useState<StyleOptions>(DEFAULT_STYLE);
   // Remembered here rather than inside GradientBackground, so the cross-fade
   // needs no state or effect in the component that renders it.
@@ -235,6 +245,10 @@ export function Clyp() {
       ? "This browser cannot encode video"
       : null;
   const exportsVideo = media?.kind === "video" && exportAction === "download";
+  // What will actually be encoded, which is the trim rather than the file. The
+  // duration readout, the size estimate and the encode all read this one
+  // value, so none of them can describe a length nobody asked for.
+  const clipSeconds = trim ? trim.end - trim.start : media?.duration;
 
   const removeLabel =
     media?.kind === "video" ? "Remove clip" : "Remove screenshot";
@@ -257,6 +271,9 @@ export function Clyp() {
       return loaded.media;
     });
     setDimensions({ w: loaded.width, h: loaded.height });
+    setTrim(
+      loaded.media.duration ? { start: 0, end: loaded.media.duration } : null,
+    );
   }, []);
 
   // Track the frame's natural size, and refit while the mode is "fit". This is
@@ -435,6 +452,7 @@ export function Clyp() {
             video,
             source: media.blob,
             scale: options.quality,
+            trim: trim ?? undefined,
             onProgress: setProgress,
             signal: controller.signal,
           });
@@ -479,11 +497,25 @@ export function Clyp() {
         setProgress(null);
       }
     },
-    [exportAction, exportsVideo, media],
+    [exportAction, exportsVideo, media, trim],
   );
 
   const handleCancelExport = useCallback(() => {
     abortRef.current?.abort();
+  }, []);
+
+  // The trim bar reads the preview's clock and hands these back, since a ref
+  // passed down as a prop belongs to whoever created it.
+  const handleSeek = useCallback((time: number) => {
+    const video = videoRef.current;
+    if (video) video.currentTime = time;
+  }, []);
+
+  const handlePlayback = useCallback((playing: boolean) => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (playing) void video.play();
+    else video.pause();
   }, []);
 
   const handleStyleChange = useCallback(
@@ -503,6 +535,7 @@ export function Clyp() {
       return null;
     });
     setDimensions(null);
+    setTrim(null);
     setZoom(1);
     setZoomMode("fit");
     setClearOpen(false);
@@ -531,7 +564,7 @@ export function Clyp() {
                   className="animate-rise-in text-[13px] text-muted-foreground"
                   style={{ animationDelay: `${TIMING.toolbarMeta}ms` }}
                 />
-                {media?.duration !== undefined && (
+                {clipSeconds !== undefined && (
                   <>
                     <span
                       aria-hidden="true"
@@ -541,7 +574,7 @@ export function Clyp() {
                       className="animate-rise-in text-[13px] tabular-nums text-muted-foreground"
                       style={{ animationDelay: `${TIMING.toolbarMeta}ms` }}
                     >
-                      {formatDuration(media.duration)}
+                      {formatDuration(clipSeconds)}
                     </span>
                   </>
                 )}
@@ -791,6 +824,23 @@ export function Clyp() {
             </div>
           </div>
         </DropZone>
+
+        {/* Only a clip has a length to cut, and the bar sits on the panel's
+            own hairline rather than inside the canvas: it is chrome about the
+            media, the same category as the toolbar above it. */}
+        {media?.kind === "video" && trim && media.duration ? (
+          <div className="shrink-0 border-t border-stroke">
+            <TrimBar
+              video={videoRef}
+              duration={media.duration}
+              trim={trim}
+              onChange={setTrim}
+              onSeek={handleSeek}
+              onPlayback={handlePlayback}
+              disabled={exporting}
+            />
+          </div>
+        ) : null}
       </section>
 
       {/* Control panel */}
@@ -814,7 +864,7 @@ export function Clyp() {
         frameSize={frameSize}
         hasGrain={styleOptions.showNoiseOverlay}
         kind={media?.kind ?? "image"}
-        duration={media?.duration}
+        duration={clipSeconds}
         progress={progress}
         defaultFilename={filenameFor(
           undefined,
