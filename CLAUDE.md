@@ -562,6 +562,20 @@ the region's length on its own.
   want to hear it from. It is keyed on the file rather than on the soundtrack,
   so moving or slipping the region does not keep stopping playback, and a
   reload with a stored track comes up paused for the same reason.
+- **The mute control covers the clip's own audio too, not only a laid track.**
+  It used to live inside the soundtrack branch of the footer, so the common
+  case, a recording that came with sound, could be exported with that sound and
+  never heard while it was being cut. It now appears whenever there is anything
+  to hear.
+- **The preview starts silent and has to.** A canvas that autoplays cannot
+  autoplay with sound: a browser blocks that outright and answers with a frozen
+  first frame. Loading a clip resets it to silent for the same reason, since an
+  unmute carried over from the last one would meet the next one's autoplay.
+  Adding a soundtrack unmutes, because adding a track is asking to hear it, and
+  a track arriving also pauses the canvas, so the first sound still comes from
+  a deliberate press.
+- **A soundtrack mutes the video outright.** It replaces the clip's own audio
+  in the export, so the preview has to agree with what it will produce.
 - **The mute control is the preview's, not the export's.** A track arriving at
   full volume with no warning is startling, and the export is unaffected either
   way.

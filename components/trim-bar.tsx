@@ -93,6 +93,8 @@ const SUBDIVISIONS = [5, 4, 2];
 const MIN_MINOR_GAP = 7;
 
 interface TrimBarProps {
+  /** Whether there is anything to hear: the clip's own track, or a laid one. */
+  hasSound: boolean;
   soundtrack: Soundtrack | null;
   onSoundtrackChange: (soundtrack: Soundtrack) => void;
   onSoundtrackAdd: (file: File) => void;
@@ -151,6 +153,7 @@ export function TrimBar({
   onChange,
   onSeek,
   onPlayback,
+  hasSound,
   soundtrack,
   onSoundtrackChange,
   onSoundtrackAdd,
@@ -906,21 +909,6 @@ export function TrimBar({
             <span className="min-w-0 truncate text-[13px] text-muted-foreground">
               {soundtrack.name}
             </span>
-            <div className="ml-auto flex items-center gap-0.5">
-              <Transport
-                label={muted ? "Unmute the preview" : "Mute the preview"}
-                onClick={() => onMutedChange(!muted)}
-              >
-                {muted ? (
-                  <VolumeXIcon className="size-4" aria-hidden="true" />
-                ) : (
-                  <Volume2Icon className="size-4" aria-hidden="true" />
-                )}
-              </Transport>
-              <Transport label="Remove the soundtrack" onClick={onSoundtrackRemove}>
-                <XIcon className="size-4" aria-hidden="true" />
-              </Transport>
-            </div>
           </>
         ) : (
           <Button
@@ -933,6 +921,33 @@ export function TrimBar({
             Add a soundtrack
           </Button>
         )}
+
+        {/* Outside that branch, because a clip can have sound of its own. The
+            control used to appear only for a laid track, so the common case,
+            a recording that came with audio, could be exported with sound and
+            never heard while it was being cut. */}
+        <div className="ml-auto flex items-center gap-0.5">
+          {hasSound && (
+            <Transport
+              label={muted ? "Unmute the preview" : "Mute the preview"}
+              onClick={() => onMutedChange(!muted)}
+            >
+              {muted ? (
+                <VolumeXIcon className="size-4" aria-hidden="true" />
+              ) : (
+                <Volume2Icon className="size-4" aria-hidden="true" />
+              )}
+            </Transport>
+          )}
+          {soundtrack && (
+            <Transport
+              label="Remove the soundtrack"
+              onClick={onSoundtrackRemove}
+            >
+              <XIcon className="size-4" aria-hidden="true" />
+            </Transport>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -171,10 +171,15 @@ export function Clyp() {
   // writing it would rewrite the whole Blob on every drag of a handle.
   const [trim, setTrim] = useState<Trim | null>(null);
   const [soundtrack, setSoundtrack] = useState<Soundtrack | null>(null);
-  // The preview's own volume, not the export's. A track arriving at full
-  // volume with no warning is startling, and the export is unaffected either
-  // way, so this is a listening control rather than a setting.
-  const [muted, setMuted] = useState(false);
+  /**
+   * The preview's own volume, not the export's.
+   *
+   * Starts silent, and has to. A canvas that autoplays cannot autoplay with
+   * sound: a browser blocks that and shows a frozen first frame instead. It
+   * would also be startling, and the export is unaffected either way, so this
+   * is a listening control rather than a setting.
+   */
+  const [muted, setMuted] = useState(true);
   const [styleOptions, setStyleOptions] = useState<StyleOptions>(DEFAULT_STYLE);
   // Remembered here rather than inside GradientBackground, so the cross-fade
   // needs no state or effect in the component that renders it.
@@ -282,6 +287,10 @@ export function Clyp() {
     setTrim(
       loaded.media.duration ? { start: 0, end: loaded.media.duration } : null,
     );
+    // Back to silent for a new clip. Carried over, an unmute from the last one
+    // would meet the next one's autoplay, which a browser blocks outright and
+    // answers with a frozen first frame.
+    setMuted(true);
     // A soundtrack was placed against a clip that is no longer here, so it
     // means nothing now. Dropping it beats leaving it somewhere arbitrary.
     setSoundtrack((previous) => {
@@ -298,6 +307,10 @@ export function Clyp() {
             if (previous) URL.revokeObjectURL(previous.src);
             return next;
           });
+          // Adding a track is asking to hear it. Nothing plays yet, since a
+          // track arriving also pauses the canvas, so the first sound still
+          // comes from a deliberate press.
+          setMuted(false);
         })
         .catch((error: Error) => toast.error(error.message));
     },
@@ -902,9 +915,12 @@ export function Clyp() {
                           )}
                           {media.kind === "video" ? (
                             /*
-                             * Muted and inline, or a browser refuses to play it
-                             * without a gesture and the canvas shows a frozen
-                             * first frame.
+                             * Inline, and silent until asked otherwise: a
+                             * browser refuses to autoplay with sound and shows
+                             * a frozen first frame instead. A soundtrack mutes
+                             * it outright, because a soundtrack replaces the
+                             * clip's own audio in the export and the preview
+                             * has to agree with what it will produce.
                              *
                              * No `loop` attribute: it loops at the file's end,
                              * which is not the clip's end once there is a trim,
@@ -916,7 +932,7 @@ export function Clyp() {
                               ref={videoRef}
                               src={media.src}
                               autoPlay
-                              muted
+                              muted={muted || soundtrack !== null}
                               playsInline
                               className={cn(
                                 styleOptions.shadow,
@@ -963,6 +979,7 @@ export function Clyp() {
               onChange={setTrim}
               onSeek={handleSeek}
               onPlayback={handlePlayback}
+              hasSound={Boolean(soundtrack) || (media.hasAudio ?? false)}
               soundtrack={soundtrack}
               onSoundtrackChange={setSoundtrack}
               onSoundtrackAdd={addSoundtrack}
