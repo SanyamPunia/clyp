@@ -153,11 +153,17 @@ coefficient by eye.
 
 ## The export dialog
 
-**It says what you get, not what it is doing.** One summary line under the
-title owns every value that describes the output: dimensions, frame rate,
-duration, estimated size. That line used to sit on the Scale row, where only
-the first value belonged, since the duration comes from the trim and the
-estimate moves with the frame rate too.
+**It says what you get, not what it is doing, and each value sits with what
+decides it.** Dimensions belong on the Scale row, since that is the control
+that produces them. How long the file runs and how big it lands go in the
+footer, beside the button that writes it, where they are sticky and are the
+last thing read before committing. The frame rate is stated by the label on
+its own selected tile and appears nowhere else.
+
+**One line carrying all four was worse than the row it replaced.** It read
+`3418 × 2194 · 30 fps · 16s · ~2.1 MB`: four facts of equal weight behind three
+dots, with no reading order, which is a spec sheet rather than a readout. Two
+values a line is the ceiling here.
 
 - **The visible description is gone and the `DialogDescription` is `sr-only`.**
   The dialog still needs something to be described by. What it does not need is

@@ -202,31 +202,22 @@ export function ExportModal({
         </DialogHeader>
 
         <DialogBody className="flex flex-col gap-4 pb-4">
-          {/* What you get, in one place. It used to sit on the Scale row, where
-              only the first value belonged: the duration comes from the trim
-              and the estimate moves with the frame rate too. */}
-          {output.width > 0 && (
-            <p className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
-              <Dimensions width={output.width} height={output.height} />
-              {isVideo && (
-                <>
-                  <Dot />
-                  <span className="tabular-nums">{fps} fps</span>
-                </>
-              )}
-              {isVideo && seconds > 0 && (
-                <>
-                  <Dot />
-                  <span className="tabular-nums">{formatDuration(seconds)}</span>
-                </>
-              )}
-              <Dot />
-              <span className="tabular-nums">~{formatBytes(bytes)}</span>
-            </p>
-          )}
-
+          {/* Each value sits with the control that decides it. One line
+              carrying dimensions, rate, length and size was four facts of equal
+              weight behind three dots, which is a spec sheet rather than a
+              readout: the rate is already the label on its own tile, and the
+              other two describe different things. */}
           <div className="flex flex-col gap-2">
-            <FieldLabel>Scale</FieldLabel>
+            <div className="flex items-center justify-between gap-2">
+              <FieldLabel>Scale</FieldLabel>
+              {output.width > 0 && (
+                <Dimensions
+                  width={output.width}
+                  height={output.height}
+                  className="text-[13px] text-muted-foreground"
+                />
+              )}
+            </div>
             <SegmentedGroup
               value={quality.toString()}
               onValueChange={(value) =>
@@ -370,6 +361,21 @@ export function ExportModal({
         </DialogBody>
 
         <DialogFooter>
+          {/* What the file will be, next to the action that writes it. Sticky
+              with the footer, so it is the last thing read before committing
+              rather than something scrolled past on the way down. */}
+          {output.width > 0 && (
+            <p className="flex items-center gap-1.5 text-[13px] text-muted-foreground sm:mr-auto">
+              {isVideo && seconds > 0 && (
+                <>
+                  <span className="tabular-nums">{formatDuration(seconds)}</span>
+                  <Dot />
+                </>
+              )}
+              <span className="tabular-nums">~{formatBytes(bytes)}</span>
+            </p>
+          )}
+
           {/* While an encode runs this stops it, which is the only way out:
               Escape and the backdrop are blocked so the dialog cannot close
               out from under a render that is still writing frames. */}
