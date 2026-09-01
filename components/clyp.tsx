@@ -51,7 +51,12 @@ import {
   zoomOut,
   zoomToFit,
 } from "@/lib/zoom";
-import { type LoadedMedia, formatDuration, kindOf } from "@/lib/media";
+import {
+  type LoadedMedia,
+  formatDuration,
+  kindOf,
+  loadSoundtrack,
+} from "@/lib/media";
 import {
   deleteMedia,
   deleteStyle,
@@ -66,6 +71,7 @@ import { cn } from "@/lib/utils";
 import type {
   ExportOptions,
   Media,
+  Soundtrack,
   StyleOptions,
   Trim,
 } from "@/types/screenshot";
@@ -180,6 +186,11 @@ export function Clyp() {
   // call zoom makes: it is an edit on the draft rather than part of it, and
   // writing it would rewrite the whole Blob on every drag of a handle.
   const [trim, setTrim] = useState<Trim | null>(null);
+  const [soundtrack, setSoundtrack] = useState<Soundtrack | null>(null);
+  // The preview's own volume, not the export's. A track arriving at full
+  // volume with no warning is startling, and the export is unaffected either
+  // way, so this is a listening control rather than a setting.
+  const [muted, setMuted] = useState(false);
   const [styleOptions, setStyleOptions] = useState<StyleOptions>(DEFAULT_STYLE);
   // Remembered here rather than inside GradientBackground, so the cross-fade
   // needs no state or effect in the component that renders it.
@@ -210,6 +221,7 @@ export function Clyp() {
 
   const screenshotRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
 
   const [zoom, setZoom] = useState(1);
@@ -286,6 +298,33 @@ export function Clyp() {
     setTrim(
       loaded.media.duration ? { start: 0, end: loaded.media.duration } : null,
     );
+    // A soundtrack was placed against a clip that is no longer here, so it
+    // means nothing now. Dropping it beats leaving it somewhere arbitrary.
+    setSoundtrack((previous) => {
+      if (previous) URL.revokeObjectURL(previous.src);
+      return null;
+    });
+  }, []);
+
+  const addSoundtrack = useCallback(
+    (file: File) => {
+      loadSoundtrack(file, media?.duration ?? 0)
+        .then((next) => {
+          setSoundtrack((previous) => {
+            if (previous) URL.revokeObjectURL(previous.src);
+            return next;
+          });
+        })
+        .catch((error: Error) => toast.error(error.message));
+    },
+    [media?.duration],
+  );
+
+  const removeSoundtrack = useCallback(() => {
+    setSoundtrack((previous) => {
+      if (previous) URL.revokeObjectURL(previous.src);
+      return null;
+    });
   }, []);
 
   // Track the frame's natural size, and refit while the mode is "fit". This is
@@ -363,7 +402,26 @@ export function Clyp() {
           const file = new File([stored.payload], stored.name ?? "clyp", {
             type: stored.payload.type,
           });
-          readMediaFile(file, loadMedia);
+          // The soundtrack is restored from inside the media's own callback,
+          // and it has to be: `loadMedia` clears the soundtrack, since one
+          // placed against a clip that has been replaced means nothing. Run
+          // side by side, whichever finished last won, and the soundtrack lost
+          // about half the time.
+          const audio = stored.audio;
+          readMediaFile(file, (loaded) => {
+            loadMedia(loaded);
+            if (!audio) return;
+
+            // Back through the same loader an upload uses, which re-measures
+            // it and mints a fresh object URL. Its placement starts over,
+            // since that was never stored.
+            const track = new File([audio], stored.audioName ?? "audio", {
+              type: audio.type,
+            });
+            loadSoundtrack(track, loaded.media.duration ?? 0)
+              .then(setSoundtrack)
+              .catch(() => undefined);
+          });
         }
 
         setRestored(true);
@@ -388,8 +446,13 @@ export function Clyp() {
       kind: media.kind,
       payload: media.kind === "video" ? (media.blob as Blob) : media.src,
       name: media.name,
+      // The file, never the object URL, for the same reason the video is
+      // stored that way. Only the blob's identity is in the dependency list,
+      // so dragging the region does not rewrite either of them.
+      audio: soundtrack?.blob,
+      audioName: soundtrack?.name,
     });
-  }, [media, restored]);
+  }, [media, restored, soundtrack?.blob, soundtrack?.name]);
 
   useEffect(() => {
     if (!restored) return;
@@ -403,19 +466,21 @@ export function Clyp() {
       if (!items) return;
 
       for (const item of items) {
-        if (!kindOf(item.type)) continue;
+        const kind = kindOf(item.type);
+        if (!kind) continue;
 
         const file = item.getAsFile();
         if (!file) continue;
 
-        readMediaFile(file, loadMedia);
+        if (kind === "audio") addSoundtrack(file);
+        else readMediaFile(file, loadMedia);
         break;
       }
     };
 
     document.addEventListener("paste", handlePaste);
     return () => document.removeEventListener("paste", handlePaste);
-  }, [loadMedia]);
+  }, [addSoundtrack, loadMedia]);
 
   const openExportModal = useCallback((action: "copy" | "download") => {
     setExportAction(action);
@@ -466,6 +531,7 @@ export function Clyp() {
             scale: options.quality,
             trim: trim ?? undefined,
             audio: options.audio,
+            soundtrack: soundtrack ?? undefined,
             onProgress: setProgress,
             signal: controller.signal,
           });
@@ -510,12 +576,51 @@ export function Clyp() {
         setProgress(null);
       }
     },
-    [exportAction, exportsVideo, media, trim],
+    [exportAction, exportsVideo, media, soundtrack, trim],
   );
 
   const handleCancelExport = useCallback(() => {
     abortRef.current?.abort();
   }, []);
+
+  /**
+   * Keeps the soundtrack in step with the picture.
+   *
+   * The element is driven rather than played on its own: the video is the
+   * clock, and the sound is placed against it. Corrected only past a
+   * threshold, since writing `currentTime` every frame is a seek every frame,
+   * which stutters far worse than the drift it would be fixing.
+   */
+  useEffect(() => {
+    const audio = audioRef.current;
+    const video = videoRef.current;
+    if (!audio || !video || !soundtrack) return;
+
+    let frame = 0;
+    const follow = () => {
+      frame = requestAnimationFrame(follow);
+
+      const at = video.currentTime - soundtrack.offset + soundtrack.start;
+      const inside = at >= soundtrack.start && at < soundtrack.end;
+
+      if (!inside || video.paused) {
+        if (!audio.paused) audio.pause();
+        return;
+      }
+
+      if (Math.abs(audio.currentTime - at) > 0.12) audio.currentTime = at;
+      // Autoplay can refuse until the page has been interacted with. Adding a
+      // track is an interaction, so this normally resolves, and a refusal is
+      // silence rather than a broken preview.
+      if (audio.paused) void audio.play().catch(() => {});
+    };
+
+    frame = requestAnimationFrame(follow);
+    return () => {
+      cancelAnimationFrame(frame);
+      audio.pause();
+    };
+  }, [soundtrack]);
 
   // The trim bar reads the preview's clock and hands these back, since a ref
   // passed down as a prop belongs to whoever created it.
@@ -549,12 +654,13 @@ export function Clyp() {
     });
     setDimensions(null);
     setTrim(null);
+    removeSoundtrack();
     setZoom(1);
     setZoomMode("fit");
     setClearOpen(false);
     deleteStyle();
     setStyleOptions(DEFAULT_STYLE);
-  }, []);
+  }, [removeSoundtrack]);
 
   return (
     <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[minmax(0,1fr)_380px] xl:grid-cols-[minmax(0,1fr)_440px] 2xl:grid-cols-[minmax(0,1fr)_520px]">
@@ -712,6 +818,7 @@ export function Clyp() {
         <DropZone
           ref={scrollerRef}
           onFile={loadMedia}
+          onAudio={addSoundtrack}
           className="canvas-grid min-h-[260px] flex-1 overflow-auto sm:min-h-[420px]"
         >
           {/* Centering happens on this inner wrapper, not on the scroll
@@ -852,6 +959,12 @@ export function Clyp() {
               onChange={setTrim}
               onSeek={handleSeek}
               onPlayback={handlePlayback}
+              soundtrack={soundtrack}
+              onSoundtrackChange={setSoundtrack}
+              onSoundtrackAdd={addSoundtrack}
+              onSoundtrackRemove={removeSoundtrack}
+              muted={muted}
+              onMutedChange={setMuted}
               disabled={exporting}
             />
           </div>
@@ -870,6 +983,14 @@ export function Clyp() {
         </ScrollFade>
       </section>
 
+      {/* Outside the frame, so it is never serialized into the export. What
+          the export hears comes from decoding the file, not from this. */}
+      {soundtrack && (
+        // biome-ignore lint: a soundtrack is sound, and captions for a file the
+        // user supplied are not something this app can invent.
+        <audio ref={audioRef} src={soundtrack.src} muted={muted} className="hidden" />
+      )}
+
       <ExportModal
         open={exportModalOpen}
         onOpenChange={setExportModalOpen}
@@ -880,7 +1001,8 @@ export function Clyp() {
         hasGrain={styleOptions.showNoiseOverlay}
         kind={media?.kind ?? "image"}
         duration={clipSeconds}
-        hasAudio={media?.hasAudio ?? false}
+        hasAudio={Boolean(soundtrack) || (media?.hasAudio ?? false)}
+        soundtrackName={soundtrack?.name}
         progress={progress}
         defaultFilename={filenameFor(
           undefined,

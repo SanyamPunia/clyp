@@ -3,12 +3,16 @@
 import type React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  MusicIcon,
   PauseIcon,
   PlayIcon,
   RepeatIcon,
   SquareIcon,
   StepBackIcon,
   StepForwardIcon,
+  Volume2Icon,
+  VolumeXIcon,
+  XIcon,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -17,10 +21,11 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { formatPrecise } from "@/lib/media";
+import { AUDIO_ACCEPT, formatPrecise } from "@/lib/media";
+import { drawWaveform, readWaveform, type Waveform } from "@/lib/waveform";
 import { MAX_FPS } from "@/lib/video-export";
 import { cn } from "@/lib/utils";
-import type { Trim } from "@/types/screenshot";
+import type { Soundtrack, Trim } from "@/types/screenshot";
 
 /**
  * The clip's in and out points, and the preview's playhead.
@@ -76,6 +81,12 @@ const SUBDIVISIONS = [5, 4, 2];
 const MIN_MINOR_GAP = 7;
 
 interface TrimBarProps {
+  soundtrack: Soundtrack | null;
+  onSoundtrackChange: (soundtrack: Soundtrack) => void;
+  onSoundtrackAdd: (file: File) => void;
+  onSoundtrackRemove: () => void;
+  muted: boolean;
+  onMutedChange: (muted: boolean) => void;
   /**
    * Read only. The bar reads the clock every frame and asks its owner to move
    * it, rather than writing to the element: the React compiler treats a ref
@@ -128,10 +139,20 @@ export function TrimBar({
   onChange,
   onSeek,
   onPlayback,
+  soundtrack,
+  onSoundtrackChange,
+  onSoundtrackAdd,
+  onSoundtrackRemove,
+  muted,
+  onMutedChange,
   disabled = false,
 }: TrimBarProps) {
   const [playing, setPlaying] = useState(true);
   const [looping, setLooping] = useState(true);
+  // Kept beside the file it was read from, so a new upload never shows the
+  // last one's shape while it decodes.
+  const [wave, setWave] = useState<{ of: Blob; data: Waveform } | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   // The axis reads this to choose its interval. The playhead reads the ref, so
   // it still costs no render per frame.
   const [laneWidth, setLaneWidth] = useState(0);
@@ -269,6 +290,27 @@ export function TrimBar({
     onPlayback(true);
   };
 
+  // Decoded once per file, keyed on the file rather than on the soundtrack:
+  // dragging the region rewrites the placement on every frame, and re-reading
+  // a whole track for each of those would be the most expensive thing here by
+  // orders of magnitude.
+  const track = soundtrack?.blob;
+
+  useEffect(() => {
+    if (!track) return;
+
+    let cancelled = false;
+    readWaveform(track).then((data) => {
+      if (!cancelled) setWave({ of: track, data });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [track]);
+
+  const shape = track && wave?.of === track ? wave.data : null;
+
   /** Where a client x lands on the lane, in seconds. */
   const timeAt = useCallback(
     (clientX: number) => {
@@ -397,6 +439,67 @@ export function TrimBar({
     },
     [disabled, onPlayback, onSeek, timeAt, video],
   );
+
+  /**
+   * The soundtrack's body and its two edges.
+   *
+   * `body` slides the region along the clip. `head` brings the left edge in
+   * while the sound stays where it is, which is why it moves `offset` and
+   * `start` together. `tail` is the only one that changes the region's length
+   * alone.
+   */
+  const dragSound = useCallback(
+    (part: "body" | "head" | "tail") =>
+      (event: React.PointerEvent<HTMLDivElement>) => {
+        if (disabled || !soundtrack) return;
+        event.preventDefault();
+        event.stopPropagation();
+
+        const origin = timeAt(event.clientX);
+        const from = soundtrack;
+        event.currentTarget.setPointerCapture(event.pointerId);
+
+        const move = (moved: PointerEvent) => {
+          const by = timeAt(moved.clientX) - origin;
+
+          if (part === "body") {
+            onSoundtrackChange({ ...from, offset: snap(from.offset + by) });
+            return;
+          }
+
+          if (part === "head") {
+            // Bounded by what is left of the file at the head and by the
+            // minimum the region may be at the tail.
+            const room = clamp(by, -from.start, from.end - from.start - MIN_TRIM);
+            onSoundtrackChange({
+              ...from,
+              offset: snap(from.offset + room),
+              start: snap(from.start + room),
+            });
+            return;
+          }
+
+          onSoundtrackChange({
+            ...from,
+            end: snap(
+              clamp(from.end + by, from.start + MIN_TRIM, from.duration),
+            ),
+          });
+        };
+
+        const release = () => {
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", release);
+          window.removeEventListener("pointercancel", release);
+        };
+
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", release);
+        window.addEventListener("pointercancel", release);
+      },
+    [disabled, onSoundtrackChange, soundtrack, timeAt],
+  );
+
 
   const first = trim.start / duration;
   const last = trim.end / duration;
@@ -528,6 +631,44 @@ export function TrimBar({
         />
       </div>
 
+      {/* Laid under the picture on the same axis, so where the sound starts is
+          read against where the clip does rather than described in a number. */}
+      {soundtrack && (
+        <div className="relative mt-1 h-7">
+          <div
+            role="group"
+            aria-label={`Soundtrack, ${soundtrack.name}`}
+            onPointerDown={dragSound("body")}
+            className="absolute inset-y-0 cursor-grab overflow-hidden rounded-md bg-elevated ring-1 ring-stroke active:cursor-grabbing"
+            style={{
+              left: `calc(${at(soundtrack.offset / duration)} + ${INSET}px)`,
+              width: at((soundtrack.end - soundtrack.start) / duration),
+            }}
+          >
+            <Wave
+              wave={shape}
+              from={soundtrack.start}
+              to={soundtrack.end}
+              width={laneWidth}
+              duration={duration}
+            />
+          </div>
+
+          <SoundEdge
+            label="Soundtrack start"
+            position={at(soundtrack.offset / duration)}
+            onPointerDown={dragSound("head")}
+          />
+          <SoundEdge
+            label="Soundtrack end"
+            position={at(
+              (soundtrack.offset + soundtrack.end - soundtrack.start) / duration,
+            )}
+            onPointerDown={dragSound("tail")}
+          />
+        </div>
+      )}
+
       {/* The axis is what turns the lane from two proportions into a length.
           It is `aria-hidden` because both handles already report their value in
           seconds, so a reader hears the numbers that matter. */}
@@ -559,7 +700,123 @@ export function TrimBar({
           </div>
         ))}
       </div>
+
+      <input
+        ref={fileRef}
+        type="file"
+        accept={AUDIO_ACCEPT}
+        className="hidden"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file) onSoundtrackAdd(file);
+          event.target.value = "";
+        }}
+      />
+
+      <div className="mt-1.5 flex items-center gap-1">
+        {soundtrack ? (
+          <>
+            <MusicIcon
+              className="size-3.5 shrink-0 text-muted-foreground"
+              aria-hidden="true"
+            />
+            <span className="min-w-0 truncate text-[13px] text-muted-foreground">
+              {soundtrack.name}
+            </span>
+            <div className="ml-auto flex items-center gap-0.5">
+              <Transport
+                label={muted ? "Unmute the preview" : "Mute the preview"}
+                onClick={() => onMutedChange(!muted)}
+              >
+                {muted ? (
+                  <VolumeXIcon className="size-4" aria-hidden="true" />
+                ) : (
+                  <Volume2Icon className="size-4" aria-hidden="true" />
+                )}
+              </Transport>
+              <Transport label="Remove the soundtrack" onClick={onSoundtrackRemove}>
+                <XIcon className="size-4" aria-hidden="true" />
+              </Transport>
+            </div>
+          </>
+        ) : (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => fileRef.current?.click()}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <MusicIcon className="size-3.5" aria-hidden="true" />
+            Add a soundtrack
+          </Button>
+        )}
+      </div>
     </div>
+  );
+}
+
+/**
+ * The waveform, drawn to a canvas rather than laid out as elements.
+ *
+ * A lane a few hundred pixels wide is a few hundred bars, and a few hundred
+ * divs redrawn on every frame of a drag is the one thing a canvas exists to
+ * avoid.
+ */
+function Wave({
+  wave,
+  from,
+  to,
+  width,
+  duration,
+}: {
+  wave: Waveform | null;
+  from: number;
+  to: number;
+  /** The lane's own width, which is what tells the canvas it has resized. */
+  width: number;
+  duration: number;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !wave) return;
+
+    // The tone is read off the element rather than named here, so the lane
+    // follows the stylesheet's own token instead of a second copy of it.
+    const colour = getComputedStyle(canvas).color;
+    drawWaveform(canvas, wave, from, to, colour);
+  }, [wave, from, to, width, duration]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      aria-hidden="true"
+      className="size-full text-muted-foreground"
+    />
+  );
+}
+
+/** An edge of the soundtrack's region. Narrower than a trim handle, since it
+ * sits on a shorter lane and there are four grips in one column of pixels. */
+function SoundEdge({
+  label,
+  position,
+  onPointerDown,
+}: {
+  label: string;
+  position: string;
+  onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => void;
+}) {
+  return (
+    <div
+      role="button"
+      tabIndex={-1}
+      aria-label={label}
+      onPointerDown={onPointerDown}
+      style={{ left: position, width: HANDLE }}
+      className="absolute inset-y-0 cursor-ew-resize touch-none rounded-md bg-stroke-strong transition-colors duration-150 hover:bg-foreground/70"
+    />
   );
 }
 
