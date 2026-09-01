@@ -65,7 +65,7 @@ import {
   writeMedia,
   writeStyle,
 } from "@/lib/storage";
-import { canExportVideo, exportVideo } from "@/lib/video-export";
+import { EDIT_FPS, canExportVideo, exportVideo } from "@/lib/video-export";
 import { download, downloadBlob, filenameFor } from "@/lib/download";
 import { cn } from "@/lib/utils";
 import type {
@@ -174,12 +174,12 @@ export function Clyp() {
   /**
    * The preview's own volume, not the export's.
    *
-   * Starts silent, and has to. A canvas that autoplays cannot autoplay with
-   * sound: a browser blocks that and shows a frozen first frame instead. It
-   * would also be startling, and the export is unaffected either way, so this
-   * is a listening control rather than a setting.
+   * Starts audible. Dropping a clip that came with sound and hearing nothing
+   * is the wrong default, and a drop is a user gesture, so the browser allows
+   * playback with sound straight after one. A restore on page load has no
+   * gesture behind it and gets refused, which the effect below catches.
    */
-  const [muted, setMuted] = useState(true);
+  const [muted, setMuted] = useState(false);
   const [styleOptions, setStyleOptions] = useState<StyleOptions>(DEFAULT_STYLE);
   // Remembered here rather than inside GradientBackground, so the cross-fade
   // needs no state or effect in the component that renders it.
@@ -287,10 +287,8 @@ export function Clyp() {
     setTrim(
       loaded.media.duration ? { start: 0, end: loaded.media.duration } : null,
     );
-    // Back to silent for a new clip. Carried over, an unmute from the last one
-    // would meet the next one's autoplay, which a browser blocks outright and
-    // answers with a frozen first frame.
-    setMuted(true);
+    // Audible again for a new clip, whatever the last one was left at.
+    setMuted(false);
     // A soundtrack was placed against a clip that is no longer here, so it
     // means nothing now. Dropping it beats leaving it somewhere arbitrary.
     setSoundtrack((previous) => {
@@ -582,6 +580,30 @@ export function Clyp() {
   }, []);
 
   /**
+   * Starts the preview, and gives up its sound rather than its picture.
+   *
+   * This is why the element carries no `autoPlay`: the attribute offers no way
+   * to hear a refusal. A browser blocks playback with sound until the page has
+   * been interacted with, and answers a blocked autoplay by simply not
+   * playing, which shows as a frozen first frame. Dropping a file is itself
+   * that interaction, so the common path plays with sound. A restore on page
+   * load is the path with no gesture behind it, and that one is muted and
+   * retried.
+   */
+  const source = media?.kind === "video" ? media.src : null;
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !source) return;
+
+    video.play().catch(() => {
+      setMuted(true);
+      video.muted = true;
+      void video.play().catch(() => {});
+    });
+  }, [source]);
+
+  /**
    * A track that has just arrived does not start playing.
    *
    * The canvas autoplays, so without this the whole of a dropped file starts
@@ -642,6 +664,34 @@ export function Clyp() {
     const video = videoRef.current;
     if (video) video.currentTime = time;
   }, []);
+
+  /**
+   * Play or pause, from wherever it is asked for.
+   *
+   * One rule, held here because this owns both the element and the trim, and
+   * because three things now ask for it: the transport button, the spacebar,
+   * and a click on the picture. A clip parked at its own out point plays
+   * nothing, so pressing play there starts it over, which is only reachable
+   * with looping off.
+   */
+  const togglePlayback = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    if (!video.paused) {
+      video.pause();
+      return;
+    }
+
+    // A frame and a half of tolerance, not one. Stopping parks the playhead a
+    // frame short of the out point, and the element then snaps that to its own
+    // nearest frame, which can land just under an exactly-one-frame test. It
+    // then plays for a few milliseconds, hits the out point, and stops again.
+    if (trim && video.currentTime >= trim.end - 1.5 / EDIT_FPS) {
+      video.currentTime = trim.start;
+    }
+    void video.play().catch(() => {});
+  }, [trim]);
 
   const handlePlayback = useCallback((playing: boolean) => {
     const video = videoRef.current;
@@ -915,9 +965,9 @@ export function Clyp() {
                           )}
                           {media.kind === "video" ? (
                             /*
-                             * Inline, and silent until asked otherwise: a
-                             * browser refuses to autoplay with sound and shows
-                             * a frozen first frame instead. A soundtrack mutes
+                             * Inline, and started from an effect rather than
+                             * by `autoPlay`, which cannot report a browser
+                             * refusing to play with sound. A soundtrack mutes
                              * it outright, because a soundtrack replaces the
                              * clip's own audio in the export and the preview
                              * has to agree with what it will produce.
@@ -931,12 +981,12 @@ export function Clyp() {
                             <video
                               ref={videoRef}
                               src={media.src}
-                              autoPlay
                               muted={muted || soundtrack !== null}
                               playsInline
+                              onClick={togglePlayback}
                               className={cn(
                                 styleOptions.shadow,
-                                "block h-auto max-w-full select-none",
+                                "block h-auto max-w-full cursor-pointer select-none",
                               )}
                               style={{ borderRadius: mediaRadius }}
                             />
@@ -979,6 +1029,7 @@ export function Clyp() {
               onChange={setTrim}
               onSeek={handleSeek}
               onPlayback={handlePlayback}
+              onToggle={togglePlayback}
               hasSound={Boolean(soundtrack) || (media.hasAudio ?? false)}
               soundtrack={soundtrack}
               onSoundtrackChange={setSoundtrack}

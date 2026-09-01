@@ -112,6 +112,8 @@ interface TrimBarProps {
   onChange: (trim: Trim) => void;
   onSeek: (time: number) => void;
   onPlayback: (playing: boolean) => void;
+  /** Play or pause. The rule lives with whoever owns the element and the trim. */
+  onToggle: () => void;
   disabled?: boolean;
 }
 
@@ -153,6 +155,7 @@ export function TrimBar({
   onChange,
   onSeek,
   onPlayback,
+  onToggle,
   hasSound,
   soundtrack,
   onSoundtrackChange,
@@ -307,21 +310,6 @@ export function TrimBar({
   const stop = () => {
     onPlayback(false);
     onSeek(trim.start);
-  };
-
-  // Pressing play on a clip parked at its own end plays nothing, so it starts
-  // over. Only reachable with looping off, which is the point of that switch.
-  const toggle = () => {
-    if (playing) {
-      onPlayback(false);
-      return;
-    }
-
-    const element = video.current;
-    if (element && element.currentTime >= trim.end - FRAME * 1.5) {
-      onSeek(trim.start);
-    }
-    onPlayback(true);
   };
 
   // Decoded once per file, keyed on the file rather than on the soundtrack:
@@ -539,13 +527,13 @@ export function TrimBar({
    * spaces, and a focused `<button>` keeps its own native activation, or
    * tabbing to Play and pressing space would toggle twice.
    */
-  const toggleRef = useRef(toggle);
+  const toggleRef = useRef(onToggle);
 
   // Mirrored in an effect rather than during render, which is not a ref's to
   // do. No dependency list: it is a new function every render and this is the
   // cheapest way to keep the one binding below pointing at the current one.
   useEffect(() => {
-    toggleRef.current = toggle;
+    toggleRef.current = onToggle;
   });
 
   useEffect(() => {
@@ -698,7 +686,7 @@ export function TrimBar({
           </Transport>
           <Transport
             label={playing ? "Pause (Space)" : "Play (Space)"}
-            onClick={toggle}
+            onClick={onToggle}
           >
             {/* Stacked and cross-faded rather than swapped. This control is
                 pressed twice in a row more than any other here, and a glyph

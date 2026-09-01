@@ -567,13 +567,27 @@ the region's length on its own.
   case, a recording that came with sound, could be exported with that sound and
   never heard while it was being cut. It now appears whenever there is anything
   to hear.
-- **The preview starts silent and has to.** A canvas that autoplays cannot
-  autoplay with sound: a browser blocks that outright and answers with a frozen
-  first frame. Loading a clip resets it to silent for the same reason, since an
-  unmute carried over from the last one would meet the next one's autoplay.
-  Adding a soundtrack unmutes, because adding a track is asking to hear it, and
-  a track arriving also pauses the canvas, so the first sound still comes from
-  a deliberate press.
+- **The preview starts audible, and gives up its sound rather than its
+  picture.** Dropping a clip that came with sound and hearing nothing is the
+  wrong default, and a drop is a user gesture, so a browser allows playback
+  with sound straight after one.
+  - **This is why the element carries no `autoPlay`.** The attribute offers no
+    way to hear a refusal: a blocked autoplay simply does not play, which shows
+    as a frozen first frame. Playback is started from an effect instead, and a
+    rejection mutes and retries. Verified under Chrome's strict
+    `document-user-activation-required` policy, which is harsher than the
+    default: a drop plays with sound, a reload comes back muted and playing
+    rather than frozen, and the control unmutes it from there.
+- **Play and pause is one rule in `clyp.tsx`, asked for from three places:**
+  the transport button, the spacebar, and a click on the picture itself, which
+  is what every player does. It lives with whoever owns both the element and
+  the trim, since a clip parked at its own out point plays nothing and pressing
+  play there has to start it over.
+  - **The tolerance on "parked at the end" is a frame and a half, not one.**
+    Stopping parks the playhead a frame short of the out point and the element
+    snaps that to its own nearest frame, which can land just under an
+    exactly-one-frame test. The clip then plays for a few milliseconds, hits
+    the out point and stops again, which looks like a dead button.
 - **A soundtrack mutes the video outright.** It replaces the clip's own audio
   in the export, so the preview has to agree with what it will produce.
 - **The mute control is the preview's, not the export's.** A track arriving at
