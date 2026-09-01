@@ -227,10 +227,54 @@ preview starts lying about the export.
   stopping at the end would leave the frame looking broken.
 - **One `mediaRadius` serves the `<img>` branch, the `<video>` branch and the
   export's clip**, so an image and a clip cannot end up cornered differently.
-- Export is silent. There is no audio track, and no trimming: a clip goes out
-  at the length it came in at.
+- Export is silent. There is no audio track.
 - The toolbar's meta row names the clip's length beside its dimensions, so what
   is about to be encoded is readable without opening the modal.
+
+## Trim
+
+`components/trim-bar.tsx` is the in and out points and the preview's playhead.
+One control does both jobs because they are the same geometry: a lane a reader
+can scrub is a lane a reader can cut, and two timelines under one video would
+have to agree about where a second is.
+
+- **The kept clip is a block and what is cut is a rail.** Two fills a few steps
+  apart across one flat lane read as one lane, however far apart the tones are,
+  so the height is what says which part survives.
+- **A handle sits fully inside the lane at both ends**, so the span a value maps
+  onto is the lane less one handle. It is a `calc` rather than a measurement,
+  which is what lets the handles and the selection render without knowing the
+  lane's width. Only the playhead needs the width, and it reads it from a
+  `ResizeObserver` into a ref.
+- **The playhead and the loop are one frame loop, not `timeupdate`.** That event
+  fires about four times a second, which is too coarse to draw a playhead with
+  and too coarse to stop on an out point: 250ms of overshoot is a trimmed clip
+  visibly playing past its own end before it jumps back.
+- **The bar reads the preview's clock and asks its owner to move it.** A ref
+  arriving as a prop belongs to whoever created it, and the React compiler's
+  `react-hooks/immutability` rule says so: `element.currentTime = x` on a
+  prop-supplied ref fails the lint. So `video` is read-only here and `onSeek`
+  and `onPlayback` go back up to `clyp.tsx`.
+- **The loop's mirror refs are written in an effect, never during render.**
+  `react-hooks/refs` rejects the render-time write, and the frame loop is bound
+  once, so without the mirror it closes over the trim the bar mounted with.
+- **Dragging a handle pauses the preview and resumes on release** if it was
+  playing. Reading the frame under the handle is the whole point of dragging
+  one, and it is gone before you can read it otherwise.
+- **A sample's timestamp is absolute, so the export offsets it.** A trim
+  starting at six seconds would otherwise write an MP4 whose first frame is at
+  six seconds, which is six seconds of nothing at the front. Verified: trimming
+  to [6, 11] gives a 5.000 s file starting at 0.000, and its first frame matches
+  the source at six seconds at 0.99 SSIM against 0.61 at zero.
+- **`clipSeconds` in `clyp.tsx` is the one length everything reads**, so the
+  toolbar, the duration readout, the size estimate and the encode cannot
+  describe a length nobody asked for.
+- **The trim is not persisted, the same call zoom makes.** It is an edit on the
+  draft rather than part of it, and putting it in the stored record would
+  rewrite the whole Blob on every drag of a handle.
+- The shortest a trim may leave is `MIN_TRIM`, 0.2 s. Arrow keys step 0.1 s and
+  Shift steps 1 s, on both handles, which are real sliders with their own
+  labels and values.
 
 ## Canvas zoom
 
