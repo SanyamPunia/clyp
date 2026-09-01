@@ -285,6 +285,19 @@ have to agree about where a second is.
 - **Play state is read off the element's own `play` and `pause` events**, never
   tracked alongside it. A handle drag pauses the preview too, and a button that
   disagreed with the video would be worse than no button.
+- **Play and pause are stacked and cross-faded, not swapped.** That control is
+  pressed twice in a row more than any other here, and a glyph that pops in
+  reads as the button flickering. Both sit in the same box, so it is never
+  briefly empty. It is two CSS transitions, since this project has no animation
+  library.
+- **The axis under the lane is in whole seconds, at the first interval that
+  leaves its labels far enough apart to read.** One interval for every clip
+  either crowds a long one or leaves a short one with two marks on it. Measured
+  on an 882px lane: a 3 s clip is marked every second, an 8 s clip every second
+  at 108px apart, and a 20 s clip every two seconds at 87px apart. It is what
+  turns the lane from two proportions into a length.
+- The axis is `aria-hidden`, since both handles already report their value in
+  seconds and a reader hears the numbers that matter.
 
 ## Canvas zoom
 

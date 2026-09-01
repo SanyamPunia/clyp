@@ -48,6 +48,17 @@ const COARSE_STEP = 1;
  */
 const FRAME = 1 / MAX_FPS;
 
+/**
+ * The axis under the lane, in whole seconds.
+ *
+ * The interval is the first of these that leaves the labels far enough apart
+ * to read at the lane's current width, so a four second clip is marked every
+ * second and a minute is marked every ten. Picking one interval for every clip
+ * would either crowd a long one or leave a short one with two marks on it.
+ */
+const TICK_INTERVALS = [1, 2, 5, 10, 15, 30, 60];
+const MIN_TICK_GAP = 56;
+
 interface TrimBarProps {
   /**
    * Read only. The bar reads the clock every frame and asks its owner to move
@@ -74,6 +85,14 @@ interface TrimBarProps {
 const at = (fraction: number) =>
   `calc(${fraction * 100}% - ${fraction * HANDLE}px)`;
 
+/** The same position, measured to a value's own centre rather than a handle's left edge. */
+const centre = (fraction: number) => `calc(${at(fraction)} + ${INSET}px)`;
+
+function tickInterval(duration: number, width: number): number {
+  const fits = (step: number) => (step / duration) * width >= MIN_TICK_GAP;
+  return TICK_INTERVALS.find(fits) ?? TICK_INTERVALS[TICK_INTERVALS.length - 1];
+}
+
 export function TrimBar({
   video,
   duration,
@@ -84,6 +103,9 @@ export function TrimBar({
   disabled = false,
 }: TrimBarProps) {
   const [playing, setPlaying] = useState(true);
+  // The axis reads this to choose its interval. The playhead reads the ref, so
+  // it still costs no render per frame.
+  const [laneWidth, setLaneWidth] = useState(0);
   const laneRef = useRef<HTMLDivElement>(null);
   const playheadRef = useRef<HTMLDivElement>(null);
   // The lane's usable span in px, kept in a ref because the playhead is
@@ -104,12 +126,15 @@ export function TrimBar({
     const lane = laneRef.current;
     if (!lane) return;
 
-    const measure = () => {
-      spanRef.current = Math.max(lane.clientWidth - HANDLE, 1);
-    };
+    // Measured only from the observer, which fires once on `observe`. Calling
+    // it in the effect body would be a synchronous setState there, which the
+    // lint rejects.
+    const observer = new ResizeObserver(() => {
+      const span = Math.max(lane.clientWidth - HANDLE, 1);
+      spanRef.current = span;
+      setLaneWidth(span);
+    });
 
-    measure();
-    const observer = new ResizeObserver(measure);
     observer.observe(lane);
     return () => observer.disconnect();
   }, []);
@@ -301,11 +326,26 @@ export function TrimBar({
             label={playing ? "Pause" : "Play"}
             onClick={() => onPlayback(!playing)}
           >
-            {playing ? (
-              <PauseIcon className="size-4" aria-hidden="true" />
-            ) : (
-              <PlayIcon className="size-4" aria-hidden="true" />
-            )}
+            {/* Stacked and cross-faded rather than swapped. This control is
+                pressed twice in a row more than any other here, and a glyph
+                that pops in reads as the button flickering. Both sit in the
+                same box, so it is never briefly empty. */}
+            <span className="relative grid size-4 place-items-center">
+              <PauseIcon
+                aria-hidden="true"
+                className={cn(
+                  "absolute size-4 transition-all duration-150",
+                  playing ? "scale-100 opacity-100" : "scale-75 opacity-0",
+                )}
+              />
+              <PlayIcon
+                aria-hidden="true"
+                className={cn(
+                  "absolute size-4 transition-all duration-150",
+                  playing ? "scale-75 opacity-0" : "scale-100 opacity-100",
+                )}
+              />
+            </span>
           </Transport>
           <Transport
             label="Step forward one frame"
@@ -372,8 +412,46 @@ export function TrimBar({
           onKeyDown={nudge("end")}
         />
       </div>
+
+      {/* The axis is what turns the lane from two proportions into a length.
+          It is `aria-hidden` because both handles already report their value in
+          seconds, so a reader hears the numbers that matter. */}
+      <div aria-hidden="true" className="relative mt-1.5 h-4">
+        {ticks(duration, laneWidth).map((tick) => (
+          <div
+            key={tick}
+            className="absolute top-0 flex flex-col items-start"
+            style={{ left: centre(tick / duration) }}
+          >
+            <span
+              className={cn(
+                "block h-1 w-px bg-stroke-strong",
+                tick > 0 && "-translate-x-1/2",
+              )}
+            />
+            <span
+              className={cn(
+                "mt-0.5 block text-[11px] tabular-nums leading-none text-muted-foreground",
+                tick > 0 && tick < duration && "-translate-x-1/2",
+                tick === duration && "-translate-x-full",
+              )}
+            >
+              {tick}s
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   );
+}
+
+function ticks(duration: number, width: number): number[] {
+  if (!duration || !width) return [];
+
+  const step = tickInterval(duration, width);
+  const marks: number[] = [];
+  for (let at = 0; at <= duration + 1e-6; at += step) marks.push(Math.round(at));
+  return marks;
 }
 
 function Transport({
