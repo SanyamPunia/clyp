@@ -183,9 +183,15 @@ preview starts lying about the export.
   a disabled tile reading "Too large" rather than being hidden: the ceiling is
   visible instead of the control silently having fewer options than it does for
   an image.
-- **The input caps live in `lib/media.ts`: 100 MB and 60 seconds.** Both are
-  checked at the drop, where the failure can be a toast. There is no graceful
-  way to fail once the memory is gone.
+- **The input caps live in `lib/media.ts`: 100 MB and ten minutes.** Both are
+  checked at the drop, where the failure can be a toast.
+  **Size is the real bound and duration is not.** The file is held as a Blob
+  and written to IndexedDB whole, so 100 MB is a memory limit. Duration was 60
+  seconds only because the export used to decode the whole file, and it no
+  longer does: `sink.samples(from, to)` seeks to the keyframe at or before the
+  in point, so a four minute recording cut to ten seconds encodes ten seconds.
+  Verified: a three minute clip drops in about 1.8 s and its axis reads
+  `0:00` to `3:00`.
 - **Whether the file can be decoded at all is answered by a probe, not by its
   MIME type.** A `.mov` carrying something exotic passes the type check and
   then fails to load, and that belongs at the drop rather than at the export.
@@ -227,7 +233,28 @@ preview starts lying about the export.
   stopping at the end would leave the frame looking broken.
 - **One `mediaRadius` serves the `<img>` branch, the `<video>` branch and the
   export's clip**, so an image and a clip cannot end up cornered differently.
-- Export is silent. There is no audio track.
+- **The source's audio is carried across when it has any**, re-encoded as AAC
+  beside the video and offered as a switch in the export modal. The switch is
+  shown only when there is something to keep, so it is never a control over
+  silence.
+  - **Whether there is audio is read from the container at the drop**, through
+    a metadata-only mediabunny `Input`. A `<video>` element cannot answer it:
+    `audioTracks` is not in Chrome, and the vendor-prefixed byte counters only
+    report once something has played.
+  - **The track is declared before `output.start()` and written after the video
+    loop.** A track cannot be added to a running output, and the muxer
+    interleaves at finalize, so a second progress phase for it is not worth
+    reporting: audio for a clip this length is a fraction of the video's time.
+  - **Its timestamps are offset the same way the video's are.** A trim starting
+    at six seconds would otherwise write six seconds of silence before the
+    sound starts. Verified on a clip that steps 440 Hz to 880 Hz at its
+    midpoint: trimmed to the second half, the export reads 880 Hz from 0.2 s in.
+  - **`canEncodeAudio` is checked rather than assumed.** A source whose audio
+    has no encoder here is worse than no sound, since the export would fail
+    outright.
+  - AAC frames are 1024 samples, so the audio track runs up to about 90 ms past
+    the video's own duration. Players stop at the longer track, which is the
+    right answer and not worth trimming to the sample.
 - The toolbar's meta row names the clip's length beside its dimensions, so what
   is about to be encoded is readable without opening the modal.
 
@@ -294,12 +321,28 @@ have to agree about where a second is.
   reads as the button flickering. Both sit in the same box, so it is never
   briefly empty. It is two CSS transitions, since this project has no animation
   library.
-- **The axis under the lane is in whole seconds, at the first interval that
-  leaves its labels far enough apart to read.** One interval for every clip
-  either crowds a long one or leaves a short one with two marks on it. Measured
-  on an 882px lane: a 3 s clip is marked every second, an 8 s clip every second
-  at 108px apart, and a 20 s clip every two seconds at 87px apart. It is what
-  turns the lane from two proportions into a length.
+- **The axis is a ruler, at the first interval that leaves its labels far
+  enough apart to read.** One interval for every clip either crowds a long one
+  or leaves a short one with two marks on it. Intervals run from 0.05 s to five
+  minutes, and past a minute a label becomes a clock, since "180s" is a number
+  a reader has to convert. Measured on an 882px lane: a 3 s clip is marked
+  every 0.25 s, an 8 s clip every second, a 20 s clip every two seconds, a
+  three minute clip every fifteen.
+- **Minor ticks fill in between the labelled ones**, at the finest subdivision
+  whose marks still read as separate ones. They carry no number, so they need
+  only be far enough apart to see, and they are what turns a row of numbers
+  into a ruler.
+- **Everything lands on the export's frame grid.** Both handles snap to it,
+  dragged or nudged, and the arrow keys step one frame where Shift steps a
+  second. An out point between two output frames cannot be honoured, so
+  offering one is a readout that lies by up to 33 ms. The snap is invisible: a
+  frame is 1.5px on a 20 s clip across an 882px lane.
+- **The playhead's own time is written beside the transport, to the
+  millisecond.** Written rather than rendered, like the playhead itself:
+  measured at 58 text mutations across one second of playback, which is one a
+  frame and no React renders. `formatPrecise` takes the clip's length as well
+  as the value, so a readout counting up through a long clip keeps one shape
+  instead of growing a `0:` at the minute mark.
 - The axis is `aria-hidden`, since both handles already report their value in
   seconds and a reader hears the numbers that matter.
 - **A press on the lane seeks and holding it drags the playhead along.** It
