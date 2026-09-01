@@ -289,14 +289,42 @@ export function TrimBar({
     [disabled, duration, onChange, onSeek, trim],
   );
 
-  // A press on the lane itself seeks, clamped into the trim, since a playhead
-  // outside the range is a frame that will not be in the export.
+  /**
+   * A press on the lane seeks, and holding it drags the playhead along.
+   *
+   * Clamped into the trim, since a playhead outside the range is a frame that
+   * will not be in the export, and short of the out point by a frame, or the
+   * loop above reads the scrub as the clip ending and snaps back to the start
+   * under the hand.
+   */
   const scrub = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
       if (disabled) return;
-      onSeek(clamp(timeAt(event.clientX), trim.start, trim.end));
+
+      // Paused for the drag. Playback fights a scrub for the same clock, and
+      // what comes out is the video stuttering rather than being moved.
+      const resume = video.current ? !video.current.paused : false;
+      onPlayback(false);
+
+      const to = (clientX: number) => {
+        const { start, end } = rangeRef.current;
+        onSeek(clamp(timeAt(clientX), start, end - FRAME));
+      };
+      to(event.clientX);
+
+      const move = (moved: PointerEvent) => to(moved.clientX);
+      const release = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", release);
+        window.removeEventListener("pointercancel", release);
+        if (resume) onPlayback(true);
+      };
+
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", release);
+      window.addEventListener("pointercancel", release);
     },
-    [disabled, onSeek, timeAt, trim.end, trim.start],
+    [disabled, onPlayback, onSeek, timeAt, video],
   );
 
   const first = trim.start / duration;
@@ -371,7 +399,7 @@ export function TrimBar({
       <div
         ref={laneRef}
         onPointerDown={scrub}
-        className="relative h-9 cursor-pointer touch-none"
+        className="relative h-9 cursor-grab touch-none active:cursor-grabbing"
       >
         {/* What is cut. A rail rather than a second tone across the same bar:
             two fills a few steps apart over one flat lane read as one lane, so

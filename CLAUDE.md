@@ -298,6 +298,17 @@ have to agree about where a second is.
   turns the lane from two proportions into a length.
 - The axis is `aria-hidden`, since both handles already report their value in
   seconds and a reader hears the numbers that matter.
+- **A press on the lane seeks and holding it drags the playhead along.** It
+  pauses for the drag and resumes on release if it was playing: playback and a
+  scrub fight over the same clock, and what comes out is the video stuttering
+  rather than being moved.
+- **A scrub clamps a frame short of the out point.** Landing exactly on it
+  reads to the loop as the clip ending, which snaps the playhead back to the
+  start under the hand.
+- **The lane is `cursor-grab` and the handles are `cursor-ew-resize`**, which is
+  the second place in this app the shared cursor-pointer rule gives way. The
+  two cursors say which gesture each part answers: drag the middle, resize the
+  edges. A press on a handle stops propagating, so it never also scrubs.
 
 ## Canvas zoom
 
