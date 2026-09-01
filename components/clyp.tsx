@@ -532,6 +532,7 @@ export function Clyp() {
             trim: trim ?? undefined,
             audio: options.audio,
             soundtrack: soundtrack ?? undefined,
+            fps: options.fps,
             onProgress: setProgress,
             signal: controller.signal,
           });

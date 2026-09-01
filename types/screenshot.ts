@@ -75,4 +75,6 @@ export interface ExportOptions {
   filename?: string;
   /** Video only. Carry the source's audio into the export. */
   audio?: boolean;
+  /** Video only. The frame rate ceiling for the output. */
+  fps?: number;
 }

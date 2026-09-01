@@ -200,10 +200,23 @@ preview starts lying about the export.
   shortcut.** The encode needs WebCodecs, so Download is disabled where it is
   missing. The reason rides a tooltip through `Hint`, which wraps the button in
   a span, since a disabled button emits no pointer events of its own.
-- **The output is capped at `MAX_FPS`, which is 30.** A 60 fps recording costs
-  twice the encode time and close to twice the file for motion nobody reads in
-  a UI demo. **Decimation is by slot, never by an interval since the last kept
-  frame.** A running deadline accumulates float error against timestamps that
+- **The frame rate is a choice, 30 or 60, defaulting to 60.** It is a ceiling
+  rather than a rate: the decimation only ever drops frames, so a 30 fps source
+  exports at 30 whichever is picked and 60 means nothing is dropped. Verified on
+  a 180-frame source: 90 frames out at 30, 180 at 60, both exactly 3.000 s.
+  - **60 fps is far cheaper than it sounds, and the first version of this capped
+    at 30 on a guess that measurement did not support.** A panning UI clip went
+    236 KB to 283 KB at 1x and 540 KB to 638 KB at 2x, both about 1.2, while a
+    dense test pattern went 139 KB to 230 KB, about 1.65. Encode time was
+    steadier at roughly 1.22 across every sample. So the size estimate carries a
+    1.4 factor, the middle of that spread, and 60 is the default because a fifth
+    more time for every frame the source has is worth it.
+  - **`EDIT_FPS` stays 30 and is a different thing.** It is the grid the trim
+    handles land on, deliberately the coarser rate: a point on the 30 fps grid
+    is also a point on the 60 fps grid, so a trim is exact at either. Following
+    the export's choice would move every existing in and out point the moment
+    that choice changed.
+  - **Decimation is by slot, never by an interval since the last kept frame.** A running deadline accumulates float error against timestamps that
   are exact multiples of the source's period: measured, a 60 fps clip lost 96
   of 180 frames instead of 90 and came out unevenly spaced. Flooring
   `timestamp / gap` with a small tolerance cannot drift, and a source already
@@ -224,6 +237,13 @@ preview starts lying about the export.
   seeding state from `window` during render would not survive hydration. The
   server snapshot says the encoder is there, so the control starts usable and
   disables itself on hydration rather than starting disabled everywhere.
+- **Space plays and pauses, from anywhere on the page.** Bound to the window
+  rather than to the bar, since the point is not having to find the bar first,
+  and the trim bar only exists while a clip does, which is all the gating it
+  needs. A field being typed in keeps its spaces, and a focused `<button>`,
+  `<a>`, `<select>` or `<textarea>` keeps its own native behaviour, or tabbing to
+  Play and pressing space would toggle twice. The page's own scroll is taken
+  with `preventDefault`.
 - **Progress has two phases and only one of them has a fraction.** Zero means
   the chrome is still rasterizing, which is one `toPng` call with nothing to
   read inside it. Anything above zero is the encode, reported off the end of

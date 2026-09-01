@@ -75,13 +75,35 @@ export function formatBytes(bytes: number): string {
  */
 const VIDEO_BYTES_PER_ROOT_PIXEL_SECOND = 50;
 
+/**
+ * What doubling the frame rate costs. Measured, and well under two, because
+ * frames half as far apart have that much more in common and a
+ * quantizer-driven encode spends less on each of them.
+ *
+ *   panning UI    1x  236 KB -> 283 KB   1.20
+ *   panning UI    2x  540 KB -> 638 KB   1.18
+ *   test pattern  1x  139 KB -> 230 KB   1.65
+ *
+ * The spread is content, the same way the base constant's is: a UI that moves
+ * a little gains almost nothing from the extra frames, and a field of detail
+ * in constant motion gains a lot. Encode time was steadier at about 1.22 for
+ * every sample.
+ */
+const VIDEO_60_FPS_FACTOR = 1.4;
+
 export function estimateVideoBytes(
   width: number,
   height: number,
-  seconds: number
+  seconds: number,
+  fps = 30
 ): number {
   const pixels = width * height;
   if (!pixels || !seconds) return 0;
 
-  return VIDEO_BYTES_PER_ROOT_PIXEL_SECOND * Math.sqrt(pixels) * seconds;
+  return (
+    VIDEO_BYTES_PER_ROOT_PIXEL_SECOND *
+    Math.sqrt(pixels) *
+    seconds *
+    (fps > 30 ? VIDEO_60_FPS_FACTOR : 1)
+  );
 }

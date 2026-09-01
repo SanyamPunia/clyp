@@ -63,6 +63,8 @@ export interface VideoExportRequest {
   audio?: boolean;
   /** A track laid over the clip, which replaces the source's own. */
   soundtrack?: Soundtrack;
+  /** The output's frame rate ceiling. */
+  fps?: number;
   onProgress?: (fraction: number) => void;
   signal?: AbortSignal;
 }
@@ -81,6 +83,8 @@ export interface RenderRequest {
   audio?: boolean;
   /** A track laid over the clip, which replaces the source's own. */
   soundtrack?: Soundtrack;
+  /** The output's frame rate ceiling. */
+  fps?: number;
   onProgress?: (fraction: number) => void;
   signal?: AbortSignal;
 }
@@ -123,14 +127,25 @@ export function canExportVideo(): boolean {
 const even = (n: number) => Math.max(2, Math.floor(n / 2) * 2);
 
 /**
- * The output's frame rate ceiling.
+ * What the output's frame rate may be.
  *
- * A 60 fps screen recording costs twice the encode time and close to twice the
- * file for motion nobody reads in a UI demo. A source already at or under this
- * is untouched, since the test is per sample rather than a resample.
+ * A ceiling rather than a rate: the decimation below only ever drops frames, so
+ * a 30 fps source exports at 30 whichever of these is chosen, and choosing 60
+ * means nothing is dropped. 30 halves the encode time and takes a good deal off
+ * the file for motion a UI demo rarely shows.
  */
-export const MAX_FPS = 30;
-const MIN_FRAME_GAP = 1 / MAX_FPS;
+export const FPS_OPTIONS = [30, 60] as const;
+export const DEFAULT_FPS = 60;
+
+/**
+ * The grid the trim's own handles land on, which is deliberately the coarser of
+ * the two rates rather than whichever was last exported at.
+ *
+ * A point on the 30 fps grid is also a point on the 60 fps grid, so a trim made
+ * here is exact at either rate. Following the export's choice instead would
+ * move every existing in and out point the moment that choice changed.
+ */
+export const EDIT_FPS = 30;
 
 export async function renderVideo({
   chrome,
@@ -140,9 +155,11 @@ export async function renderVideo({
   trim,
   audio = true,
   soundtrack,
+  fps = DEFAULT_FPS,
   onProgress,
   signal,
 }: RenderRequest): Promise<Blob> {
+  const minFrameGap = 1 / fps;
   const width = even(chrome.width);
   const height = even(chrome.height);
 
@@ -218,7 +235,7 @@ export async function renderVideo({
       if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
 
       const at = Math.max(sample.timestamp - from, 0);
-      const slot = Math.floor(at / MIN_FRAME_GAP + 1e-6);
+      const slot = Math.floor(at / minFrameGap + 1e-6);
       if (slot === lastSlot) {
         carried += sample.duration || 0;
         sample.close();
@@ -329,6 +346,7 @@ export async function exportVideo({
   trim,
   audio,
   soundtrack,
+  fps,
   onProgress,
   signal,
 }: VideoExportRequest): Promise<Blob> {
@@ -348,6 +366,7 @@ export async function exportVideo({
     trim,
     audio,
     soundtrack,
+    fps,
     onProgress,
     signal,
   });

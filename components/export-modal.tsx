@@ -25,7 +25,11 @@ import {
   formatBytes,
   outputSize,
 } from "@/lib/export-size";
-import { MAX_FPS, MAX_VIDEO_EDGE } from "@/lib/video-export";
+import {
+  DEFAULT_FPS,
+  FPS_OPTIONS,
+  MAX_VIDEO_EDGE,
+} from "@/lib/video-export";
 import type { ExportOptions, MediaKind } from "@/types/screenshot";
 
 const QUALITY_OPTIONS = [
@@ -77,6 +81,7 @@ export function ExportModal({
   const [options, setOptions] = useState<ExportOptions>({
     quality: 2,
     audio: true,
+    fps: DEFAULT_FPS,
   });
 
   const isCopy = action === "copy";
@@ -98,9 +103,10 @@ export function ExportModal({
     ? options.quality
     : Math.max(...QUALITY_OPTIONS.map((o) => o.value).filter(fits));
 
+  const fps = options.fps ?? DEFAULT_FPS;
   const output = outputSize(frameSize, quality);
   const bytes = isVideo
-    ? estimateVideoBytes(output.width, output.height, seconds)
+    ? estimateVideoBytes(output.width, output.height, seconds, fps)
     : estimateBytes(output.width, output.height, hasGrain);
 
   const title = isCopy
@@ -131,7 +137,7 @@ export function ExportModal({
           </DialogTitle>
           <DialogDescription>
             {isVideo
-              ? `The clip is re-encoded as an MP4 at the styled size, at up to ${MAX_FPS} fps. Longer clips and higher scales take longer to render.`
+              ? "The clip is re-encoded as an MP4 at the styled size. Longer clips and higher scales take longer to render."
               : kind === "video"
                 ? "The clip's current frame is captured as a PNG, with the frame styled around it."
                 : "Higher scales render more pixels and take longer. The file size is an estimate."}
@@ -184,6 +190,39 @@ export function ExportModal({
               ))}
             </SegmentedGroup>
           </div>
+
+          {/* A ceiling rather than a rate: a source already at 30 exports at
+              30 either way, so 60 means nothing is dropped. */}
+          {isVideo && (
+            <div className="flex flex-col gap-2">
+              <FieldLabel>Frame rate</FieldLabel>
+              <SegmentedGroup
+                value={String(fps)}
+                onValueChange={(value) =>
+                  setOptions({ ...options, fps: Number(value) })
+                }
+                className="grid-cols-2"
+              >
+                {FPS_OPTIONS.map((rate) => (
+                  <SegmentedOption
+                    key={rate}
+                    id={`fps-${rate}`}
+                    value={String(rate)}
+                    selected={fps === rate}
+                    disabled={pending}
+                    className="flex-col gap-0.5 py-2"
+                  >
+                    <span className="text-sm font-medium tabular-nums">
+                      {rate} fps
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {rate === 30 ? "Smaller" : "Every source frame"}
+                    </span>
+                  </SegmentedOption>
+                ))}
+              </SegmentedGroup>
+            </div>
+          )}
 
           {/* Offered only when there is something to keep, so the control is
               never a switch over silence. */}
@@ -264,7 +303,7 @@ export function ExportModal({
           </Button>
           <Button
             size="lg"
-            onClick={() => onExport({ ...options, quality })}
+            onClick={() => onExport({ ...options, quality, fps })}
             disabled={pending}
           >
             {pending && (
