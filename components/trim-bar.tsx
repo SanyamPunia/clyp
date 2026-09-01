@@ -338,7 +338,10 @@ export function TrimBar({
         disabled && "pointer-events-none opacity-50",
       )}
     >
-      <div className="flex flex-wrap items-center justify-between gap-2 pb-2">
+      {/* Equal side columns rather than `justify-between`, which hands the
+          middle whatever is left and walks the transport sideways every time
+          the readout gains a digit or picks up its "of" clause. */}
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 pb-2">
         <FieldLabel>Trim</FieldLabel>
 
         {/* The same recessed pill the canvas toolbar gives its zoom cluster, so
@@ -383,7 +386,7 @@ export function TrimBar({
           </Transport>
         </div>
 
-        <span className="text-[13px] text-muted-foreground">
+        <span className="justify-self-end text-right text-[13px] text-muted-foreground">
           <span className="tabular-nums text-foreground">
             {formatDuration(trim.end - trim.start)}
           </span>

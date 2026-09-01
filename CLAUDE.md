@@ -277,7 +277,11 @@ have to agree about where a second is.
   labels and values.
 - **The transport sits in the same recessed pill the canvas toolbar gives its
   zoom cluster**, so two groups of icon buttons on one surface read as the same
-  kind of thing. Stop returns to the in point rather than to zero, since the in
+  kind of thing. **Its row is a grid with equal side columns, never
+  `justify-between`**, which hands the middle whatever is left and walks the
+  transport sideways every time the readout gains a digit or picks up its "of"
+  clause. Measured: the pill's centre holds the row's centre exactly across
+  every readout state and down to a 900px window. Stop returns to the in point rather than to zero, since the in
   point is where the clip now starts.
 - **A step is one frame of the export, not one frame of the source.** A
   `<video>` element does not expose its own rate, and a step is being used to
