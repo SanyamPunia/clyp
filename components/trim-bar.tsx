@@ -11,13 +11,12 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { FieldLabel } from "@/components/ui/field-label";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { formatDuration } from "@/lib/media";
+import { formatPrecise } from "@/lib/media";
 import { MAX_FPS } from "@/lib/video-export";
 import { cn } from "@/lib/utils";
 import type { Trim } from "@/types/screenshot";
@@ -38,26 +37,42 @@ const MIN_TRIM = 0.2;
 const HANDLE = 12;
 const INSET = HANDLE / 2;
 
-const STEP = 0.1;
-const COARSE_STEP = 1;
-
 /**
- * One frame, for the step controls. The source's own rate is not exposed by a
- * `<video>` element, so a frame here is a frame of the export, which is what a
- * step is being used to inspect.
+ * One frame, and the grid everything here lands on.
+ *
+ * The source's own rate is not exposed by a `<video>` element, so a frame is a
+ * frame of the export, which is what a cut is being made against: an out point
+ * between two output frames cannot be honoured, so offering one is a readout
+ * that lies by up to 33ms. Both handles snap to this, dragged or nudged, which
+ * is invisible at any zoom (a frame is 1.5px on a 20s clip across 880px) and
+ * is what makes the millisecond readout mean something.
  */
 const FRAME = 1 / MAX_FPS;
+const COARSE_STEP = 1;
+
+const snap = (seconds: number) => Math.round(seconds / FRAME) * FRAME;
 
 /**
- * The axis under the lane, in whole seconds.
+ * The axis under the lane.
  *
  * The interval is the first of these that leaves the labels far enough apart
- * to read at the lane's current width, so a four second clip is marked every
- * second and a minute is marked every ten. Picking one interval for every clip
- * would either crowd a long one or leave a short one with two marks on it.
+ * to read at the lane's current width, so a two second clip is marked every
+ * tenth and three minutes every fifteen seconds. Picking one interval for
+ * every clip would either crowd a long one or leave a short one with two marks
+ * on it.
  */
-const TICK_INTERVALS = [1, 2, 5, 10, 15, 30, 60];
+const TICK_INTERVALS = [
+  0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300,
+];
 const MIN_TICK_GAP = 56;
+
+/**
+ * Minor ticks between the labelled ones. They carry no number, so they need
+ * only be far enough apart to read as separate marks, and they are what turns
+ * a row of numbers into a ruler.
+ */
+const SUBDIVISIONS = [5, 4, 2];
+const MIN_MINOR_GAP = 7;
 
 interface TrimBarProps {
   /**
@@ -93,6 +108,18 @@ function tickInterval(duration: number, width: number): number {
   return TICK_INTERVALS.find(fits) ?? TICK_INTERVALS[TICK_INTERVALS.length - 1];
 }
 
+/** A label is a clock past a minute, since "180s" is a number to convert. */
+function axisLabel(at: number, interval: number, duration: number): string {
+  if (duration >= 60) {
+    const minutes = Math.floor(at / 60);
+    const rest = at - minutes * 60;
+    return interval < 1
+      ? `${minutes}:${rest.toFixed(1).padStart(4, "0")}`
+      : `${minutes}:${String(Math.round(rest)).padStart(2, "0")}`;
+  }
+  return interval < 1 ? `${Number(at.toFixed(2))}s` : `${Math.round(at)}s`;
+}
+
 export function TrimBar({
   video,
   duration,
@@ -108,6 +135,7 @@ export function TrimBar({
   const [laneWidth, setLaneWidth] = useState(0);
   const laneRef = useRef<HTMLDivElement>(null);
   const playheadRef = useRef<HTMLDivElement>(null);
+  const clockRef = useRef<HTMLSpanElement>(null);
   // The lane's usable span in px, kept in a ref because the playhead is
   // written every frame and must not render anything.
   const spanRef = useRef(0);
@@ -163,6 +191,13 @@ export function TrimBar({
 
       const fraction = Math.min(Math.max(time / duration, 0), 1);
       playhead.style.transform = `translateX(${fraction * spanRef.current}px)`;
+
+      // Written rather than rendered, for the same reason as the playhead: a
+      // readout to the millisecond changes on every frame, and none of those
+      // changes is worth a render.
+      const clock = clockRef.current;
+      const text = formatPrecise(time, duration);
+      if (clock && clock.textContent !== text) clock.textContent = text;
     };
 
     frame = requestAnimationFrame(draw);
@@ -231,12 +266,12 @@ export function TrimBar({
         const next =
           edge === "start"
             ? {
-                start: Math.min(time, rangeRef.current.end - MIN_TRIM),
+                start: snap(Math.min(time, rangeRef.current.end - MIN_TRIM)),
                 end: rangeRef.current.end,
               }
             : {
                 start: rangeRef.current.start,
-                end: Math.max(time, rangeRef.current.start + MIN_TRIM),
+                end: snap(Math.max(time, rangeRef.current.start + MIN_TRIM)),
               };
 
         rangeRef.current = next;
@@ -262,7 +297,7 @@ export function TrimBar({
     (edge: "start" | "end") => (event: React.KeyboardEvent) => {
       if (disabled) return;
 
-      const step = event.shiftKey ? COARSE_STEP : STEP;
+      const step = event.shiftKey ? COARSE_STEP : FRAME;
       const current = trim[edge];
       let value: number | null = null;
 
@@ -280,8 +315,11 @@ export function TrimBar({
       event.preventDefault();
       const next =
         edge === "start"
-          ? { start: clamp(value, 0, trim.end - MIN_TRIM), end: trim.end }
-          : { start: trim.start, end: clamp(value, trim.start + MIN_TRIM, duration) };
+          ? { start: snap(clamp(value, 0, trim.end - MIN_TRIM)), end: trim.end }
+          : {
+              start: trim.start,
+              end: snap(clamp(value, trim.start + MIN_TRIM, duration)),
+            };
 
       onChange(next);
       onSeek(next[edge]);
@@ -342,7 +380,14 @@ export function TrimBar({
           middle whatever is left and walks the transport sideways every time
           the readout gains a digit or picks up its "of" clause. */}
       <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 pb-2">
-        <FieldLabel>Trim</FieldLabel>
+        {/* Where the playhead is, exactly. The lane says roughly, and roughly
+            is not enough to cut on. */}
+        <span
+          ref={clockRef}
+          className="text-[13px] tabular-nums text-foreground"
+        >
+          {formatPrecise(0, duration)}
+        </span>
 
         {/* The same recessed pill the canvas toolbar gives its zoom cluster, so
             the two groups of icon buttons read as the same kind of thing. */}
@@ -388,10 +433,10 @@ export function TrimBar({
 
         <span className="justify-self-end text-right text-[13px] text-muted-foreground">
           <span className="tabular-nums text-foreground">
-            {formatDuration(trim.end - trim.start)}
+            {formatPrecise(trim.end - trim.start, duration)}
           </span>
           {trimmed && (
-            <span className="tabular-nums"> of {formatDuration(duration)}</span>
+            <span className="tabular-nums"> of {formatPrecise(duration)}</span>
           )}
         </span>
       </div>
@@ -448,27 +493,30 @@ export function TrimBar({
           It is `aria-hidden` because both handles already report their value in
           seconds, so a reader hears the numbers that matter. */}
       <div aria-hidden="true" className="relative mt-1.5 h-4">
-        {ticks(duration, laneWidth).map((tick) => (
+        {ticks(duration, laneWidth).map(({ at, major, label }) => (
           <div
-            key={tick}
+            key={at}
             className="absolute top-0 flex flex-col items-start"
-            style={{ left: centre(tick / duration) }}
+            style={{ left: centre(at / duration) }}
           >
             <span
               className={cn(
-                "block h-1 w-px bg-stroke-strong",
-                tick > 0 && "-translate-x-1/2",
+                "block w-px",
+                major ? "h-1 bg-stroke-strong" : "h-0.5 bg-stroke",
+                at > 0 && "-translate-x-1/2",
               )}
             />
-            <span
-              className={cn(
-                "mt-0.5 block text-[11px] tabular-nums leading-none text-muted-foreground",
-                tick > 0 && tick < duration && "-translate-x-1/2",
-                tick === duration && "-translate-x-full",
-              )}
-            >
-              {tick}s
-            </span>
+            {label && (
+              <span
+                className={cn(
+                  "mt-0.5 block text-[11px] tabular-nums leading-none text-muted-foreground",
+                  at > 0 && at < duration && "-translate-x-1/2",
+                  at === duration && "-translate-x-full",
+                )}
+              >
+                {label}
+              </span>
+            )}
           </div>
         ))}
       </div>
@@ -476,12 +524,30 @@ export function TrimBar({
   );
 }
 
-function ticks(duration: number, width: number): number[] {
+interface Tick {
+  at: number;
+  major: boolean;
+  label?: string;
+}
+
+function ticks(duration: number, width: number): Tick[] {
   if (!duration || !width) return [];
 
   const step = tickInterval(duration, width);
-  const marks: number[] = [];
-  for (let at = 0; at <= duration + 1e-6; at += step) marks.push(Math.round(at));
+  const perPixel = duration / width;
+  // The finest subdivision whose marks still read as separate ones. None of
+  // them fitting is the answer for a lane that is already dense with labels.
+  const parts =
+    SUBDIVISIONS.find((n) => step / n / perPixel >= MIN_MINOR_GAP) ?? 1;
+
+  const marks: Tick[] = [];
+  const minor = step / parts;
+
+  for (let index = 0; index * minor <= duration + 1e-6; index++) {
+    const at = Number((index * minor).toFixed(4));
+    const major = index % parts === 0;
+    marks.push({ at, major, label: major ? axisLabel(at, step, duration) : undefined });
+  }
   return marks;
 }
 
@@ -528,8 +594,8 @@ function Handle({
       aria-label={label}
       aria-valuemin={0}
       aria-valuemax={duration}
-      aria-valuenow={Number(value.toFixed(2))}
-      aria-valuetext={formatDuration(value)}
+      aria-valuenow={Number(value.toFixed(3))}
+      aria-valuetext={formatPrecise(value, duration)}
       onPointerDown={onPointerDown}
       onKeyDown={onKeyDown}
       style={{ left: position, width: HANDLE }}
