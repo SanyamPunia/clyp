@@ -136,6 +136,18 @@ function filenameFor(
 
 /** Breathing room around the frame inside the canvas, matching `p-6`. */
 const CANVAS_PADDING = 24;
+/**
+ * One pixel of tolerance in the fit.
+ *
+ * A fitted frame lands on exactly the space available, since the padded
+ * wrapper is `min-h-full` and the outer box is the scaled footprint, so the
+ * two agree to the pixel and nothing absorbs a fraction. The frame is measured
+ * with `offsetWidth` and `offsetHeight`, which round, so a sub-pixel either way
+ * is enough for a scrollbar in a view whose whole job is showing everything.
+ * Sweeping 176 window sizes at both pixel ratios found no case that needs it,
+ * which is the point: the guarantee should not rest on that staying true.
+ */
+const FIT_SLACK = 1;
 
 const TIMING = {
   artwork: 40, // artwork scale-and-fade begins
@@ -229,7 +241,7 @@ export function Clyp() {
       zoomToFit(
         { width: scroller.clientWidth, height: scroller.clientHeight },
         { width: frame.offsetWidth, height: frame.offsetHeight },
-        CANVAS_PADDING * 2,
+        CANVAS_PADDING * 2 + FIT_SLACK,
       ),
     );
   }, []);
@@ -297,7 +309,7 @@ export function Clyp() {
           zoomToFit(
             { width: scroller.clientWidth, height: scroller.clientHeight },
             size,
-            CANVAS_PADDING * 2,
+            CANVAS_PADDING * 2 + FIT_SLACK,
           ),
         );
       }

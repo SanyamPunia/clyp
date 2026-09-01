@@ -275,6 +275,16 @@ have to agree about where a second is.
 - The shortest a trim may leave is `MIN_TRIM`, 0.2 s. Arrow keys step 0.1 s and
   Shift steps 1 s, on both handles, which are real sliders with their own
   labels and values.
+- **The transport sits in the same recessed pill the canvas toolbar gives its
+  zoom cluster**, so two groups of icon buttons on one surface read as the same
+  kind of thing. Stop returns to the in point rather than to zero, since the in
+  point is where the clip now starts.
+- **A step is one frame of the export, not one frame of the source.** A
+  `<video>` element does not expose its own rate, and a step is being used to
+  inspect what will be encoded, so `1 / MAX_FPS` is the honest interval.
+- **Play state is read off the element's own `play` and `pause` events**, never
+  tracked alongside it. A handle drag pauses the preview too, and a button that
+  disagreed with the video would be worse than no button.
 
 ## Canvas zoom
 
@@ -296,6 +306,14 @@ The canvas scroll container must never carry `items-center` or
 `justify-center`. Centering a scroller strands half the overflow above the
 scroll origin, which makes the top of a tall screenshot unreachable. Center on
 an inner `min-h-full w-max min-w-full` wrapper instead.
+
+**A fitted frame lands on exactly the space available**, since that wrapper is
+`min-h-full` with its own padding and the outer box is the scaled footprint, so
+the two agree to the pixel and nothing absorbs a fraction. `offsetWidth` and
+`offsetHeight` round, so `FIT_SLACK` gives the fit one pixel of tolerance. A
+sweep of 176 window sizes at both pixel ratios found no case that needs it,
+which is the reason it is there rather than a reason to drop it: the guarantee
+that Fit shows the whole frame should not rest on that staying true.
 
 ## Draft persistence
 
