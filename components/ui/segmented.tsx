@@ -39,12 +39,14 @@ export function SegmentedOption({
   id,
   value,
   selected,
+  disabled = false,
   className,
   children,
 }: {
   id: string;
   value: string;
   selected: boolean;
+  disabled?: boolean;
   className?: string;
   children: React.ReactNode;
 }) {
@@ -52,15 +54,22 @@ export function SegmentedOption({
     <label
       htmlFor={id}
       className={cn(
-        "relative flex cursor-pointer select-none items-center justify-center rounded-md text-[13px]",
-        "transition-all duration-150 active:scale-[0.97]",
-        selected
-          ? "bg-track-active text-foreground shadow-sm"
-          : "text-muted-foreground hover:text-foreground",
+        "relative flex select-none items-center justify-center rounded-md text-[13px]",
+        "transition-all duration-150",
+        disabled
+          ? "cursor-not-allowed text-muted-foreground opacity-50"
+          : "cursor-pointer active:scale-[0.97]",
+        selected && "bg-track-active text-foreground shadow-sm",
+        !selected && !disabled && "text-muted-foreground hover:text-foreground",
         className
       )}
     >
-      <RadioGroupItem value={value} id={id} className="sr-only" />
+      <RadioGroupItem
+        value={value}
+        id={id}
+        disabled={disabled}
+        className="sr-only"
+      />
       {children}
     </label>
   );
