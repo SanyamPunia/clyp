@@ -465,6 +465,7 @@ export function Clyp() {
             source: media.blob,
             scale: options.quality,
             trim: trim ?? undefined,
+            audio: options.audio,
             onProgress: setProgress,
             signal: controller.signal,
           });
@@ -877,6 +878,7 @@ export function Clyp() {
         hasGrain={styleOptions.showNoiseOverlay}
         kind={media?.kind ?? "image"}
         duration={clipSeconds}
+        hasAudio={media?.hasAudio ?? false}
         progress={progress}
         defaultFilename={filenameFor(
           undefined,

@@ -24,6 +24,8 @@ import { toPng } from "html-to-image";
 import type { Trim } from "@/types/screenshot";
 import {
   ALL_FORMATS,
+  AudioSampleSink,
+  AudioSampleSource,
   BlobSource,
   BufferTarget,
   CanvasSource,
@@ -32,6 +34,7 @@ import {
   Output,
   QUALITY_HIGH,
   VideoSampleSink,
+  canEncodeAudio,
 } from "mediabunny";
 
 export interface Box {
@@ -55,6 +58,8 @@ export interface VideoExportRequest {
   scale: number;
   /** The clip's in and out points. Absent exports the whole file. */
   trim?: Trim;
+  /** Carry the source's audio across. Ignored when it has none. */
+  audio?: boolean;
   onProgress?: (fraction: number) => void;
   signal?: AbortSignal;
 }
@@ -69,9 +74,14 @@ export interface RenderRequest {
   source: Blob;
   /** The clip's in and out points. Absent exports the whole file. */
   trim?: Trim;
+  /** Carry the source's audio across. Ignored when it has none. */
+  audio?: boolean;
   onProgress?: (fraction: number) => void;
   signal?: AbortSignal;
 }
+
+/** What the audio track is re-encoded as, when there is one to carry. */
+const AUDIO_CODEC = "aac";
 
 /**
  * The longest edge an export may have.
@@ -111,6 +121,7 @@ export async function renderVideo({
   radii,
   source,
   trim,
+  audio = true,
   onProgress,
   signal,
 }: RenderRequest): Promise<Blob> {
@@ -146,6 +157,17 @@ export async function renderVideo({
     quality: QUALITY_HIGH,
   });
   output.addVideoTrack(frames);
+
+  // Declared before the output starts, because a track cannot be added to a
+  // running output. A source with no encoder for it is worse than no sound, so
+  // the capability is checked here rather than assumed.
+  const audioTrack = audio ? await input.getPrimaryAudioTrack() : null;
+  const sound =
+    audioTrack && (await canEncodeAudio(AUDIO_CODEC))
+      ? new AudioSampleSource({ codec: AUDIO_CODEC, quality: QUALITY_HIGH })
+      : null;
+  if (sound) output.addAudioTrack(sound);
+
   await output.start();
 
   try {
@@ -205,6 +227,25 @@ export async function renderVideo({
       sample.close();
     }
 
+    // After the video rather than beside it. Both tracks write in order and
+    // the muxer interleaves them at finalize, and audio for a clip this length
+    // is a fraction of the video's time, so it is not worth a second progress
+    // phase to report.
+    if (sound && audioTrack) {
+      const audioSink = new AudioSampleSink(audioTrack);
+
+      for await (const sample of audioSink.samples(from, to)) {
+        if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+
+        // The same absolute-timestamp problem the video has, and the same
+        // answer: a trim starting at six seconds would otherwise write six
+        // seconds of silence before the sound starts.
+        sample.setTimestamp(Math.max(sample.timestamp - from, 0));
+        await sound.add(sample);
+        sample.close();
+      }
+    }
+
     await output.finalize();
     onProgress?.(1);
 
@@ -228,6 +269,7 @@ export async function exportVideo({
   source,
   scale,
   trim,
+  audio,
   onProgress,
   signal,
 }: VideoExportRequest): Promise<Blob> {
@@ -239,7 +281,16 @@ export async function exportVideo({
 
   const { box, radii } = measure(frame, video, chrome);
 
-  return renderVideo({ chrome, box, radii, source, trim, onProgress, signal });
+  return renderVideo({
+    chrome,
+    box,
+    radii,
+    source,
+    trim,
+    audio,
+    onProgress,
+    signal,
+  });
 }
 
 function loadImage(src: string): Promise<HTMLImageElement> {

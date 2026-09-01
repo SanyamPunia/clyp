@@ -8,6 +8,8 @@
  * string.
  */
 
+import { ALL_FORMATS, BlobSource, Input } from "mediabunny";
+
 import type { Media, MediaKind } from "@/types/screenshot";
 
 const IMAGE_TYPES = [
@@ -31,11 +33,17 @@ export const ACCEPT = [...IMAGE_TYPES, ...VIDEO_TYPES].join(",");
 
 /**
  * Caps, so a dropped 4K screen recording cannot take the tab down with it.
- * Decoding is frame by frame and encoding is not free, and there is no way to
- * fail gracefully once the memory is gone.
+ *
+ * Size is the real bound: the file is held as a Blob and written to IndexedDB
+ * whole. Duration is not, and used to be 60s only because the export decoded
+ * the whole file. It no longer does. `sink.samples(from, to)` seeks to the
+ * keyframe at or before the in point, so the decode costs what the trim is
+ * rather than what the source is, and a four minute recording cut to ten
+ * seconds encodes ten seconds. The cap is now a limit on what one Blob may
+ * weigh, and this is roughly ten minutes of 1080p screen capture.
  */
 export const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
-export const MAX_VIDEO_SECONDS = 60;
+export const MAX_VIDEO_SECONDS = 600;
 
 export function kindOf(type: string): MediaKind | null {
   if (IMAGE_TYPES.includes(type)) return "image";
@@ -125,10 +133,23 @@ function loadVideo(file: File): Promise<LoadedMedia> {
         return;
       }
 
-      resolve({
-        media: { kind: "video", src, name: file.name, blob: file, duration },
-        width: videoWidth,
-        height: videoHeight,
+      // The container is read for one boolean, which is what decides whether
+      // the export offers to keep the sound. An `<video>` element cannot
+      // answer it: `audioTracks` is not in Chrome, and the vendor-prefixed
+      // byte counters only report once something has played.
+      hasAudioTrack(file).then((hasAudio) => {
+        resolve({
+          media: {
+            kind: "video",
+            src,
+            name: file.name,
+            blob: file,
+            duration,
+            hasAudio,
+          },
+          width: videoWidth,
+          height: videoHeight,
+        });
       });
     };
 
@@ -137,7 +158,48 @@ function loadVideo(file: File): Promise<LoadedMedia> {
   });
 }
 
-/** For a readout beside the output size, so under ten seconds keeps a decimal. */
+/**
+ * A rough length, for a readout beside the output size.
+ *
+ * Under ten seconds keeps a decimal, since the difference between three and
+ * four seconds of clip matters at that length. Past a minute it becomes a
+ * clock, because "180s" is a number a reader has to convert.
+ */
 export function formatDuration(seconds: number): string {
-  return seconds < 10 ? `${seconds.toFixed(1)}s` : `${Math.round(seconds)}s`;
+  const total = Math.round(Math.max(seconds, 0));
+  if (total >= 60) {
+    return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+  }
+  return seconds < 10 ? `${seconds.toFixed(1)}s` : `${total}s`;
+}
+
+/**
+ * An exact time, to the millisecond, for the trim's own readouts.
+ *
+ * Under a minute the minutes are dropped rather than padded to `0:04.720`,
+ * which spends two characters saying nothing on the clips this is used for
+ * most. `scale` is what decides that, so a readout counting up through a long
+ * clip keeps one shape instead of growing a `0:` at the minute mark.
+ */
+export function formatPrecise(seconds: number, scale = seconds): string {
+  const safe = Math.max(seconds, 0);
+  if (scale < 60) return `${safe.toFixed(3)}s`;
+
+  const minutes = Math.floor(safe / 60);
+  return `${minutes}:${(safe - minutes * 60).toFixed(3).padStart(6, "0")}`;
+}
+
+/** Metadata only, so this reads the container's index rather than the file. */
+async function hasAudioTrack(file: File): Promise<boolean> {
+  try {
+    const input = new Input({
+      formats: ALL_FORMATS,
+      source: new BlobSource(file),
+    });
+    return (await input.getPrimaryAudioTrack()) !== null;
+  } catch {
+    // A container this build cannot parse still plays, since the element
+    // already probed it. It just cannot be asked about its tracks.
+    return false;
+  }
 }

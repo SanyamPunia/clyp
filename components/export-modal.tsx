@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { FieldLabel } from "@/components/ui/field-label";
 import { SegmentedGroup, SegmentedOption } from "@/components/ui/segmented";
 import { Dimensions } from "@/components/ui/dimensions";
@@ -45,6 +46,8 @@ interface ExportModalProps {
   kind: MediaKind;
   /** Video only, in seconds. */
   duration?: number;
+  /** Video only. Whether the source has a track worth offering to keep. */
+  hasAudio?: boolean;
   /** 0 to 1 while a video encodes, null while a PNG renders. */
   progress?: number | null;
   /** What the filename field falls back to, shown as its placeholder. */
@@ -63,11 +66,15 @@ export function ExportModal({
   hasGrain,
   kind,
   duration,
+  hasAudio = false,
   progress = null,
   defaultFilename,
   onCancel,
 }: ExportModalProps) {
-  const [options, setOptions] = useState<ExportOptions>({ quality: 2 });
+  const [options, setOptions] = useState<ExportOptions>({
+    quality: 2,
+    audio: true,
+  });
 
   const isCopy = action === "copy";
   // Copy goes through the clipboard, which has no MP4 flavour, so a clip
@@ -121,7 +128,7 @@ export function ExportModal({
           </DialogTitle>
           <DialogDescription>
             {isVideo
-              ? `The clip is re-encoded as a silent MP4 at the styled size, at up to ${MAX_FPS} fps. Longer clips and higher scales take longer to render.`
+              ? `The clip is re-encoded as an MP4 at the styled size, at up to ${MAX_FPS} fps. Longer clips and higher scales take longer to render.`
               : kind === "video"
                 ? "The clip's current frame is captured as a PNG, with the frame styled around it."
                 : "Higher scales render more pixels and take longer. The file size is an estimate."}
@@ -174,6 +181,28 @@ export function ExportModal({
               ))}
             </SegmentedGroup>
           </div>
+
+          {/* Offered only when there is something to keep, so the control is
+              never a switch over silence. */}
+          {isVideo && hasAudio && (
+            <label
+              htmlFor="keep-audio"
+              className="flex cursor-pointer items-center justify-between gap-4 rounded-lg bg-track px-3 py-2.5"
+            >
+              <span className="flex flex-col gap-0.5">
+                <span className="text-[13px] font-medium">Keep the audio</span>
+                <span className="text-xs text-muted-foreground">
+                  Re-encoded as AAC alongside the video.
+                </span>
+              </span>
+              <Switch
+                id="keep-audio"
+                checked={options.audio ?? true}
+                onCheckedChange={(audio) => setOptions({ ...options, audio })}
+                disabled={pending}
+              />
+            </label>
+          )}
 
           {!isCopy && (
             <div className="flex flex-col gap-2">

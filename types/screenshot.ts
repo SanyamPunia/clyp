@@ -19,6 +19,8 @@ export interface Media {
   blob?: Blob;
   /** Video only, in seconds. */
   duration?: number;
+  /** Video only. Whether the source has an audio track worth offering. */
+  hasAudio?: boolean;
 }
 
 /** A clip's in and out points, in seconds. */
@@ -50,4 +52,6 @@ export interface StyleOptions {
 export interface ExportOptions {
   quality: number;
   filename?: string;
+  /** Video only. Carry the source's audio into the export. */
+  audio?: boolean;
 }
