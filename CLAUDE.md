@@ -324,6 +324,19 @@ have to agree about where a second is.
   stops on the last frame that will be in the export rather than one past it.
   Pressing play on a clip parked there starts it over, since otherwise it plays
   nothing.
+- **A wrap is a seek and then a play, and the play is not optional.** With no
+  `loop` attribute the element pauses itself at the file's own end, so seeking
+  alone put the playhead back at the top and left it there: looping appeared to
+  work for exactly one pass. Whether to resume is read before the seek, since
+  seeking clears `ended`, and a deliberate pause at the out point is left
+  alone. Measured across eight seconds of a three second clip: three wraps and
+  no stalled samples, where before there was one wrap and thirty stalls out of
+  thirty-nine. A trimmed window mid-file loops the same way, with the
+  soundtrack following it: four wraps over `[5, 7]`, no sample outside the
+  range, and the audio never stalling.
+  - This is also why `handlePlayback` catches `play()`. It is asked for once a
+    frame while a wrap settles, and a refusal there would be an unhandled
+    rejection per frame.
 - **Play and pause are stacked and cross-faded, not swapped.** That control is
   pressed twice in a row more than any other here, and a glyph that pops in
   reads as the button flickering. Both sit in the same box, so it is never

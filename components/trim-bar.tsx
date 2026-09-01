@@ -229,12 +229,21 @@ export function TrimBar({
       if (!element.seeking && time >= end) {
         // Not looping means stopping on the last frame that will be in the
         // export, rather than one past it or back at the top.
-        if (loopRef.current) {
-          seekRef.current(start);
-        } else {
+        if (!loopRef.current) {
           playbackRef.current(false);
           seekRef.current(Math.max(end - FRAME, start));
+          return;
         }
+
+        // Wrapping is a seek and then a play, and the play is not optional.
+        // The element has no `loop` attribute, so at the file's own end it
+        // pauses itself: seeking alone put the playhead back at the top and
+        // left it sitting there, which is what made looping appear to work for
+        // exactly one pass. Read before the seek, since seeking clears
+        // `ended`.
+        const resume = !element.paused || element.ended;
+        seekRef.current(start);
+        if (resume) playbackRef.current(true);
         return;
       }
 

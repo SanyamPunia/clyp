@@ -632,7 +632,10 @@ export function Clyp() {
   const handlePlayback = useCallback((playing: boolean) => {
     const video = videoRef.current;
     if (!video) return;
-    if (playing) void video.play();
+
+    // Caught, because this is asked for once a frame while a loop wraps and a
+    // refusal there would be an unhandled rejection per frame.
+    if (playing) void video.play().catch(() => {});
     else video.pause();
   }, []);
 
