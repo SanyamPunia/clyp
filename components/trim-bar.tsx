@@ -157,6 +157,7 @@ export function TrimBar({
   // it still costs no render per frame.
   const [laneWidth, setLaneWidth] = useState(0);
   const laneRef = useRef<HTMLDivElement>(null);
+  const regionRef = useRef<HTMLDivElement>(null);
   const playheadRef = useRef<HTMLDivElement>(null);
   const clockRef = useRef<HTMLSpanElement>(null);
   // The lane's usable span in px, kept in a ref because the playhead is
@@ -169,13 +170,22 @@ export function TrimBar({
   const seekRef = useRef(onSeek);
   const loopRef = useRef(looping);
   const playbackRef = useRef(onPlayback);
+  // The soundtrack changes on every frame of a drag, so the wheel listener
+  // reads it from here rather than closing over it and rebinding 60 times a
+  // second.
+  const soundRef = useRef(soundtrack);
+  const changeSoundRef = useRef(onSoundtrackChange);
+  /** Wheel movement too small to be a frame yet, held until it is. */
+  const restRef = useRef(0);
 
   useEffect(() => {
     rangeRef.current = trim;
     seekRef.current = onSeek;
     loopRef.current = looping;
     playbackRef.current = onPlayback;
-  }, [trim, onSeek, looping, onPlayback]);
+    soundRef.current = soundtrack;
+    changeSoundRef.current = onSoundtrackChange;
+  }, [trim, onSeek, looping, onPlayback, soundtrack, onSoundtrackChange]);
 
   useEffect(() => {
     const lane = laneRef.current;
@@ -441,6 +451,62 @@ export function TrimBar({
   );
 
   /**
+   * Moves the sound inside the region, leaving the region where it is.
+   *
+   * The region's place on the clip and its length are what the picture is cut
+   * against, and they are usually right before the sound behind them is. This
+   * is the edit that fixes the other half: the same window, a different part of
+   * the track through it.
+   */
+  // The region only exists when a track does, and the wheel listener has to
+  // rebind when it appears.
+  const placed = soundtrack !== null;
+
+  const slip = useCallback((by: number) => {
+    const sound = soundRef.current;
+    if (!sound) return;
+
+    // Bounded by the file behind the region's head and ahead of its tail. A
+    // region as long as the file has nowhere to slip, which is correct.
+    const room = clamp(
+      restRef.current + by,
+      -sound.start,
+      sound.duration - sound.end,
+    );
+    const step = snap(room);
+    // Kept rather than dropped, or a trackpad's small deltas each round to
+    // nothing and scrolling appears to do nothing at all.
+    restRef.current = room - step;
+    if (step === 0) return;
+
+    // One step applied to both ends, never two snaps, so the region cannot
+    // change length by a frame on the way.
+    changeSoundRef.current({
+      ...sound,
+      start: sound.start + step,
+      end: sound.end + step,
+    });
+  }, []);
+
+  // Non-passive, since the point is to take the gesture rather than let it
+  // scroll the page it sits on.
+  useEffect(() => {
+    const node = regionRef.current;
+    if (!node || disabled) return;
+
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      // Scaled to the lane, so a wheel of so many pixels slips the same amount
+      // a drag of so many pixels would.
+      const perPixel = duration / Math.max(spanRef.current, 1);
+      slip((event.deltaX || event.deltaY) * perPixel);
+    };
+
+    node.addEventListener("wheel", onWheel, { passive: false });
+    return () => node.removeEventListener("wheel", onWheel);
+  }, [disabled, duration, slip, placed]);
+
+  /**
    * The soundtrack's body and its two edges.
    *
    * `body` slides the region along the clip. `head` brings the left edge in
@@ -462,12 +528,29 @@ export function TrimBar({
 
         const origin = timeAt(event.clientX);
         const from = soundtrack;
+        // The mode is fixed at the press rather than read per sample, so
+        // letting go of Alt mid-drag cannot turn one edit into the other.
+        const slipping = part === "body" && event.altKey;
         event.currentTarget.setPointerCapture(event.pointerId);
 
         const length = from.end - from.start;
 
         const move = (moved: PointerEvent) => {
           const by = timeAt(moved.clientX) - origin;
+
+          if (slipping) {
+            // Absolute against the snapshot, so this needs none of the wheel's
+            // accumulating.
+            const step = snap(
+              clamp(by, -from.start, from.duration - from.end),
+            );
+            onSoundtrackChange({
+              ...from,
+              start: from.start + step,
+              end: from.end + step,
+            });
+            return;
+          }
 
           if (part === "body") {
             onSoundtrackChange({
@@ -654,24 +737,41 @@ export function TrimBar({
           read against where the clip does rather than described in a number. */}
       {soundtrack && (
         <div className="relative mt-1 h-7">
-          <div
-            role="group"
-            aria-label={`Soundtrack, ${soundtrack.name}`}
-            onPointerDown={dragSound("body")}
-            className="absolute inset-y-0 cursor-grab overflow-hidden rounded-md bg-elevated ring-1 ring-stroke active:cursor-grabbing"
-            style={{
-              left: `calc(${at(soundtrack.offset / duration)} + ${INSET}px)`,
-              width: at((soundtrack.end - soundtrack.start) / duration),
-            }}
-          >
-            <Wave
-              wave={shape}
-              from={soundtrack.start}
-              to={soundtrack.end}
-              width={laneWidth}
-              duration={duration}
-            />
-          </div>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div
+                ref={regionRef}
+                role="group"
+                aria-label={`Soundtrack, ${soundtrack.name}`}
+                onPointerDown={dragSound("body")}
+                // Back to the top of the file, keeping the region where it is.
+                // A slip is easy to lose track of and this is the way back.
+                onDoubleClick={() =>
+                  onSoundtrackChange({
+                    ...soundtrack,
+                    start: 0,
+                    end: soundtrack.end - soundtrack.start,
+                  })
+                }
+                className="absolute inset-y-0 cursor-grab overflow-hidden rounded-md bg-elevated ring-1 ring-stroke active:cursor-grabbing"
+                style={{
+                  left: `calc(${at(soundtrack.offset / duration)} + ${INSET}px)`,
+                  width: at((soundtrack.end - soundtrack.start) / duration),
+                }}
+              >
+                <Wave
+                  wave={shape}
+                  from={soundtrack.start}
+                  to={soundtrack.end}
+                  width={laneWidth}
+                  duration={duration}
+                />
+              </div>
+            </TooltipTrigger>
+            <TooltipContent>
+              Drag to move, scroll to slip, double-click to reset
+            </TooltipContent>
+          </Tooltip>
 
           <SoundEdge
             label="Soundtrack start"

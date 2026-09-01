@@ -381,6 +381,27 @@ the region's length on its own.
 - **The lane shares the video lane's axis and the same `at()` geometry**, so
   where the sound starts is read against where the clip does rather than
   described in a number. Both its edges snap to the same frame grid.
+- **Scrolling inside the region slips the sound through it**, which is the
+  other half of positioning: the region's place on the clip and its length are
+  usually right before the part of the track behind them is. `start` and `end`
+  move together, so the window holds still and a different stretch of the file
+  plays through it. Alt-drag does the same for a hand that would rather drag,
+  and a double-click puts the file back to its own beginning without moving the
+  region.
+  - **The wheel listener is non-passive and takes the gesture**, since the
+    point is to slip rather than to scroll the page it sits on. It binds once,
+    off refs, because the soundtrack is rewritten on every frame of a drag.
+  - **Movement too small to be a frame is kept, not dropped.** A trackpad's
+    deltas each round to nothing otherwise, and scrolling appears to do
+    nothing at all. The delta is scaled to the lane, so a wheel of so many
+    pixels slips what a drag of so many pixels would.
+  - **One step is applied to both ends, never two snaps**, or the region
+    changes length by a frame on the way through.
+  - Verified through the export, which is the only place it can be proved: a
+    two second region left where it was, slipped five seconds into a track that
+    steps 440 Hz to 880 Hz at its midpoint, exports 880 Hz. And with an asset
+    whose envelope varies, an Alt-drag changes the drawn shape while the
+    region's box holds to the pixel, and a double-click returns it.
 - **All three drags keep the region inside the clip.** A part hanging off
   either end cannot be heard, so drawing it outside the lane says the control
   is broken rather than that the sound runs on. The body is bounded by
