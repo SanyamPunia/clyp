@@ -584,6 +584,22 @@ export function Clyp() {
   }, []);
 
   /**
+   * A track that has just arrived does not start playing.
+   *
+   * The canvas autoplays, so without this the whole of a dropped file starts
+   * at whatever volume it was mastered at, from wherever the playhead happened
+   * to be. Pausing hands the first press back to the reader, which is also the
+   * position they want to hear it from. Keyed on the file rather than the
+   * soundtrack, so moving or slipping it does not keep stopping playback.
+   */
+  const arrived = soundtrack?.blob;
+
+  useEffect(() => {
+    if (!arrived) return;
+    videoRef.current?.pause();
+  }, [arrived]);
+
+  /**
    * Keeps the soundtrack in step with the picture.
    *
    * The element is driven rather than played on its own: the video is the

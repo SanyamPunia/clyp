@@ -462,6 +462,13 @@ the region's length on its own.
 - **It lives outside the export ref.** What the export hears comes from
   decoding the file, so an element inside the frame would only be something for
   `html-to-image` to trip over.
+- **A track that has just arrived does not start playing.** The canvas
+  autoplays, so without that the whole of a dropped file starts at whatever
+  volume it was mastered at, from wherever the playhead happened to be. Pausing
+  hands the first press back to the reader, which is also the position they
+  want to hear it from. It is keyed on the file rather than on the soundtrack,
+  so moving or slipping the region does not keep stopping playback, and a
+  reload with a stored track comes up paused for the same reason.
 - **The mute control is the preview's, not the export's.** A track arriving at
   full volume with no warning is startling, and the export is unaffected either
   way.
