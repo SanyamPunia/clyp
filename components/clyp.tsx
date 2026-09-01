@@ -11,10 +11,16 @@ import {
   PlusIcon,
   Trash2Icon,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { toast } from "sonner";
 
-import { DropZone } from "@/components/drop-zone";
+import { DropZone, readMediaFile } from "@/components/drop-zone";
 import { ExportModal } from "@/components/export-modal";
 import { GradientBackground } from "@/components/gradient-background";
 import { StyleControls } from "@/components/style-controls";
@@ -44,16 +50,74 @@ import {
   zoomOut,
   zoomToFit,
 } from "@/lib/zoom";
+import { type LoadedMedia, formatDuration, kindOf } from "@/lib/media";
 import {
-  deleteImage,
+  deleteMedia,
   deleteStyle,
-  readImage,
+  readMedia,
   readStyle,
-  writeImage,
+  writeMedia,
   writeStyle,
 } from "@/lib/storage";
+import { canExportVideo, exportVideo } from "@/lib/video-export";
+import { download, downloadBlob } from "@/lib/download";
 import { cn } from "@/lib/utils";
-import type { ExportOptions, StyleOptions } from "@/types/screenshot";
+import type { ExportOptions, Media, StyleOptions } from "@/types/screenshot";
+
+/**
+ * The modal's field carries whatever the user typed, so the extension is
+ * imposed here rather than trusted: a clip saved as `demo.png` is a file no
+ * player opens.
+ */
+/**
+ * WebCodecs presence, read without a hydration mismatch. It cannot change over
+ * a session, so the store has nothing to subscribe to, and the server snapshot
+ * says yes: every browser this app targets has an encoder, and a control that
+ * starts usable and disables itself on hydration beats one that starts
+ * disabled everywhere.
+ */
+const noSubscribers = () => () => {};
+const encoderAssumed = () => true;
+
+/**
+ * A tooltip only when there is something to say. A control carrying a text
+ * label does not want one otherwise, and a disabled button emits no pointer
+ * events of its own, so the wrapper is what the tooltip hangs off.
+ */
+function Hint({
+  reason,
+  children,
+}: {
+  reason: string | null;
+  children: React.ReactNode;
+}) {
+  if (!reason) return children;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex">{children}</span>
+      </TooltipTrigger>
+      <TooltipContent>{reason}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/**
+ * The modal's field carries whatever the user typed, so the extension is
+ * imposed here rather than trusted: a clip saved as `demo.png` is a file no
+ * player opens. What the user typed wins, then the dropped file's own name,
+ * which is what you want when exporting three recordings in a row.
+ */
+function filenameFor(
+  typed: string | undefined,
+  extension: "png" | "mp4",
+  source?: string,
+): string {
+  const base = (value: string) => value.trim().replace(/\.[^./\\]+$/, "");
+  const name = base(typed ?? "") || base(source ?? "") || "clyp";
+  return `${name}.${extension}`;
+}
 
 /* ─────────────────────────────────────────────────────────
  * ANIMATION STORYBOARD - artwork entry
@@ -90,7 +154,7 @@ const DEFAULT_STYLE: StyleOptions = {
 };
 
 export function Clyp() {
-  const [image, setImage] = useState<string | null>(null);
+  const [media, setMedia] = useState<Media | null>(null);
   const [dimensions, setDimensions] = useState<{ w: number; h: number } | null>(
     null,
   );
@@ -106,11 +170,24 @@ export function Clyp() {
   );
   const [clearOpen, setClearOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
+  /** 0 to 1 while a video encodes, null for an image, which is one shot. */
+  const [progress, setProgress] = useState<number | null>(null);
   // Nothing is written until the stored draft has been read back, otherwise
   // the first render would overwrite it with defaults.
   const [restored, setRestored] = useState(false);
 
+  const canEncode = useSyncExternalStore(
+    noSubscribers,
+    canExportVideo,
+    encoderAssumed,
+  );
+
+  // Held for the length of one video export, so Cancel can stop it. A PNG is
+  // one shot and has nothing to interrupt.
+  const abortRef = useRef<AbortController | null>(null);
+
   const screenshotRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
 
   const [zoom, setZoom] = useState(1);
@@ -148,15 +225,38 @@ export function Clyp() {
   }, []);
 
   const gradientCss = resolveGradientCss(styleOptions);
+  // One radius for both branches and for the export's rounded clip, so an
+  // image and a video cannot end up cornered differently.
+  // Copy always produces a PNG, so a clip copies its styled poster frame and
+  // only Download encodes. That leaves one thing that can be unavailable: the
+  // encode needs WebCodecs.
+  const downloadBlocked =
+    media?.kind === "video" && !canEncode
+      ? "This browser cannot encode video"
+      : null;
+  const exportsVideo = media?.kind === "video" && exportAction === "download";
+
+  const removeLabel =
+    media?.kind === "video" ? "Remove clip" : "Remove screenshot";
+
+  const mediaRadius = cornerRadius(
+    styleOptions.imageRadius,
+    styleOptions.imageCorners,
+    styleOptions.showWindowNavbar ? "bottom" : undefined,
+  );
   const zoomed = zoom !== 1 && frameSize.width > 0;
 
-  const loadImage = useCallback((dataUrl: string) => {
-    setImage(dataUrl);
-
-    const probe = new Image();
-    probe.onload = () =>
-      setDimensions({ w: probe.naturalWidth, h: probe.naturalHeight });
-    probe.src = dataUrl;
+  /**
+   * Takes over from the loader in `lib/media.ts`, which has already read and
+   * measured the file. Revoking the previous object URL matters: a video that
+   * is replaced four times leaves four decoded files alive otherwise.
+   */
+  const loadMedia = useCallback((loaded: LoadedMedia) => {
+    setMedia((previous) => {
+      if (previous?.kind === "video") URL.revokeObjectURL(previous.src);
+      return loaded.media;
+    });
+    setDimensions({ w: loaded.width, h: loaded.height });
   }, []);
 
   // Track the frame's natural size, and refit while the mode is "fit". This is
@@ -190,7 +290,7 @@ export function Clyp() {
     observer.observe(frame);
     observer.observe(scroller);
     return () => observer.disconnect();
-  }, [image]);
+  }, [media]);
 
   // Cmd/Ctrl + wheel, which is also what a trackpad pinch sends.
   useEffect(() => {
@@ -206,7 +306,7 @@ export function Clyp() {
 
     scroller.addEventListener("wheel", handleWheel, { passive: false });
     return () => scroller.removeEventListener("wheel", handleWheel);
-  }, [image]);
+  }, [media]);
 
   // Restore the draft. Reading on the client only: localStorage does not
   // exist while rendering on the server, and seeding state from it would
@@ -214,27 +314,53 @@ export function Clyp() {
   useEffect(() => {
     let cancelled = false;
 
-    readImage()
+    readMedia()
       .catch(() => null)
-      .then((dataUrl) => {
+      .then((stored) => {
         if (cancelled) return;
 
         setStyleOptions(readStyle(DEFAULT_STYLE));
-        if (dataUrl) loadImage(dataUrl);
+
+        if (stored?.kind === "image" && typeof stored.payload === "string") {
+          const probe = new Image();
+          probe.onload = () => {
+            setMedia({ kind: "image", src: probe.src, name: stored.name });
+            setDimensions({ w: probe.naturalWidth, h: probe.naturalHeight });
+          };
+          probe.src = stored.payload;
+        } else if (stored?.kind === "video" && stored.payload instanceof Blob) {
+          // Back through the same loader the drop path uses, so a restored
+          // video is measured and rejected on exactly the same terms.
+          const file = new File([stored.payload], stored.name ?? "clyp", {
+            type: stored.payload.type,
+          });
+          readMediaFile(file, loadMedia);
+        }
+
         setRestored(true);
       });
 
     return () => {
       cancelled = true;
     };
-  }, [loadImage]);
+  }, [loadMedia]);
 
   // Persist. Both skip until the restore has run.
   useEffect(() => {
     if (!restored) return;
-    if (image) writeImage(image);
-    else deleteImage();
-  }, [image, restored]);
+
+    if (!media) {
+      deleteMedia();
+      return;
+    }
+    // A video stores the file, not the object URL: a `blob:` URL is only valid
+    // for the document that made it, so a stored one restores as a dead link.
+    writeMedia({
+      kind: media.kind,
+      payload: media.kind === "video" ? (media.blob as Blob) : media.src,
+      name: media.name,
+    });
+  }, [media, restored]);
 
   useEffect(() => {
     if (!restored) return;
@@ -248,21 +374,19 @@ export function Clyp() {
       if (!items) return;
 
       for (const item of items) {
-        if (item.type.indexOf("image") === -1) continue;
+        if (!kindOf(item.type)) continue;
 
-        const blob = item.getAsFile();
-        if (!blob) continue;
+        const file = item.getAsFile();
+        if (!file) continue;
 
-        const reader = new FileReader();
-        reader.onload = (event) => loadImage(event.target?.result as string);
-        reader.readAsDataURL(blob);
+        readMediaFile(file, loadMedia);
         break;
       }
     };
 
     document.addEventListener("paste", handlePaste);
     return () => document.removeEventListener("paste", handlePaste);
-  }, [loadImage]);
+  }, [loadMedia]);
 
   const openExportModal = useCallback((action: "copy" | "download") => {
     setExportAction(action);
@@ -272,13 +396,15 @@ export function Clyp() {
   // Cmd/Ctrl+S downloads, Cmd/Ctrl+Shift+C copies.
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
-      if (!image) return;
+      if (!media) return;
       const mod = e.metaKey || e.ctrlKey;
       if (!mod) return;
 
+      // The same two gates the buttons carry. Cmd+S has to be swallowed either
+      // way, or the browser offers to save the page.
       if (e.key.toLowerCase() === "s") {
         e.preventDefault();
-        openExportModal("download");
+        if (!downloadBlocked) openExportModal("download");
       } else if (e.shiftKey && e.key.toLowerCase() === "c") {
         e.preventDefault();
         openExportModal("copy");
@@ -287,43 +413,78 @@ export function Clyp() {
 
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [image, openExportModal]);
+  }, [media, openExportModal, downloadBlocked]);
 
   const handleExport = useCallback(
     async (options: ExportOptions) => {
-      if (!image || !screenshotRef.current) return;
+      const frame = screenshotRef.current;
+      if (!media || !frame) return;
 
       setExporting(true);
+      setProgress(exportsVideo ? 0 : null);
       try {
-        const dataUrl = await toPng(screenshotRef.current, {
-          cacheBust: true,
-          pixelRatio: options.quality,
-        });
+        if (exportsVideo) {
+          const video = videoRef.current;
+          if (!video || !media.blob) throw new Error("That clip is not loaded");
 
-        if (exportAction === "copy") {
-          const blob = await fetch(dataUrl).then((res) => res.blob());
-          await navigator.clipboard.write([
-            new ClipboardItem({ [blob.type]: blob }),
-          ]);
-          toast.success("Copied to clipboard");
+          const controller = new AbortController();
+          abortRef.current = controller;
+
+          const blob = await exportVideo({
+            frame,
+            video,
+            source: media.blob,
+            scale: options.quality,
+            onProgress: setProgress,
+            signal: controller.signal,
+          });
+          downloadBlob(blob, filenameFor(options.filename, "mp4", media.name));
+          toast.success("Video downloaded");
         } else {
-          const link = document.createElement("a");
-          link.download = options.filename || "clyp-screenshot.png";
-          link.href = dataUrl;
-          link.click();
-          toast.success("Image downloaded");
+          const dataUrl = await toPng(frame, {
+            cacheBust: true,
+            pixelRatio: options.quality,
+          });
+
+          if (exportAction === "copy") {
+            const blob = await fetch(dataUrl).then((res) => res.blob());
+            await navigator.clipboard.write([
+              new ClipboardItem({ [blob.type]: blob }),
+            ]);
+            toast.success("Copied to clipboard");
+          } else {
+            download(dataUrl, filenameFor(options.filename, "png", media.name));
+            toast.success("Image downloaded");
+          }
         }
 
         setExportModalOpen(false);
       } catch (err) {
-        console.error("Failed to export image:", err);
-        toast.error("Export failed. Please try again.");
+        // A cancel is not a failure. The user asked for the dialog to go away,
+        // so it goes away and says nothing.
+        if (err instanceof DOMException && err.name === "AbortError") {
+          setExportModalOpen(false);
+          return;
+        }
+
+        console.error("Failed to export:", err);
+        toast.error(
+          err instanceof Error && err.message
+            ? err.message
+            : "Export failed. Please try again.",
+        );
       } finally {
+        abortRef.current = null;
         setExporting(false);
+        setProgress(null);
       }
     },
-    [exportAction, image],
+    [exportAction, exportsVideo, media],
   );
+
+  const handleCancelExport = useCallback(() => {
+    abortRef.current?.abort();
+  }, []);
 
   const handleStyleChange = useCallback(
     (newOptions: Partial<StyleOptions>) => {
@@ -337,7 +498,10 @@ export function Clyp() {
   );
 
   const handleClear = useCallback(() => {
-    setImage(null);
+    setMedia((previous) => {
+      if (previous?.kind === "video") URL.revokeObjectURL(previous.src);
+      return null;
+    });
     setDimensions(null);
     setZoom(1);
     setZoomMode("fit");
@@ -367,6 +531,20 @@ export function Clyp() {
                   className="animate-rise-in text-[13px] text-muted-foreground"
                   style={{ animationDelay: `${TIMING.toolbarMeta}ms` }}
                 />
+                {media?.duration !== undefined && (
+                  <>
+                    <span
+                      aria-hidden="true"
+                      className="inline-block size-1 shrink-0 rounded-full bg-stroke-strong"
+                    />
+                    <span
+                      className="animate-rise-in text-[13px] tabular-nums text-muted-foreground"
+                      style={{ animationDelay: `${TIMING.toolbarMeta}ms` }}
+                    >
+                      {formatDuration(media.duration)}
+                    </span>
+                  </>
+                )}
               </>
             )}
           </div>
@@ -379,7 +557,7 @@ export function Clyp() {
                   size="icon-sm"
                   aria-label="Zoom out"
                   onClick={() => setManualZoom(zoomOut(zoom))}
-                  disabled={!image || zoom <= MIN_ZOOM}
+                  disabled={!media || zoom <= MIN_ZOOM}
                 >
                   <MinusIcon className="size-4" aria-hidden="true" />
                 </Button>
@@ -392,7 +570,7 @@ export function Clyp() {
                 <button
                   type="button"
                   onClick={() => setManualZoom(1)}
-                  disabled={!image}
+                  disabled={!media}
                   className="h-7 w-12 cursor-pointer rounded-full text-center text-[13px] tabular-nums text-muted-foreground transition-colors duration-150 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {formatZoom(zoom)}
@@ -408,7 +586,7 @@ export function Clyp() {
                   size="icon-sm"
                   aria-label="Zoom in"
                   onClick={() => setManualZoom(zoomIn(zoom))}
-                  disabled={!image || zoom >= MAX_ZOOM}
+                  disabled={!media || zoom >= MAX_ZOOM}
                 >
                   <PlusIcon className="size-4" aria-hidden="true" />
                 </Button>
@@ -424,7 +602,7 @@ export function Clyp() {
                   aria-label="Fit to view"
                   aria-pressed={zoomMode === "fit"}
                   onClick={fitToView}
-                  disabled={!image}
+                  disabled={!media}
                   className={cn(
                     zoomMode === "fit" &&
                       "bg-track-active text-foreground shadow-sm",
@@ -443,20 +621,20 @@ export function Clyp() {
                 <Button
                   variant="ghost"
                   size="icon"
-                  aria-label="Remove screenshot"
+                  aria-label={removeLabel}
                   onClick={() => setClearOpen(true)}
-                  disabled={!image}
+                  disabled={!media}
                 >
                   <Trash2Icon className="size-4" aria-hidden="true" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Remove screenshot</TooltipContent>
+              <TooltipContent>{removeLabel}</TooltipContent>
             </Tooltip>
 
             <Button
               variant="outline"
               onClick={() => openExportModal("copy")}
-              disabled={!image}
+              disabled={!media}
             >
               <CopyIcon className="size-3.5" aria-hidden="true" />
               <span className="sr-only sm:not-sr-only">Copy</span>
@@ -468,9 +646,10 @@ export function Clyp() {
               </kbd>
             </Button>
 
+            <Hint reason={downloadBlocked}>
             <Button
               onClick={() => openExportModal("download")}
-              disabled={!image}
+              disabled={!media || downloadBlocked !== null}
             >
               <DownloadIcon className="size-3.5" aria-hidden="true" />
               <span className="sr-only sm:not-sr-only">Download</span>
@@ -480,12 +659,13 @@ export function Clyp() {
                 <span className="sr-only">Command S</span>
               </kbd>
             </Button>
+            </Hint>
           </div>
         </div>
 
         <DropZone
           ref={scrollerRef}
-          onFile={loadImage}
+          onFile={loadMedia}
           className="canvas-grid min-h-[260px] flex-1 overflow-auto sm:min-h-[420px]"
         >
           {/* Centering happens on this inner wrapper, not on the scroll
@@ -546,7 +726,7 @@ export function Clyp() {
                       className="flex items-center justify-center"
                       style={{ padding: `${styleOptions.padding}px` }}
                     >
-                      {image ? (
+                      {media ? (
                         <div
                           className="animate-artwork-in relative inline-block"
                           style={{ animationDelay: `${TIMING.artwork}ms` }}
@@ -563,30 +743,46 @@ export function Clyp() {
                               }}
                             />
                           )}
-                          {/* eslint-disable-next-line @next/next/no-img-element -- the
+                          {media.kind === "video" ? (
+                            /*
+                             * Muted and inline, or a browser refuses to play it
+                             * without a gesture and the canvas shows a frozen
+                             * first frame. Looping, since the canvas is a
+                             * preview of styling rather than a player: there are
+                             * no controls, and stopping at the end would leave
+                             * the frame looking broken.
+                             */
+                            <video
+                              ref={videoRef}
+                              src={media.src}
+                              autoPlay
+                              loop
+                              muted
+                              playsInline
+                              className={cn(
+                                styleOptions.shadow,
+                                "block h-auto max-w-full select-none",
+                              )}
+                              style={{ borderRadius: mediaRadius }}
+                            />
+                          ) : (
+                            /* eslint-disable-next-line @next/next/no-img-element -- the
                         source is a client-side data URL, which next/image cannot
-                        optimize and html-to-image cannot serialize. */}
-                          <img
-                            src={image}
-                            alt="Your screenshot"
-                            className={cn(
-                              styleOptions.shadow,
-                              "block h-auto max-w-full select-none",
-                            )}
-                            style={{
-                              borderRadius: cornerRadius(
-                                styleOptions.imageRadius,
-                                styleOptions.imageCorners,
-                                styleOptions.showWindowNavbar
-                                  ? "bottom"
-                                  : undefined,
-                              ),
-                            }}
-                            draggable={false}
-                          />
+                        optimize and html-to-image cannot serialize. */
+                            <img
+                              src={media.src}
+                              alt="Your screenshot"
+                              className={cn(
+                                styleOptions.shadow,
+                                "block h-auto max-w-full select-none",
+                              )}
+                              style={{ borderRadius: mediaRadius }}
+                              draggable={false}
+                            />
+                          )}
                         </div>
                       ) : (
-                        <UploadCard onImageUpload={loadImage} />
+                        <UploadCard onUpload={loadMedia} />
                       )}
                     </div>
                   </GradientBackground>
@@ -604,7 +800,7 @@ export function Clyp() {
           <StyleControls
             options={styleOptions}
             onChange={handleStyleChange}
-            disabled={!image}
+            disabled={!media}
           />
         </ScrollFade>
       </section>
@@ -617,13 +813,22 @@ export function Clyp() {
         pending={exporting}
         frameSize={frameSize}
         hasGrain={styleOptions.showNoiseOverlay}
+        kind={media?.kind ?? "image"}
+        duration={media?.duration}
+        progress={progress}
+        defaultFilename={filenameFor(
+          undefined,
+          exportsVideo ? "mp4" : "png",
+          media?.name,
+        )}
+        onCancel={exportsVideo ? handleCancelExport : undefined}
       />
 
       <ConfirmDialog
         open={clearOpen}
         onOpenChange={setClearOpen}
-        title="Remove this screenshot?"
-        description="The canvas is cleared and you will need to upload the image again. Your style settings are kept."
+        title={media?.kind === "video" ? "Remove this clip?" : "Remove this screenshot?"}
+        description={`The canvas is cleared and you will need to add the ${media?.kind === "video" ? "clip" : "image"} again. Your style settings are kept.`}
         confirmLabel="Remove"
         onConfirm={handleClear}
       />

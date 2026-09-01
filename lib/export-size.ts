@@ -50,3 +50,38 @@ export function formatBytes(bytes: number): string {
   if (bytes < 1000 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
+
+/**
+ * Video size estimate.
+ *
+ * Measured from real exports of this app, the same way the PNG fit above was.
+ * The surprise is that bytes track the output's *linear* size rather than its
+ * pixel count: mediabunny drives an AVC encode from a quantizer rather than a
+ * bitrate, so the detail in the frame is fixed by the source clip and a larger
+ * output only spreads it. Doubling the scale quadruples the pixels and roughly
+ * doubles the file.
+ *
+ * Bytes per root pixel per second, over three clips at three scales:
+ *
+ *   moving UI  1x  1.24 Mpx  67.7      still UI  1x  1.24 Mpx  35.7
+ *   moving UI  2x  4.95 Mpx  68.7      still UI  2x  4.95 Mpx  33.7
+ *   test card  1x  0.40 Mpx  43.0      test card  2x  1.59 Mpx  43.6
+ *   test card  3x  3.58 Mpx  50.1
+ *
+ * So the constant holds across scale to within a few percent and the spread is
+ * all content: a static screen recording is around 35 and one panning a whole
+ * window is around 69. The figure below is the middle of that, which is why
+ * the readout is always shown as an approximation.
+ */
+const VIDEO_BYTES_PER_ROOT_PIXEL_SECOND = 50;
+
+export function estimateVideoBytes(
+  width: number,
+  height: number,
+  seconds: number
+): number {
+  const pixels = width * height;
+  if (!pixels || !seconds) return 0;
+
+  return VIDEO_BYTES_PER_ROOT_PIXEL_SECOND * Math.sqrt(pixels) * seconds;
+}
