@@ -162,8 +162,16 @@ its own selected tile and appears nowhere else.
 
 **One line carrying all four was worse than the row it replaced.** It read
 `3418 × 2194 · 30 fps · 16s · ~2.1 MB`: four facts of equal weight behind three
-dots, with no reading order, which is a spec sheet rather than a readout. Two
-values a line is the ceiling here.
+dots, with no reading order, which is a spec sheet rather than a readout. One
+value a row is the ceiling here, so Scale carries the dimensions, Frame rate
+carries the length, and the footer carries the file.
+
+**The footer line leads with the format and a mark of its own.** Two bare
+numbers in a corner say nothing about what they measure, and the container is
+the one fact about the output stated nowhere else once the description went:
+it used to be buried in a sentence saying the clip is re-encoded as an MP4. It
+is `whitespace-nowrap`, because at 420px the buttons leave it about 130px and
+`~912 KB` was breaking across two lines.
 
 - **The visible description is gone and the `DialogDescription` is `sr-only`.**
   The dialog still needs something to be described by. What it does not need is

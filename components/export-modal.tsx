@@ -1,7 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CopyIcon, DownloadIcon, Loader2Icon } from "lucide-react";
+import {
+  CopyIcon,
+  DownloadIcon,
+  FileImageIcon,
+  FileVideoIcon,
+  Loader2Icon,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -265,7 +271,14 @@ export function ExportModal({
               30 either way, so 60 means nothing is dropped. */}
           {isVideo && (
             <div className="flex flex-col gap-2">
-              <FieldLabel>Frame rate</FieldLabel>
+              <div className="flex items-center justify-between gap-2">
+                <FieldLabel>Frame rate</FieldLabel>
+                {seconds > 0 && (
+                  <span className="text-[13px] tabular-nums text-muted-foreground">
+                    {formatDuration(seconds)}
+                  </span>
+                )}
+              </div>
               <SegmentedGroup
                 value={String(fps)}
                 onValueChange={(value) =>
@@ -363,15 +376,24 @@ export function ExportModal({
         <DialogFooter>
           {/* What the file will be, next to the action that writes it. Sticky
               with the footer, so it is the last thing read before committing
-              rather than something scrolled past on the way down. */}
+              rather than something scrolled past on the way down.
+
+              The format leads it, with a mark of its own. Two bare numbers in
+              a corner say nothing about what they measure, and the container
+              is the one fact about the output that is now stated nowhere else:
+              it used to be buried in a description that said the clip is
+              re-encoded as an MP4. */}
           {output.width > 0 && (
-            <p className="flex items-center gap-1.5 text-[13px] text-muted-foreground sm:mr-auto">
-              {isVideo && seconds > 0 && (
-                <>
-                  <span className="tabular-nums">{formatDuration(seconds)}</span>
-                  <Dot />
-                </>
+            <p className="flex items-center gap-1.5 whitespace-nowrap text-[13px] text-muted-foreground sm:mr-auto">
+              {isVideo ? (
+                <FileVideoIcon className="size-3.5 shrink-0" aria-hidden="true" />
+              ) : (
+                <FileImageIcon className="size-3.5 shrink-0" aria-hidden="true" />
               )}
+              <span className="font-medium text-foreground">
+                {isVideo ? "MP4" : "PNG"}
+              </span>
+              <Dot />
               <span className="tabular-nums">~{formatBytes(bytes)}</span>
             </p>
           )}
