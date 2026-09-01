@@ -57,6 +57,13 @@ export interface StoredMedia {
   payload: string | Blob;
   /** The dropped file's name, so a restored draft still names its export. */
   name?: string;
+  /**
+   * A soundtrack's file, kept because it is an asset the user supplied rather
+   * than an edit on one. Where it was placed is not kept, the same call the
+   * trim makes: writing that would rewrite both Blobs on every drag.
+   */
+  audio?: Blob;
+  audioName?: string;
 }
 
 /**

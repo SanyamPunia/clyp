@@ -10,7 +10,7 @@
 
 import { ALL_FORMATS, BlobSource, Input } from "mediabunny";
 
-import type { Media, MediaKind } from "@/types/screenshot";
+import type { Media, MediaKind, Soundtrack } from "@/types/screenshot";
 
 const IMAGE_TYPES = [
   "image/jpeg",
@@ -29,7 +29,27 @@ const IMAGE_TYPES = [
  */
 const VIDEO_TYPES = ["video/mp4", "video/webm", "video/quicktime"];
 
-export const ACCEPT = [...IMAGE_TYPES, ...VIDEO_TYPES].join(",");
+/**
+ * A sound file to lay over a clip. `audio/mp4` and `audio/x-m4a` are both what
+ * an `.m4a` arrives as depending on where it came from.
+ */
+const AUDIO_TYPES = [
+  "audio/mpeg",
+  "audio/mp4",
+  "audio/x-m4a",
+  "audio/aac",
+  "audio/wav",
+  "audio/x-wav",
+  "audio/ogg",
+  "audio/webm",
+  "audio/flac",
+];
+
+export const ACCEPT = [...IMAGE_TYPES, ...VIDEO_TYPES, ...AUDIO_TYPES].join(",");
+export const AUDIO_ACCEPT = AUDIO_TYPES.join(",");
+
+/** A sound file is capped on size alone. Nothing here decodes it whole. */
+export const MAX_AUDIO_BYTES = 30 * 1024 * 1024;
 
 /**
  * Caps, so a dropped 4K screen recording cannot take the tab down with it.
@@ -45,9 +65,12 @@ export const ACCEPT = [...IMAGE_TYPES, ...VIDEO_TYPES].join(",");
 export const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
 export const MAX_VIDEO_SECONDS = 600;
 
-export function kindOf(type: string): MediaKind | null {
+export type DropKind = MediaKind | "audio";
+
+export function kindOf(type: string): DropKind | null {
   if (IMAGE_TYPES.includes(type)) return "image";
   if (VIDEO_TYPES.includes(type)) return "video";
+  if (AUDIO_TYPES.includes(type)) return "audio";
   return null;
 }
 
@@ -68,13 +91,60 @@ export interface LoadedMedia {
  */
 export function loadMedia(file: File): Promise<LoadedMedia> {
   const kind = kindOf(file.type);
-  if (!kind) {
+  if (!kind || kind === "audio") {
     return Promise.reject(
       new Error("Drop a PNG, JPEG, GIF, WEBP, SVG, BMP, MP4, WEBM, or MOV"),
     );
   }
 
   return kind === "image" ? loadImage(file) : loadVideo(file);
+}
+
+/**
+ * Reads a sound file and measures it, so it can be placed before it is heard.
+ *
+ * It lands filling the clip from the top, which is the placement that needs no
+ * adjustment for the common case of a track longer than the clip.
+ */
+export function loadSoundtrack(
+  file: File,
+  clipSeconds: number,
+): Promise<Soundtrack> {
+  if (!AUDIO_TYPES.includes(file.type)) {
+    return Promise.reject(new Error("Drop an MP3, M4A, WAV, OGG, or FLAC"));
+  }
+  if (file.size > MAX_AUDIO_BYTES) {
+    return Promise.reject(
+      new Error(
+        `That track is ${Math.round(file.size / 1024 / 1024)} MB. The limit is ${MAX_AUDIO_BYTES / 1024 / 1024} MB`,
+      ),
+    );
+  }
+
+  return new Promise((resolve, reject) => {
+    const src = URL.createObjectURL(file);
+    const probe = document.createElement("audio");
+
+    probe.onerror = () => {
+      URL.revokeObjectURL(src);
+      reject(new Error("This browser cannot play that track"));
+    };
+    probe.onloadedmetadata = () => {
+      const duration = probe.duration;
+      resolve({
+        src,
+        name: file.name,
+        blob: file,
+        duration,
+        offset: 0,
+        start: 0,
+        end: Math.min(duration, clipSeconds || duration),
+      });
+    };
+
+    probe.preload = "metadata";
+    probe.src = src;
+  });
 }
 
 function loadImage(file: File): Promise<LoadedMedia> {
