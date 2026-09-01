@@ -33,7 +33,8 @@ eslint-plugin-react that throws on ESLint 10.
 
 ```
 app/          routes, root layout, providers, the one stylesheet
-components/   feature components (canvas, controls, drop zone, upload card)
+components/   feature components (canvas, controls, drop zone, upload card,
+              trim bar)
 components/ui shared primitives, shadcn-generated or hand-added
 lib/          pure modules, no React
 types/        shared types
@@ -363,6 +364,73 @@ have to agree about where a second is.
   the second place in this app the shared cursor-pointer rule gives way. The
   two cursors say which gesture each part answers: drag the middle, resize the
   edges. A press on a handle stops propagating, so it never also scrubs.
+
+## Soundtrack
+
+A sound file laid over the clip, on its own lane under the picture's.
+`lib/waveform.ts` reads it, `components/trim-bar.tsx` places it, and
+`lib/video-export.ts` encodes it in place of the clip's own audio.
+
+**Three numbers place it, and they are the model a timeline editor uses.**
+`offset` is where the region's left edge sits on the clip's axis, `start` and
+`end` are the slice of the file it plays. Dragging the body moves `offset`
+alone. Dragging the left edge moves `offset` and `start` together, so the sound
+stays anchored where it was while the edge comes in. Only the right edge changes
+the region's length on its own.
+
+- **The lane shares the video lane's axis and the same `at()` geometry**, so
+  where the sound starts is read against where the clip does rather than
+  described in a number. Both its edges snap to the same frame grid.
+- **It replaces the source's own audio rather than mixing with it.** Mixing
+  means decoding both to PCM and summing, and a laid-over track is almost
+  always meant to be the sound rather than an addition to it.
+- **The gap before it is filled with real silence, not left empty.** An empty
+  stretch is not a quiet one: the track's own `start_time` carries the offset,
+  and a tool that ignores it plays the music from the top of the file. Measured
+  with the region at 5.2s: `start_time=5.066667` and 3.97s of samples, and a
+  straight decode put the music at zero. Filled, the track starts at 0.000 and
+  a decode finds the music at 5.5s to 8.5s where the region is. The silence is
+  written from the first real sample, since that is the first point the source's
+  rate and channel count are known.
+- **The waveform is decoded once per file and drawn to a canvas.** Everything
+  after that draws from a 2048-bucket array, so dragging the region costs
+  nothing. The state is keyed on the file rather than on the soundtrack, because
+  dragging rewrites the placement on every frame and re-reading a whole track
+  for each of those would be the most expensive thing in the app by orders of
+  magnitude.
+- **A bucket keeps its loudest sample, and the peaks are normalised to the
+  file's own ceiling.** An average over a few thousand samples of music tends
+  toward a flat band, which is a picture of nothing, and absolute amplitude
+  draws a quietly mastered track as a flat line: the test asset peaks at 0.119,
+  which on a 28px lane is three pixels of shape. The lane is for finding a beat
+  to line the picture up against, not for judging level.
+- **`AudioContext` is closed after every decode.** Each holds a hardware audio
+  thread and a browser allows only a handful, so one left behind per upload
+  eventually throws.
+- **The preview's `<audio>` is driven, never played on its own.** The video is
+  the clock and the sound is placed against it, corrected only past 120ms of
+  drift: writing `currentTime` every frame is a seek every frame, which stutters
+  far worse than the drift it would fix. A refused `play()` is silence rather
+  than a broken preview, since autoplay can be blocked until the page has been
+  interacted with.
+- **It lives outside the export ref.** What the export hears comes from
+  decoding the file, so an element inside the frame would only be something for
+  `html-to-image` to trip over.
+- **The mute control is the preview's, not the export's.** A track arriving at
+  full volume with no warning is startling, and the export is unaffected either
+  way.
+- **A dropped sound file is routed on the file rather than on what the canvas
+  holds**, so dropping a track never clears the clip it was meant to go with.
+  Paste works the same way.
+- **The file persists and the placement does not**, the same split the trim
+  makes: the file is an asset the user supplied, where it sits is an edit on
+  one, and storing the placement would rewrite both Blobs on every drag.
+- **The soundtrack is restored from inside the media's own callback.**
+  `loadMedia` clears it, since a soundtrack placed against a clip that has been
+  replaced means nothing, so run side by side the two raced and the soundtrack
+  lost about half the time.
+- The cap is 30 MB, on size alone. Nothing here decodes it whole except the
+  waveform pass, which is bounded by that.
 
 ## Canvas zoom
 
