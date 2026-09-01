@@ -178,12 +178,34 @@ preview starts lying about the export.
   rounding, so the clip lands on the pixel the chrome was baked at. A radius
   comes from computed style, which that transform does not touch, so it takes
   the layout ratio instead.
-- **H.264 needs even dimensions and tops out at 4096 on its longest edge.**
-  Dimensions round down, which loses at most a pixel an edge. The edge cap is
-  why `MAX_VIDEO_EDGE` exists, and why a scale that would exceed it renders as
-  a disabled tile reading "Too large" rather than being hidden: the ceiling is
-  visible instead of the control silently having fewer options than it does for
-  an image.
+- **H.264 needs even dimensions.** They round down, which loses at most a pixel
+  an edge, where the alternative is an encoder that refuses to configure.
+- **Whether a size can be encoded is asked, never assumed.** `canEncodeSize`
+  probes through mediabunny's `canEncodeVideo` with the same codec and quality
+  the export uses, so the config asked about is the config that will run. The
+  answer gates the scale tiles, and one that comes back no renders as a
+  disabled tile reading "Too large" rather than being hidden: the ceiling
+  should be visible rather than the control silently having fewer options than
+  it does for an image.
+  - **This replaced a wrong guess, and the guess shipped.** The first version
+    capped the longest edge at 4096px, which is not the constraint: an H.264
+    level is a budget of macroblocks. A 3932x3136 frame passes a 4096 edge check
+    while being 48020 macroblocks, needing level 6.0, and a real export failed
+    with "this specific encoder configuration (avc1.64003c ...) is not supported
+    in this environment". Rewriting the check as a level table would only have
+    been a better guess. The browser already knows.
+  - **The frame rate is not part of the question.** mediabunny derives the level
+    from the size alone, so the probe answers for both rates.
+  - **A probe that cannot answer counts as yes.** Blocking an export on a failed
+    capability check is worse than attempting one: the encode reports its own
+    refusal, and that message now names the size and points at the scale rather
+    than quoting a codec string back.
+  - **Every scale failing is a real state and the dialog says so**, with the
+    primary action refused and a line naming the two remedies this app actually
+    has, less padding or a smaller source. The selection falls to the smallest
+    scale there rather than holding, so the size beside the label is the closest
+    one to achievable. Verified on a frame of 3928x2558, which is 39360
+    macroblocks against a 36864 budget.
 - **The input caps live in `lib/media.ts`: 100 MB and ten minutes.** Both are
   checked at the drop, where the failure can be a toast.
   **Size is the real bound and duration is not.** The file is held as a Blob

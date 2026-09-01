@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { CopyIcon, DownloadIcon, Loader2Icon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -28,7 +28,7 @@ import {
 import {
   DEFAULT_FPS,
   FPS_OPTIONS,
-  MAX_VIDEO_EDGE,
+  canEncodeSize,
 } from "@/lib/video-export";
 import type { ExportOptions, MediaKind } from "@/types/screenshot";
 
@@ -83,6 +83,16 @@ export function ExportModal({
     audio: true,
     fps: DEFAULT_FPS,
   });
+  /**
+   * Per scale, once the encoder has answered, kept beside the size it was
+   * asked about. Without that pairing, reopening on a smaller clip shows the
+   * last one's answers until the new probe lands, which is a tile reading
+   * "Too large" about a frame that is not.
+   */
+  const [encodable, setEncodable] = useState<{
+    at: string;
+    answers: Record<number, boolean>;
+  } | null>(null);
 
   const isCopy = action === "copy";
   // Copy goes through the clipboard, which has no MP4 flavour, so a clip
@@ -90,18 +100,60 @@ export function ExportModal({
   const isVideo = kind === "video" && !isCopy;
   const seconds = duration ?? 0;
 
+  // Asked once per size, when the dialog opens. It resolves in milliseconds,
+  // and until it does every tile is offered: a control that starts disabled and
+  // enables itself reads as broken, where one that starts enabled and settles
+  // reads as a control.
+  // Read out as numbers, so the effect depends on the size rather than on the
+  // identity of an object the parent rebuilds every render.
+  const { width: frameWidth, height: frameHeight } = frameSize;
+
+  useEffect(() => {
+    if (!open || kind !== "video" || !frameWidth) return;
+
+    let cancelled = false;
+    Promise.all(
+      QUALITY_OPTIONS.map(async ({ value }) => {
+        const size = outputSize(
+          { width: frameWidth, height: frameHeight },
+          value,
+        );
+        return [value, await canEncodeSize(size.width, size.height)] as const;
+      }),
+    ).then((pairs) => {
+      if (!cancelled) {
+        setEncodable({
+          at: `${frameWidth}x${frameHeight}`,
+          answers: Object.fromEntries(pairs),
+        });
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, kind, frameWidth, frameHeight]);
+
   // A scale a video cannot be encoded at is offered as a disabled tile rather
   // than hidden, so the ceiling is visible instead of the control silently
   // having fewer options than it does for an image.
-  const fits = (scale: number) => {
-    if (!isVideo) return true;
-    const size = outputSize(frameSize, scale);
-    return Math.max(size.width, size.height) <= MAX_VIDEO_EDGE;
-  };
+  const answered =
+    encodable?.at === `${frameWidth}x${frameHeight}` ? encodable.answers : {};
+  const fits = (scale: number) => !isVideo || (answered[scale] ?? true);
 
+  const usable = QUALITY_OPTIONS.map((o) => o.value).filter(fits);
+  // Nothing fitting is possible, on a frame past what the encoder will take at
+  // any scale. `Math.max` of nothing is `-Infinity`, so the fallback holds the
+  // chosen value and the footer refuses instead.
+  const stuck = usable.length === 0;
   const quality = fits(options.quality)
     ? options.quality
-    : Math.max(...QUALITY_OPTIONS.map((o) => o.value).filter(fits));
+    // Stuck falls to the smallest rather than holding the choice, so the size
+    // beside the label is the closest one to achievable rather than an
+    // arbitrary one nobody can pick.
+    : stuck
+      ? Math.min(...QUALITY_OPTIONS.map((o) => o.value))
+      : Math.max(...usable);
 
   const fps = options.fps ?? DEFAULT_FPS;
   const output = outputSize(frameSize, quality);
@@ -189,6 +241,12 @@ export function ExportModal({
                 </SegmentedOption>
               ))}
             </SegmentedGroup>
+            {stuck && (
+              <p className="text-xs text-destructive">
+                This browser cannot encode a frame this large at any scale.
+                Reduce the padding, or start from a smaller recording.
+              </p>
+            )}
           </div>
 
           {/* A ceiling rather than a rate: a source already at 30 exports at
@@ -304,7 +362,7 @@ export function ExportModal({
           <Button
             size="lg"
             onClick={() => onExport({ ...options, quality, fps })}
-            disabled={pending}
+            disabled={pending || stuck}
           >
             {pending && (
               <Loader2Icon className="size-4 animate-spin" aria-hidden="true" />
