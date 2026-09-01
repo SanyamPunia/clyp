@@ -21,6 +21,12 @@ export interface Media {
   duration?: number;
 }
 
+/** A clip's in and out points, in seconds. */
+export interface Trim {
+  start: number;
+  end: number;
+}
+
 export interface StyleOptions {
   gradientId: string;
   gradientAngle: number;

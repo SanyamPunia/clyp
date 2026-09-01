@@ -21,6 +21,7 @@
  */
 
 import { toPng } from "html-to-image";
+import type { Trim } from "@/types/screenshot";
 import {
   ALL_FORMATS,
   BlobSource,
@@ -52,6 +53,8 @@ export interface VideoExportRequest {
   source: Blob;
   /** The export scale, the same number the PNG export passes as `pixelRatio`. */
   scale: number;
+  /** The clip's in and out points. Absent exports the whole file. */
+  trim?: Trim;
   onProgress?: (fraction: number) => void;
   signal?: AbortSignal;
 }
@@ -64,6 +67,8 @@ export interface RenderRequest {
   radii: Radii;
   /** The original file. */
   source: Blob;
+  /** The clip's in and out points. Absent exports the whole file. */
+  trim?: Trim;
   onProgress?: (fraction: number) => void;
   signal?: AbortSignal;
 }
@@ -105,6 +110,7 @@ export async function renderVideo({
   box,
   radii,
   source,
+  trim,
   onProgress,
   signal,
 }: RenderRequest): Promise<Blob> {
@@ -125,7 +131,11 @@ export async function renderVideo({
   const track = await input.getPrimaryVideoTrack();
   if (!track) throw new Error("That file has no video track");
 
-  const duration = await input.computeDuration();
+  const full = await input.computeDuration();
+  const from = trim?.start ?? 0;
+  const to = trim?.end ?? full;
+  const length = Math.max(to - from, 0);
+
   const output = new Output({
     format: new Mp4OutputFormat({ fastStart: "in-memory" }),
     target: new BufferTarget(),
@@ -156,10 +166,14 @@ export async function renderVideo({
     let lastSlot = -1;
     let carried = 0;
 
-    for await (const sample of sink.samples()) {
+    // A sample's timestamp is absolute, so a trim that starts at four seconds
+    // would write an MP4 whose first frame is at four seconds: four seconds of
+    // nothing at the front. Everything downstream works on the offset time.
+    for await (const sample of sink.samples(from, to)) {
       if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
 
-      const slot = Math.floor(sample.timestamp / MIN_FRAME_GAP + 1e-6);
+      const at = Math.max(sample.timestamp - from, 0);
+      const slot = Math.floor(at / MIN_FRAME_GAP + 1e-6);
       if (slot === lastSlot) {
         carried += sample.duration || 0;
         sample.close();
@@ -181,12 +195,12 @@ export async function renderVideo({
       // Awaited, which is what applies the encoder's own backpressure. Without
       // it a short clip queues every frame at once and the tab runs out of
       // memory before the first one is written.
-      await frames.add(sample.timestamp, span);
+      await frames.add(at, span);
       // Reported after the frame is written and off its end rather than its
       // start, so the first report is above zero. Zero is what the caller
       // shows while the chrome is still rasterizing, which has no fraction of
       // its own to report.
-      onProgress?.(duration ? Math.min((sample.timestamp + span) / duration, 1) : 0);
+      onProgress?.(length ? Math.min((at + span) / length, 1) : 0);
 
       sample.close();
     }
@@ -213,6 +227,7 @@ export async function exportVideo({
   video,
   source,
   scale,
+  trim,
   onProgress,
   signal,
 }: VideoExportRequest): Promise<Blob> {
@@ -224,7 +239,7 @@ export async function exportVideo({
 
   const { box, radii } = measure(frame, video, chrome);
 
-  return renderVideo({ chrome, box, radii, source, onProgress, signal });
+  return renderVideo({ chrome, box, radii, source, trim, onProgress, signal });
 }
 
 function loadImage(src: string): Promise<HTMLImageElement> {
