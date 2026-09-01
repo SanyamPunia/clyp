@@ -2,8 +2,9 @@
 
 # clyp
 
-A single-page screenshot beautifier. The user drops in an image, styles a frame
-around it, and exports a PNG. There is no backend and no persistence.
+A single-page screenshot beautifier. The user drops in an image or a short
+video, styles a frame around it, and exports a PNG or a silent MP4. There is no
+backend and no accounts.
 
 ## Stack declaration
 
@@ -123,6 +124,114 @@ up in the PNG. Two consequences:
   renders inside the same frame so styling previews before upload, and it must
   never reach the export.
 
+Both exports leave through `download` or `downloadBlob` in `lib/download.ts`,
+and the extension is imposed by `filenameFor` in `components/clyp.tsx` rather
+than trusted from the field, so a clip saved as `demo.png` cannot happen. What
+the user typed wins, then the dropped file's own name, then `clyp`. The modal
+shows that fallback as the field's placeholder rather than prefilling it, so
+the field stays empty until someone means to rename something.
+
+**Copy always produces a PNG and Download decides the format.** The clipboard
+has no MP4 flavour, so copying a clip captures its current frame with the
+styled chrome around it, which `toPng` already does for free. `exportsVideo` in
+`components/clyp.tsx` is the one test for whether an export encodes, and the
+modal derives its own `isVideo` the same way.
+
+The size readout is measured, not guessed. `lib/export-size.ts` carries the
+sample tables both fits came from. Re-measure rather than adjusting a
+coefficient by eye.
+
+## Video
+
+`Media` in `types/screenshot.ts` is what the canvas frames: a `kind`, a `src`,
+and for a video the source `Blob` and its duration. An image stays a data URL,
+which is the low-risk `html-to-image` path and what the draft store already
+held. A video is an object URL over a Blob, because a thirty second 1080p clip
+is forty megabytes and base64 would add a third to that for nothing.
+
+**The chrome is rasterized once and the decoded frames are drawn over it.** One
+`toPng` of the frame, the same call the PNG export makes, bakes every styled
+pixel including the video's own drop shadow. Each output frame is then two
+draws: the chrome, then the decoded frame clipped to the rounded rect the video
+occupies. **Do not replace this with a Canvas2D redraw of the gradient, the
+padding, the radius, the shadow and the title bar.** That is a second renderer,
+it has to be kept in step with the DOM one forever, and the day it drifts the
+preview starts lying about the export.
+
+- **`html-to-image` handles the `<video>` on its own.** `cloneVideoElement`
+  draws the currently displayed frame into a canvas and substitutes an `<img>`
+  carrying the element's computed style, so the radius and the shadow bake and
+  a poster-frame PNG of a clip needs no special path. The substituted still is
+  covered by the composite anyway.
+- **Frames are decoded from the original file, through mediabunny's `Input` and
+  `VideoSampleSink`.** Seeking a `<video>` per frame is slow and only roughly
+  accurate, and capturing one while it plays pins the export to real time.
+  `mp4-muxer` is deprecated in favour of this library, so do not reintroduce
+  it.
+- **`frames.add(...)` is awaited, which is what applies the encoder's own
+  backpressure.** Without it a short clip queues every frame at once and the
+  tab runs out of memory before the first one is written.
+- **The measurement is two ratios against the raster, never against the export
+  scale.** They absorb the canvas zoom, which is a transform on a wrapper above
+  the frame and therefore in both rects, and they absorb `toPng`'s own
+  rounding, so the clip lands on the pixel the chrome was baked at. A radius
+  comes from computed style, which that transform does not touch, so it takes
+  the layout ratio instead.
+- **H.264 needs even dimensions and tops out at 4096 on its longest edge.**
+  Dimensions round down, which loses at most a pixel an edge. The edge cap is
+  why `MAX_VIDEO_EDGE` exists, and why a scale that would exceed it renders as
+  a disabled tile reading "Too large" rather than being hidden: the ceiling is
+  visible instead of the control silently having fewer options than it does for
+  an image.
+- **The input caps live in `lib/media.ts`: 100 MB and 60 seconds.** Both are
+  checked at the drop, where the failure can be a toast. There is no graceful
+  way to fail once the memory is gone.
+- **Whether the file can be decoded at all is answered by a probe, not by its
+  MIME type.** A `.mov` carrying something exotic passes the type check and
+  then fails to load, and that belongs at the drop rather than at the export.
+- **One thing a clip cannot do, gated in the toolbar and on the keyboard
+  shortcut.** The encode needs WebCodecs, so Download is disabled where it is
+  missing. The reason rides a tooltip through `Hint`, which wraps the button in
+  a span, since a disabled button emits no pointer events of its own.
+- **The output is capped at `MAX_FPS`, which is 30.** A 60 fps recording costs
+  twice the encode time and close to twice the file for motion nobody reads in
+  a UI demo. **Decimation is by slot, never by an interval since the last kept
+  frame.** A running deadline accumulates float error against timestamps that
+  are exact multiples of the source's period: measured, a 60 fps clip lost 96
+  of 180 frames instead of 90 and came out unevenly spaced. Flooring
+  `timestamp / gap` with a small tolerance cannot drift, and a source already
+  at or under the ceiling maps every frame to its own slot and passes through
+  untouched. Verified: 180 frames in, 90 out, and a 30 fps clip exports
+  byte-identical to before the cap existed.
+- **A dropped sample's time is carried onto the next kept frame**, so what
+  survives still tiles the clip's real duration. Both a 60 fps and a 30 fps
+  source export at exactly 3.000 s.
+- **Cancel aborts a running encode.** `handleExport` holds an `AbortController`
+  for the length of one video export and the modal's Cancel calls it while
+  pending, since Escape and the backdrop stay blocked. The signal is checked
+  once per frame in the sample loop and once after the raster, which is the
+  earliest a cancel during `toPng` can be heard. An `AbortError` closes the
+  dialog and says nothing, because a cancel is not a failure.
+- **WebCodecs presence is read with `useSyncExternalStore`,** not from an
+  effect: the lint rule forbids a synchronous `setState` in an effect body, and
+  seeding state from `window` during render would not survive hydration. The
+  server snapshot says the encoder is there, so the control starts usable and
+  disables itself on hydration rather than starting disabled everywhere.
+- **Progress has two phases and only one of them has a fraction.** Zero means
+  the chrome is still rasterizing, which is one `toPng` call with nothing to
+  read inside it. Anything above zero is the encode, reported off the end of
+  each written frame so the first report is not also zero.
+- **The preview is `autoPlay loop muted playsInline`.** Muted and inline, or a
+  browser refuses to play it without a gesture. Looping, because the canvas is
+  a preview of styling rather than a player: there are no controls, and
+  stopping at the end would leave the frame looking broken.
+- **One `mediaRadius` serves the `<img>` branch, the `<video>` branch and the
+  export's clip**, so an image and a clip cannot end up cornered differently.
+- Export is silent. There is no audio track, and no trimming: a clip goes out
+  at the length it came in at.
+- The toolbar's meta row names the clip's length beside its dimensions, so what
+  is about to be encoded is readable without opening the modal.
+
 ## Canvas zoom
 
 Zoom scales a wrapper **above** the export ref, never the ref'd node.
@@ -146,11 +255,20 @@ an inner `min-h-full w-max min-w-full` wrapper instead.
 
 ## Draft persistence
 
-The screenshot survives a reload. It is stored in **IndexedDB**, not
+The screenshot or clip survives a reload. It is stored in **IndexedDB**, not
 localStorage: a data URL of a real capture reaches tens of megabytes against
 localStorage's roughly five, so the images worth keeping are exactly the ones
 that would throw `QuotaExceededError`. Measured: a 2400x3200 incompressible
 screenshot is a 28.6 MB data URL.
+
+**A video is stored as the Blob itself, never as its `src`.** A `blob:` URL is
+scoped to the document that created it, so a stored one restores as a dead
+link. `readMedia` returns `{ kind, payload, name }` and the restore mints a
+fresh object URL by handing the Blob back through the same loader a drop uses,
+which is also what re-measures it. The name is stored because it is what an
+export's filename falls back to, and a File rebuilt without it would export as
+`clyp`. A bare string in the store is a draft from before video support and
+reads back as an image.
 
 Style options are a few hundred bytes and stay in localStorage, merged over
 `DEFAULT_STYLE` on read so an object written by an older build cannot leave a
