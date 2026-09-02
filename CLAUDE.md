@@ -764,6 +764,43 @@ background and adds no node. Each edge fades only when there is content that
 way: a permanent fade would dim the first heading before any scrolling, and a
 fade at a boundary already reached says nothing.
 
+## Frame shape
+
+`aspect` in `StyleOptions` is a target shape for the whole frame, and `auto`
+is the frame sizing itself to the artwork plus its padding, which is what it
+always did. The presets are the shapes a post is rendered at rather than a
+general list: a square for a grid, 4:5 as the tallest a portrait post survives
+uncropped on most feeds, 16:9 for a slide or a video embed, 9:16 for a story.
+
+**Padding stops being the whole margin and becomes the least of it.** The frame
+grows on whichever axis is short of the ratio and never shrinks, so the artwork
+is never scaled or cropped to fit a shape and the gradient fills whatever the
+growth opens up. `aspectBox` in `lib/style-options.ts` is the whole
+calculation.
+
+- **The box is set in JS, not with an `aspect-ratio`.** CSS solves that against
+  one axis and stops: with the content wider than the target, `min-height` wins,
+  the ratio is simply lost, and nothing re-grows the width to restore it.
+- **The artwork is measured rather than taken from `dimensions`.** That is the
+  media's own size and knows nothing about the title bar above it, which is part
+  of what has to fit inside the shape. A second `ResizeObserver` reads the
+  artwork wrapper, and it cannot feed back: the box only ever grows past the
+  artwork, so the artwork's own `max-w-full` never bites.
+- **Nothing else needed changing, which is the point of where it sits.** The
+  frame's own observer measures whatever it renders as, so zoom and fit follow.
+  The video composite measures the artwork's box off the DOM, so the clip still
+  lands centred. The encoder probe already refuses a shape that makes the frame
+  too large, and the size estimate is a function of output pixels.
+- **A shape is not applied with nothing loaded.** The upload card is a fixed
+  card rather than the artwork, so shaping the frame around it would preview a
+  frame nobody is going to export.
+
+Verified on a 1280x720 clip: 1408x1408 at 1:1, 1408x1760 at 4:5, 1561x878 at
+16:9, 1408x2503 at 9:16, every one exact, with the canvas never overflowing.
+On a 886x1918 clip the other branch runs and the width grows instead: 2076x2076
+at 1:1 and 3691x2076 at 16:9. The exports match, a 1408x1408 MP4 and a
+1028x1285 PNG.
+
 ## Corner radius
 
 Radii are numbers in px, not Tailwind classes, so individual corners are

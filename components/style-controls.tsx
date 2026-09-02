@@ -17,6 +17,7 @@ import {
   supportsAngle,
 } from "@/lib/gradients";
 import {
+  aspectOptions,
   CORNER_ORDER,
   cornerPresets,
   cornerRadius,
@@ -212,6 +213,14 @@ export function StyleControls({
       </Section>
 
       <Section title="Frame">
+        <ChoiceRow
+          label="Shape"
+          name="aspect"
+          value={options.aspect}
+          options={aspectOptions}
+          columns={5}
+          onChange={(aspect) => onChange({ aspect })}
+        />
         <SliderRow
           label="Padding"
           value={options.padding}
@@ -490,12 +499,15 @@ function ChoiceRow({
   name,
   value,
   options,
+  columns = 3,
   onChange,
 }: {
   label: string;
   name: string;
   value: string;
   options: { value: string; label: string }[];
+  /** How many across. Five short labels read better on one line than 3 and 2. */
+  columns?: number;
   onChange: (value: string) => void;
 }) {
   return (
@@ -504,7 +516,7 @@ function ChoiceRow({
       <SegmentedGroup
         value={value}
         onValueChange={onChange}
-        className="grid-cols-3"
+        className={columns === 5 ? "grid-cols-5" : "grid-cols-3"}
       >
         {options.map((option) => (
           <SegmentedOption

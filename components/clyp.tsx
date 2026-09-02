@@ -43,7 +43,7 @@ import {
   defaultGradientId,
   resolveGradientCss,
 } from "@/lib/gradients";
-import { ALL_CORNERS, cornerRadius } from "@/lib/style-options";
+import { ALL_CORNERS, aspectBox, aspectRatio, cornerRadius } from "@/lib/style-options";
 import {
   clampZoom,
   formatZoom,
@@ -149,6 +149,7 @@ const TIMING = {
 const DEFAULT_STYLE: StyleOptions = {
   gradientId: defaultGradientId,
   gradientAngle: 180,
+  aspect: "auto",
   padding: 64,
   outerRadius: 12,
   imageRadius: 8,
@@ -230,9 +231,20 @@ export function Clyp() {
   const abortRef = useRef<AbortController | null>(null);
 
   const screenshotRef = useRef<HTMLDivElement>(null);
+  const artworkRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * What the artwork measures, which is the picture plus the title bar when it
+   * is on. Measured rather than taken from `dimensions`, since that is the
+   * media's own size and knows nothing about the bar above it.
+   */
+  const [artwork, setArtwork] = useState<{
+    width: number;
+    height: number;
+  } | null>(null);
 
   const [zoom, setZoom] = useState(1);
   // "fit" keeps the whole frame in view as it resizes. Any manual zoom hands
@@ -283,6 +295,21 @@ export function Clyp() {
   // duration readout, the size estimate and the encode all read this one
   // value, so none of them can describe a length nobody asked for.
   const clipSeconds = trim ? trim.end - trim.start : media?.duration;
+
+  /**
+   * The frame's box when a shape is asked for.
+   *
+   * Null for `auto`, which is the frame sizing itself to the artwork and its
+   * padding the way it always did, and null before the artwork has been
+   * measured. Also null with nothing loaded: the upload card is a fixed card
+   * rather than the artwork, so shaping the frame around it would preview a
+   * frame nobody is going to export.
+   */
+  const ratio = aspectRatio(styleOptions.aspect);
+  const shaped =
+    ratio !== null && artwork !== null && media !== null
+      ? aspectBox(artwork, styleOptions.padding, ratio)
+      : null;
 
   const removeLabel =
     media?.kind === "video" ? "Remove clip" : "Remove screenshot";
@@ -343,6 +370,18 @@ export function Clyp() {
       return null;
     });
   }, []);
+
+  // Only for a target shape, which is the only thing that reads it.
+  useEffect(() => {
+    const node = artworkRef.current;
+    if (!node) return;
+
+    const observer = new ResizeObserver(() =>
+      setArtwork({ width: node.offsetWidth, height: node.offsetHeight }),
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [media]);
 
   // Track the frame's natural size, and refit while the mode is "fit". This is
   // what keeps a padding or radius change from overflowing the canvas: the
@@ -973,12 +1012,25 @@ export function Clyp() {
                     showNoiseOverlay={styleOptions.showNoiseOverlay}
                     noiseIntensity={styleOptions.noiseIntensity}
                   >
+                    {/* The box carries the shape, and the artwork centres in
+                        it. Set here rather than as an `aspect-ratio`, because
+                        CSS solves that against one axis and stops: with the
+                        content wider than the target, `min-height` wins and the
+                        ratio is simply lost, and nothing re-grows the width to
+                        restore it. */}
                     <div
                       className="flex items-center justify-center"
-                      style={{ padding: `${styleOptions.padding}px` }}
+                      style={{
+                        padding: `${styleOptions.padding}px`,
+                        ...(shaped && {
+                          width: shaped.width,
+                          height: shaped.height,
+                        }),
+                      }}
                     >
                       {media ? (
                         <div
+                          ref={artworkRef}
                           className="animate-artwork-in relative inline-block"
                           style={{ animationDelay: `${TIMING.artwork}ms` }}
                         >
