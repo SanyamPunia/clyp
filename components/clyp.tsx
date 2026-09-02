@@ -1057,10 +1057,17 @@ export function Clyp() {
                 <div
                   key={pulse.id}
                   aria-hidden="true"
-                  onAnimationEnd={() => setPulse(null)}
-                  className="pointer-events-none absolute inset-0 grid place-items-center opacity-0 motion-safe:animate-[play-pulse_620ms_ease-out_forwards]"
+                  className="pointer-events-none absolute inset-0 grid place-items-center"
                 >
-                  <span className="grid size-16 place-items-center rounded-full bg-black/55 text-white backdrop-blur-sm">
+                  {/* The animation is on the circle, never on the layer. On
+                      the layer it scaled a frame-sized box to 1.3, and a
+                      transform's overflow counts toward a scroll container's
+                      scrollable area, so every press grew the canvas a
+                      scrollbar in fit mode. */}
+                  <span
+                    onAnimationEnd={() => setPulse(null)}
+                    className="grid size-16 place-items-center rounded-full bg-black/55 text-white opacity-0 backdrop-blur-sm motion-safe:animate-[play-pulse_620ms_ease-out_forwards]"
+                  >
                     {/* Filled, not stroked. A transport glyph is a solid
                         triangle and two solid bars everywhere it appears, and
                         at this size an outline reads as a sketch of the

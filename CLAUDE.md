@@ -613,6 +613,12 @@ the region's length on its own.
   - **The glyph is filled, not stroked.** A transport glyph is a solid triangle
     and two solid bars everywhere it appears, and at 28px an outline reads as a
     sketch of the control rather than the control.
+  - **The animation is on the circle, never on the layer.** On the layer it
+    scaled a frame-sized box to 1.3, and a transform's overflow counts toward a
+    scroll container's scrollable area, so every press grew the canvas a
+    scrollbar in fit mode, which is the one mode whose whole job is not to have
+    one. Verified across the full 620ms at four window sizes: zero overflow in
+    both axes.
   - **It is keyed on a counter, because a CSS animation only runs on the frame
     it is attached.** A second press has to replay it, so the id changes, React
     remounts the element, and the keyframe starts again. `onAnimationEnd`
