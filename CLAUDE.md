@@ -524,11 +524,25 @@ the region's length on its own.
   `lib/audio-mix.ts`. Replacing was the first build and it is not what "music
   on top of it" means: a recording that already talks and a track laid over it
   are two things to hear, and each has to be silenceable on its own.
-  - **`OfflineAudioContext` does the mixing, not hand-written PCM maths.** Two
+  - **`OfflineAudioContext` does the summing, not hand-written PCM maths.** Two
     files rarely share a sample rate, a 48kHz recording under a 44.1kHz track
     being the ordinary case, and resampling by hand is where that kind of code
-    goes wrong. A context resamples on `decodeAudioData`, schedules by time
-    rather than by sample index, and sums its inputs, which is the whole job.
+    goes wrong. A context resamples whatever buffer it is handed, schedules by
+    time rather than by sample index, and sums its inputs.
+  - **What it is handed is only the part that will be heard.** The first
+    version read each file with `decodeAudioData`, which decodes all of it: a
+    30 minute track laid over a 20 second clip decoded 30 minutes, measured at
+    346 MB, twice over, for four seconds of sound. `readRange` pulls the range
+    through a mediabunny sink instead, so the file's own length stops mattering
+    and only the export's counts. The buffers are left at their sources' own
+    rates, since the mixing context resamples anyway and doing it twice is one
+    loss of quality for nothing.
+  - **Mixing is capped at `MAX_MIX_SECONDS`, three minutes.** Three buffers are
+    live at the peak, the two ranges and the output, each costing the export's
+    length at 384 KB a second, so three minutes is about 207 MB and the ten
+    minute clip cap would be 690 MB. Past it the modal asks for one of the two
+    to be switched off rather than letting the tab run out of memory
+    mid-encode.
   - **So the export has two audio paths.** A laid track means a mix, which is
     a whole decode of both sources into one buffer and goes out through
     `AudioBufferSource`. The clip's own sound alone is the common case and
@@ -562,6 +576,13 @@ the region's length on its own.
 - **`AudioContext` is closed after every decode.** Each holds a hardware audio
   thread and a browser allows only a handful, so one left behind per upload
   eventually throws.
+- **The waveform decodes at 8kHz, the lowest a browser allows.**
+  `decodeAudioData` resamples to its context's rate and this reads a whole
+  file: the 30 MB soundtrack cap is over half an hour at 128kbps, and at 48kHz
+  that measured 346 MB and 4.5 seconds on the upload of one track. At 8kHz it
+  is 58 MB and 1.4 seconds. Nothing downstream cares, because 2048 buckets over
+  half an hour is one bucket a second and there is no detail at that scale for a
+  higher rate to carry.
 - **The preview's `<audio>` is driven, never played on its own.** The video is
   the clock and the sound is placed against it, corrected only past 120ms of
   drift: writing `currentTime` every frame is a seek every frame, which stutters
@@ -647,6 +668,10 @@ the region's length on its own.
 - **The mute control is the preview's, not the export's.** A track arriving at
   full volume with no warning is startling, and the export is unaffected either
   way.
+- **Removing a track confirms first.** The X for it sits two pixels from the
+  mute button and used to fire on the press, revoking the object URL, so the
+  file and where it had been placed were gone with nothing to bring them back.
+  Clearing the clip has always confirmed and this is the same kind of loss.
 - **A dropped sound file is routed on the file rather than on what the canvas
   holds**, so dropping a track never clears the clip it was meant to go with.
   Paste works the same way.

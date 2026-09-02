@@ -31,6 +31,7 @@ import {
   formatBytes,
   outputSize,
 } from "@/lib/export-size";
+import { MAX_MIX_SECONDS } from "@/lib/audio-mix";
 import {
   DEFAULT_FPS,
   FPS_OPTIONS,
@@ -163,6 +164,12 @@ export function ExportModal({
       : Math.max(...usable);
 
   const refused = QUALITY_OPTIONS.map((o) => o.value).filter((v) => !fits(v));
+  // Summing two sources holds three buffers of the export's own length, so a
+  // long one has to pick rather than run the tab out of memory mid-encode.
+  const bothSounds = Boolean(
+    isVideo && hasClipAudio && soundtrackName && options.audio && options.music,
+  );
+  const tooLongToMix = bothSounds && seconds > MAX_MIX_SECONDS;
   const fps = options.fps ?? DEFAULT_FPS;
   const output = outputSize(frameSize, quality);
   const bytes = isVideo
@@ -328,6 +335,11 @@ export function ExportModal({
                   />
                 </div>
               )}
+              {tooLongToMix && (
+                <p className="text-xs text-destructive">
+                  {`Both sounds together are limited to ${Math.round(MAX_MIX_SECONDS / 60)} minutes. Turn one off.`}
+                </p>
+              )}
               {soundtrackName && (
                 <div className="flex items-center justify-between gap-4">
                   <FieldLabel
@@ -427,7 +439,7 @@ export function ExportModal({
           <Button
             size="lg"
             onClick={() => onExport({ ...options, quality, fps })}
-            disabled={pending || stuck}
+            disabled={pending || stuck || tooLongToMix}
           >
             {pending && (
               <Loader2Icon className="size-4 animate-spin" aria-hidden="true" />
