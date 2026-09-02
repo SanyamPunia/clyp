@@ -56,9 +56,9 @@ interface ExportModalProps {
   kind: MediaKind;
   /** Video only, in seconds. */
   duration?: number;
-  /** Video only. Whether there is a track worth offering to keep. */
-  hasAudio?: boolean;
-  /** Set when a soundtrack was laid over the clip, which replaces its own. */
+  /** Video only. Whether the clip arrived with sound of its own. */
+  hasClipAudio?: boolean;
+  /** Set when a soundtrack is laid over the clip, which mixes with its own. */
   soundtrackName?: string;
   /** 0 to 1 while a video encodes, null while a PNG renders. */
   progress?: number | null;
@@ -78,7 +78,7 @@ export function ExportModal({
   hasGrain,
   kind,
   duration,
-  hasAudio = false,
+  hasClipAudio = false,
   soundtrackName,
   progress = null,
   defaultFilename,
@@ -87,6 +87,7 @@ export function ExportModal({
   const [options, setOptions] = useState<ExportOptions>({
     quality: 2,
     audio: true,
+    music: true,
     fps: DEFAULT_FPS,
   });
   /**
@@ -307,27 +308,41 @@ export function ExportModal({
             </div>
           )}
 
-          {/* Offered only when there is something to keep, so the control is
-              never a switch over silence. A label and a switch, which is the
-              shape every other toggle in the app takes: the filled card this
-              used to sit in gave sound more weight than scale. */}
-          {isVideo && hasAudio && (
-            <div className="flex flex-col gap-2">
-              <div className="flex items-center justify-between gap-4">
-                <FieldLabel htmlFor="keep-audio" className="cursor-pointer">
-                  Keep the audio
-                </FieldLabel>
-                <Switch
-                  id="keep-audio"
-                  checked={options.audio ?? true}
-                  onCheckedChange={(audio) => setOptions({ ...options, audio })}
-                  disabled={pending}
-                />
-              </div>
+          {/* One row per source, offered only when that source exists, so a
+              control is never a switch over silence. They mix, so both can be
+              on: the label says which sound each is, since "Keep the audio"
+              means nothing once there are two. A label and a switch is the
+              shape every other toggle in the app takes. */}
+          {isVideo && (hasClipAudio || soundtrackName) && (
+            <div className="flex flex-col gap-3">
+              {hasClipAudio && (
+                <div className="flex items-center justify-between gap-4">
+                  <FieldLabel htmlFor="keep-audio" className="cursor-pointer">
+                    {"The clip's own sound"}
+                  </FieldLabel>
+                  <Switch
+                    id="keep-audio"
+                    checked={options.audio ?? true}
+                    onCheckedChange={(audio) => setOptions({ ...options, audio })}
+                    disabled={pending}
+                  />
+                </div>
+              )}
               {soundtrackName && (
-                <p className="truncate text-xs text-muted-foreground">
-                  {`Plays ${soundtrackName} in place of the clip's own sound.`}
-                </p>
+                <div className="flex items-center justify-between gap-4">
+                  <FieldLabel
+                    htmlFor="keep-music"
+                    className="min-w-0 cursor-pointer truncate"
+                  >
+                    {soundtrackName}
+                  </FieldLabel>
+                  <Switch
+                    id="keep-music"
+                    checked={options.music ?? true}
+                    onCheckedChange={(music) => setOptions({ ...options, music })}
+                    disabled={pending}
+                  />
+                </div>
               )}
             </div>
           )}

@@ -172,14 +172,20 @@ export function Clyp() {
   const [trim, setTrim] = useState<Trim | null>(null);
   const [soundtrack, setSoundtrack] = useState<Soundtrack | null>(null);
   /**
-   * The preview's own volume, not the export's.
+   * The preview's own volume, not the export's, and one per source.
    *
-   * Starts audible. Dropping a clip that came with sound and hearing nothing
-   * is the wrong default, and a drop is a user gesture, so the browser allows
-   * playback with sound straight after one. A restore on page load has no
-   * gesture behind it and gets refused, which the effect below catches.
+   * A clip can arrive with sound and then have music laid over it, and those
+   * are two things to listen to rather than one: the track no longer replaces
+   * the clip's audio in the export, it mixes with it, so the editor has to be
+   * able to hear either on its own.
+   *
+   * Both start audible. Dropping a clip that came with sound and hearing
+   * nothing is the wrong default, and a drop is a user gesture, so the browser
+   * allows playback with sound straight after one. A restore on page load has
+   * no gesture behind it and gets refused, which the effect below catches.
    */
   const [muted, setMuted] = useState(false);
+  const [musicMuted, setMusicMuted] = useState(false);
   const [styleOptions, setStyleOptions] = useState<StyleOptions>(DEFAULT_STYLE);
   // Remembered here rather than inside GradientBackground, so the cross-fade
   // needs no state or effect in the component that renders it.
@@ -289,6 +295,7 @@ export function Clyp() {
     );
     // Audible again for a new clip, whatever the last one was left at.
     setMuted(false);
+    setMusicMuted(false);
     // A soundtrack was placed against a clip that is no longer here, so it
     // means nothing now. Dropping it beats leaving it somewhere arbitrary.
     setSoundtrack((previous) => {
@@ -308,7 +315,7 @@ export function Clyp() {
           // Adding a track is asking to hear it. Nothing plays yet, since a
           // track arriving also pauses the canvas, so the first sound still
           // comes from a deliberate press.
-          setMuted(false);
+          setMusicMuted(false);
         })
         .catch((error: Error) => toast.error(error.message));
     },
@@ -527,6 +534,7 @@ export function Clyp() {
             trim: trim ?? undefined,
             audio: options.audio,
             soundtrack: soundtrack ?? undefined,
+            music: options.music,
             fps: options.fps,
             onProgress: setProgress,
             signal: controller.signal,
@@ -967,10 +975,10 @@ export function Clyp() {
                             /*
                              * Inline, and started from an effect rather than
                              * by `autoPlay`, which cannot report a browser
-                             * refusing to play with sound. A soundtrack mutes
-                             * it outright, because a soundtrack replaces the
-                             * clip's own audio in the export and the preview
-                             * has to agree with what it will produce.
+                             * refusing to play with sound. Its own mute is its
+                             * own: a laid track mixes with this rather than
+                             * replacing it, so both play unless one is
+                             * silenced.
                              *
                              * No `loop` attribute: it loops at the file's end,
                              * which is not the clip's end once there is a trim,
@@ -981,7 +989,7 @@ export function Clyp() {
                             <video
                               ref={videoRef}
                               src={media.src}
-                              muted={muted || soundtrack !== null}
+                              muted={muted}
                               playsInline
                               onClick={togglePlayback}
                               className={cn(
@@ -1030,13 +1038,15 @@ export function Clyp() {
               onSeek={handleSeek}
               onPlayback={handlePlayback}
               onToggle={togglePlayback}
-              hasSound={Boolean(soundtrack) || (media.hasAudio ?? false)}
+              hasClipSound={media.hasAudio ?? false}
               soundtrack={soundtrack}
               onSoundtrackChange={setSoundtrack}
               onSoundtrackAdd={addSoundtrack}
               onSoundtrackRemove={removeSoundtrack}
               muted={muted}
               onMutedChange={setMuted}
+              musicMuted={musicMuted}
+              onMusicMutedChange={setMusicMuted}
               disabled={exporting}
             />
           </div>
@@ -1060,7 +1070,12 @@ export function Clyp() {
       {soundtrack && (
         // biome-ignore lint: a soundtrack is sound, and captions for a file the
         // user supplied are not something this app can invent.
-        <audio ref={audioRef} src={soundtrack.src} muted={muted} className="hidden" />
+        <audio
+          ref={audioRef}
+          src={soundtrack.src}
+          muted={musicMuted}
+          className="hidden"
+        />
       )}
 
       <ExportModal
@@ -1073,7 +1088,7 @@ export function Clyp() {
         hasGrain={styleOptions.showNoiseOverlay}
         kind={media?.kind ?? "image"}
         duration={clipSeconds}
-        hasAudio={Boolean(soundtrack) || (media?.hasAudio ?? false)}
+        hasClipAudio={media?.hasAudio ?? false}
         soundtrackName={soundtrack?.name}
         progress={progress}
         defaultFilename={filenameFor(

@@ -520,9 +520,25 @@ the region's length on its own.
   and an 11px label. At `h-4` the numbers painted outside their own box, so the
   margin below could not see them and the control under the axis sat against
   the labels however much it was given. Measured after: 13px of clear space.
-- **It replaces the source's own audio rather than mixing with it.** Mixing
-  means decoding both to PCM and summing, and a laid-over track is almost
-  always meant to be the sound rather than an addition to it.
+- **It mixes with the clip's own sound rather than replacing it**, through
+  `lib/audio-mix.ts`. Replacing was the first build and it is not what "music
+  on top of it" means: a recording that already talks and a track laid over it
+  are two things to hear, and each has to be silenceable on its own.
+  - **`OfflineAudioContext` does the mixing, not hand-written PCM maths.** Two
+    files rarely share a sample rate, a 48kHz recording under a 44.1kHz track
+    being the ordinary case, and resampling by hand is where that kind of code
+    goes wrong. A context resamples on `decodeAudioData`, schedules by time
+    rather than by sample index, and sums its inputs, which is the whole job.
+  - **So the export has two audio paths.** A laid track means a mix, which is
+    a whole decode of both sources into one buffer and goes out through
+    `AudioBufferSource`. The clip's own sound alone is the common case and
+    still streams sample by sample through `AudioSampleSource`, costing no
+    memory beyond the frames in flight. The buffer path also needs none of the
+    silence padding, since a buffer of the export's own length has the quiet
+    inside it rather than as a gap.
+  - **A track placed before the in point is skipped into, not shifted.** The
+    schedule starts at zero and reads that much further into the file, so what
+    plays at the first frame is the part of the track that lines up with it.
 - **The gap before it is filled with real silence, not left empty.** An empty
   stretch is not a quiet one: the track's own `start_time` carries the offset,
   and a tool that ignores it plays the music from the top of the file. Measured
@@ -562,11 +578,16 @@ the region's length on its own.
   want to hear it from. It is keyed on the file rather than on the soundtrack,
   so moving or slipping the region does not keep stopping playback, and a
   reload with a stored track comes up paused for the same reason.
-- **The mute control covers the clip's own audio too, not only a laid track.**
-  It used to live inside the soundtrack branch of the footer, so the common
-  case, a recording that came with sound, could be exported with that sound and
-  never heard while it was being cut. It now appears whenever there is anything
-  to hear.
+- **One mute control per source, and one export switch per source.** A clip
+  can arrive with sound and then have music laid over it, and since those now
+  mix, a single mute could only silence both, which is not the question being
+  asked. Each names what it silences, so two adjacent glyphs are never
+  ambiguous, and the modal's switches are labelled "The clip's own sound" and
+  the track's filename rather than one "Keep the audio" that means nothing once
+  there are two.
+  - The editor's mutes are listening only. The modal's switches are what gets
+    encoded. Muting to concentrate while cutting must not quietly change the
+    file.
 - **The preview starts audible, and gives up its sound rather than its
   picture.** Dropping a clip that came with sound and hearing nothing is the
   wrong default, and a drop is a user gesture, so a browser allows playback
@@ -588,8 +609,9 @@ the region's length on its own.
     snaps that to its own nearest frame, which can land just under an
     exactly-one-frame test. The clip then plays for a few milliseconds, hits
     the out point and stops again, which looks like a dead button.
-- **A soundtrack mutes the video outright.** It replaces the clip's own audio
-  in the export, so the preview has to agree with what it will produce.
+- **A soundtrack no longer mutes the video.** It did while a track replaced
+  the clip's audio, because the preview had to agree with what the export would
+  produce. They mix now, so both play unless one is silenced.
 - **The mute control is the preview's, not the export's.** A track arriving at
   full volume with no warning is startling, and the export is unaffected either
   way.

@@ -3,6 +3,7 @@
 import type React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  Music2Icon,
   MusicIcon,
   PauseIcon,
   PlayIcon,
@@ -93,14 +94,16 @@ const SUBDIVISIONS = [5, 4, 2];
 const MIN_MINOR_GAP = 7;
 
 interface TrimBarProps {
-  /** Whether there is anything to hear: the clip's own track, or a laid one. */
-  hasSound: boolean;
+  /** Whether the clip arrived with sound of its own. */
+  hasClipSound: boolean;
   soundtrack: Soundtrack | null;
   onSoundtrackChange: (soundtrack: Soundtrack) => void;
   onSoundtrackAdd: (file: File) => void;
   onSoundtrackRemove: () => void;
   muted: boolean;
   onMutedChange: (muted: boolean) => void;
+  musicMuted: boolean;
+  onMusicMutedChange: (muted: boolean) => void;
   /**
    * Read only. The bar reads the clock every frame and asks its owner to move
    * it, rather than writing to the element: the React compiler treats a ref
@@ -156,13 +159,15 @@ export function TrimBar({
   onSeek,
   onPlayback,
   onToggle,
-  hasSound,
+  hasClipSound,
   soundtrack,
   onSoundtrackChange,
   onSoundtrackAdd,
   onSoundtrackRemove,
   muted,
   onMutedChange,
+  musicMuted,
+  onMusicMutedChange,
   disabled = false,
 }: TrimBarProps) {
   const [playing, setPlaying] = useState(true);
@@ -910,14 +915,18 @@ export function TrimBar({
           </Button>
         )}
 
-        {/* Outside that branch, because a clip can have sound of its own. The
-            control used to appear only for a laid track, so the common case,
-            a recording that came with audio, could be exported with sound and
-            never heard while it was being cut. */}
+        {/* One control per source, because a clip can arrive with sound and
+            then have music laid over it, and the two mix in the export rather
+            than one replacing the other. A single mute could only silence
+            both, which is not the question being asked when music is added
+            over a recording that already talks. Each names what it silences,
+            so two adjacent speaker glyphs are never ambiguous. */}
         <div className="ml-auto flex items-center gap-0.5">
-          {hasSound && (
+          {hasClipSound && (
             <Transport
-              label={muted ? "Unmute the preview" : "Mute the preview"}
+              label={
+                muted ? "Unmute the clip's own sound" : "Mute the clip's own sound"
+              }
               onClick={() => onMutedChange(!muted)}
             >
               {muted ? (
@@ -928,12 +937,24 @@ export function TrimBar({
             </Transport>
           )}
           {soundtrack && (
-            <Transport
-              label="Remove the soundtrack"
-              onClick={onSoundtrackRemove}
-            >
-              <XIcon className="size-4" aria-hidden="true" />
-            </Transport>
+            <>
+              <Transport
+                label={musicMuted ? "Unmute the music" : "Mute the music"}
+                onClick={() => onMusicMutedChange(!musicMuted)}
+              >
+                {musicMuted ? (
+                  <Music2Icon className="size-4 opacity-40" aria-hidden="true" />
+                ) : (
+                  <Music2Icon className="size-4" aria-hidden="true" />
+                )}
+              </Transport>
+              <Transport
+                label="Remove the soundtrack"
+                onClick={onSoundtrackRemove}
+              >
+                <XIcon className="size-4" aria-hidden="true" />
+              </Transport>
+            </>
           )}
         </div>
       </div>
