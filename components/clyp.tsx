@@ -155,7 +155,10 @@ const DEFAULT_STYLE: StyleOptions = {
   imageRadius: 8,
   imageCorners: ALL_CORNERS,
   shadow: "shadow-2xl",
-  showWindowNavbar: true,
+  // Off. The bar is a frame around a window, and plenty of what gets dropped
+  // here is not one: a clip of a chart, a phone recording, a crop of a page.
+  // Adding it is one press, and it takes the media's top corners with it.
+  showWindowNavbar: false,
   windowNavbarDark: false,
   showNoiseOverlay: false,
   noiseIntensity: 55,
