@@ -211,6 +211,7 @@ export function Clyp() {
     "download",
   );
   const [clearOpen, setClearOpen] = useState(false);
+  const [removeTrackOpen, setRemoveTrackOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
   /** 0 to 1 while a video encodes, null for an image, which is one shot. */
   const [progress, setProgress] = useState<number | null>(null);
@@ -1109,7 +1110,7 @@ export function Clyp() {
               soundtrack={soundtrack}
               onSoundtrackChange={setSoundtrack}
               onSoundtrackAdd={addSoundtrack}
-              onSoundtrackRemove={removeSoundtrack}
+              onSoundtrackRemove={() => setRemoveTrackOpen(true)}
               muted={muted}
               onMutedChange={setMuted}
               musicMuted={musicMuted}
@@ -1164,6 +1165,25 @@ export function Clyp() {
           media?.name,
         )}
         onCancel={exportsVideo ? handleCancelExport : undefined}
+      />
+
+      {/* Removing a track is a remove, and the X for it sits two pixels from
+          the mute button. It used to fire on the press, revoking the object
+          URL, so the file and where it had been placed were gone with nothing
+          to bring them back. Clearing the clip has always confirmed, and this
+          is the same kind of loss. */}
+      <ConfirmDialog
+        open={removeTrackOpen}
+        onOpenChange={setRemoveTrackOpen}
+        title={
+          soundtrack ? `Remove ${soundtrack.name}?` : "Remove the soundtrack?"
+        }
+        description="The clip keeps its own sound. You will need to add the track again and place it."
+        confirmLabel="Remove"
+        onConfirm={() => {
+          removeSoundtrack();
+          setRemoveTrackOpen(false);
+        }}
       />
 
       <ConfirmDialog
