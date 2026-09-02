@@ -1,3 +1,48 @@
+/**
+ * What shape the finished frame is.
+ *
+ * `auto` is the frame sizing itself to the artwork plus its padding, which is
+ * what it always did. Anything else is a target the frame grows into, with the
+ * artwork centred and the gradient filling whatever that opens up.
+ *
+ * These are the shapes a post is rendered at rather than a general list: a
+ * square for a grid, 4:5 as the tallest a portrait post survives uncropped on
+ * most feeds, 16:9 for a slide or a video embed, 9:16 for a story.
+ */
+export const aspectOptions = [
+  { value: "auto", label: "Auto" },
+  { value: "1:1", label: "1:1" },
+  { value: "4:5", label: "4:5" },
+  { value: "16:9", label: "16:9" },
+  { value: "9:16", label: "9:16" },
+];
+
+/** Width over height, or null for `auto`, which has no target. */
+export function aspectRatio(value: string): number | null {
+  const [w, h] = value.split(":").map(Number);
+  return w > 0 && h > 0 ? w / h : null;
+}
+
+/**
+ * The frame's box for a target ratio, given what the artwork measures.
+ *
+ * Padding stops being the whole margin and becomes the least of it: the frame
+ * grows on whichever axis is short of the ratio, never shrinks, so the artwork
+ * is never scaled or cropped to fit a shape.
+ */
+export function aspectBox(
+  artwork: { width: number; height: number },
+  padding: number,
+  ratio: number,
+): { width: number; height: number } {
+  const width = artwork.width + padding * 2;
+  const height = artwork.height + padding * 2;
+
+  return width / height < ratio
+    ? { width: Math.round(height * ratio), height }
+    : { width, height: Math.round(width / ratio) };
+}
+
 export const radiusSizes = [
   { value: 0, label: "None" },
   { value: 4, label: "Small" },

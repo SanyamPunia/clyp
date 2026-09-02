@@ -54,6 +54,8 @@ export interface StyleOptions {
   gradientId: string;
   gradientAngle: number;
   padding: number;
+  /** A target shape for the whole frame, or `auto` to fit the artwork. */
+  aspect: string;
   /** Corner radius in px. */
   outerRadius: number;
   imageRadius: number;
