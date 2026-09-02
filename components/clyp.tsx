@@ -8,6 +8,8 @@ import {
   DownloadIcon,
   MaximizeIcon,
   MinusIcon,
+  PauseIcon,
+  PlayIcon,
   PlusIcon,
   Trash2Icon,
 } from "lucide-react";
@@ -186,6 +188,18 @@ export function Clyp() {
    */
   const [muted, setMuted] = useState(false);
   const [musicMuted, setMusicMuted] = useState(false);
+  /**
+   * The play or pause flash over the picture.
+   *
+   * Keyed, because a CSS animation only runs on the frame it is attached and
+   * a second toggle has to replay it. The id changes on every press, React
+   * remounts the element, and the keyframe starts again. `playing` is what
+   * just happened rather than what is about to: a press that pauses shows the
+   * pause glyph, which is the convention every player follows.
+   */
+  const [pulse, setPulse] = useState<{ id: number; playing: boolean } | null>(
+    null,
+  );
   const [styleOptions, setStyleOptions] = useState<StyleOptions>(DEFAULT_STYLE);
   // Remembered here rather than inside GradientBackground, so the cross-fade
   // needs no state or effect in the component that renders it.
@@ -686,6 +700,13 @@ export function Clyp() {
     const video = videoRef.current;
     if (!video) return;
 
+    // Read before anything is done to the element, and captured rather than
+    // read inside the updater: React runs an updater when it processes the
+    // update, which is after `pause()` below has already flipped this, so the
+    // flash showed the glyph for the state it had just left.
+    const wasPaused = video.paused;
+    setPulse((last) => ({ id: (last?.id ?? 0) + 1, playing: wasPaused }));
+
     if (!video.paused) {
       video.pause();
       return;
@@ -908,6 +929,7 @@ export function Clyp() {
                 The outer box carries the scaled footprint, because a
                 transform does not change layout size. */}
             <div
+              className="relative"
               style={
                 zoomed
                   ? {
@@ -1021,6 +1043,44 @@ export function Clyp() {
                   </GradientBackground>
                 </div>
               </div>
+
+              {/* Outside the export ref on purpose, so it can never be
+                  serialized into a frame, and outside the zoom transform so it
+                  is the same size whatever the canvas is scaled to. This box is
+                  the frame's own footprint, so centring here centres on the
+                  picture.
+
+                  Its own colours, because it sits over an arbitrary gradient
+                  and an arbitrary video: there is no surface token that can be
+                  read against both. */}
+              {pulse && media?.kind === "video" && (
+                <div
+                  key={pulse.id}
+                  aria-hidden="true"
+                  onAnimationEnd={() => setPulse(null)}
+                  className="pointer-events-none absolute inset-0 grid place-items-center opacity-0 motion-safe:animate-[play-pulse_620ms_ease-out_forwards]"
+                >
+                  <span className="grid size-16 place-items-center rounded-full bg-black/55 text-white backdrop-blur-sm">
+                    {/* Filled, not stroked. A transport glyph is a solid
+                        triangle and two solid bars everywhere it appears, and
+                        at this size an outline reads as a sketch of the
+                        control rather than the control. */}
+                    {pulse.playing ? (
+                      <PlayIcon
+                        className="size-7 translate-x-px"
+                        fill="currentColor"
+                        aria-hidden="true"
+                      />
+                    ) : (
+                      <PauseIcon
+                        className="size-7"
+                        fill="currentColor"
+                        aria-hidden="true"
+                      />
+                    )}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
         </DropZone>

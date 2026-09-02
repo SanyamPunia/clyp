@@ -599,6 +599,32 @@ the region's length on its own.
     `document-user-activation-required` policy, which is harsher than the
     default: a drop plays with sound, a reload comes back muted and playing
     rather than frozen, and the control unmutes it from there.
+- **A press flashes the glyph over the picture, the way a player does.** A
+  circle and a filled triangle or two bars, in for a moment and out, which is
+  what says the press landed when the only other feedback is a small button in
+  the bar below.
+  - **It renders outside the export ref**, so it can never be serialized into a
+    frame, **and outside the zoom transform**, so it is the same size whatever
+    the canvas is scaled to. The box it sits in is the frame's own footprint,
+    so centring there centres on the picture: measured, the frame's centre and
+    the video's are the same x and 9px apart in y, which is half the title bar.
+  - **It carries its own colours.** It sits over an arbitrary gradient and an
+    arbitrary video, and no surface token can be read against both.
+  - **The glyph is filled, not stroked.** A transport glyph is a solid triangle
+    and two solid bars everywhere it appears, and at 28px an outline reads as a
+    sketch of the control rather than the control.
+  - **It is keyed on a counter, because a CSS animation only runs on the frame
+    it is attached.** A second press has to replay it, so the id changes, React
+    remounts the element, and the keyframe starts again. `onAnimationEnd`
+    unmounts it.
+  - **What it shows is read before the element is touched, and captured rather
+    than read inside the `setState` updater.** React runs an updater when it
+    processes the update, which is after `pause()` has already flipped
+    `video.paused`, so the flash showed the glyph for the state it had just
+    left. Verified by shape: pausing draws two rects, playing draws one path.
+  - The element carries `opacity: 0` of its own, so under reduced motion, where
+    the animation does not apply, nothing appears at all. That is the right
+    answer for feedback that decorates a state the transport already reports.
 - **Play and pause is one rule in `clyp.tsx`, asked for from three places:**
   the transport button, the spacebar, and a click on the picture itself, which
   is what every player does. It lives with whoever owns both the element and

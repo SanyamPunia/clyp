@@ -176,6 +176,21 @@
   }
 }
 
+/*
+ * The play and pause flash, the one every player shows when the picture is
+ * clicked. It grows a little as it goes, which is what makes it read as
+ * something leaving rather than something blinking.
+ *
+ * The element carries `opacity: 0` of its own, so with the animation gone
+ * under reduced motion nothing appears at all, which is the right answer for
+ * feedback that is decoration on top of a state the transport already reports.
+ */
+@keyframes play-pulse {
+  0% { opacity: 0; transform: scale(0.7); }
+  18% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1.3); }
+}
+
 @keyframes gradient-in {
   from { opacity: 0; }
   to { opacity: 1; }
