@@ -13,6 +13,18 @@
 /** Enough detail for a lane a few hundred pixels wide at any trim. */
 const BUCKETS = 2048;
 
+/**
+ * What the file is decoded at, which is as low as a browser will go.
+ *
+ * `decodeAudioData` resamples to its context's rate, and this reads a whole
+ * file: the soundtrack cap is 30 MB, which at 128kbps is over half an hour, and
+ * at 48kHz stereo that decodes to about 700 MB on the upload of one track.
+ * 8kHz costs a sixth of that. Nothing downstream cares, because 2048 buckets
+ * over half an hour is one bucket per second and there is no detail at that
+ * scale for a higher rate to carry.
+ */
+const DECODE_RATE = 8000;
+
 export interface Waveform {
   /** One 0 to 1 amplitude per bucket, over the file's whole length. */
   peaks: Float32Array;
@@ -24,7 +36,7 @@ export async function readWaveform(blob: Blob): Promise<Waveform> {
   // `AudioContext` rather than `OfflineAudioContext`: decoding needs no
   // rendering, and an offline context wants a length up front, which is the
   // thing being measured.
-  const context = new AudioContext();
+  const context = new AudioContext({ sampleRate: DECODE_RATE });
 
   try {
     const audio = await context.decodeAudioData(await blob.arrayBuffer());
