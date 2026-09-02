@@ -73,8 +73,10 @@ export interface StyleOptions {
 export interface ExportOptions {
   quality: number;
   filename?: string;
-  /** Video only. Carry the source's audio into the export. */
+  /** Video only. Carry the clip's own sound into the export. */
   audio?: boolean;
+  /** Video only. Carry a laid soundtrack into the export, mixed with the above. */
+  music?: boolean;
   /** Video only. The frame rate ceiling for the output. */
   fps?: number;
 }

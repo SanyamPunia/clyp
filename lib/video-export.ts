@@ -21,9 +21,11 @@
  */
 
 import { toPng } from "html-to-image";
+import { mixAudio } from "@/lib/audio-mix";
 import type { Soundtrack, Trim } from "@/types/screenshot";
 import {
   ALL_FORMATS,
+  AudioBufferSource,
   AudioSample,
   AudioSampleSink,
   AudioSampleSource,
@@ -60,10 +62,12 @@ export interface VideoExportRequest {
   scale: number;
   /** The clip's in and out points. Absent exports the whole file. */
   trim?: Trim;
-  /** Carry the audio across. Ignored when there is none to carry. */
+  /** Carry the clip's own sound across. Ignored when it has none. */
   audio?: boolean;
-  /** A track laid over the clip, which replaces the source's own. */
+  /** A track laid over the clip. */
   soundtrack?: Soundtrack;
+  /** Carry the laid track across. Ignored when there is none. */
+  music?: boolean;
   /** The output's frame rate ceiling. */
   fps?: number;
   onProgress?: (fraction: number) => void;
@@ -80,10 +84,12 @@ export interface RenderRequest {
   source: Blob;
   /** The clip's in and out points. Absent exports the whole file. */
   trim?: Trim;
-  /** Carry the audio across. Ignored when there is none to carry. */
+  /** Carry the clip's own sound across. Ignored when it has none. */
   audio?: boolean;
-  /** A track laid over the clip, which replaces the source's own. */
+  /** A track laid over the clip. */
   soundtrack?: Soundtrack;
+  /** Carry the laid track across. Ignored when there is none. */
+  music?: boolean;
   /** The output's frame rate ceiling. */
   fps?: number;
   onProgress?: (fraction: number) => void;
@@ -181,6 +187,7 @@ export async function renderVideo({
   trim,
   audio = true,
   soundtrack,
+  music = true,
   fps = DEFAULT_FPS,
   onProgress,
   signal,
@@ -223,14 +230,21 @@ export async function renderVideo({
   // running output. A source with no encoder for it is worse than no sound, so
   // the capability is checked here rather than assumed.
   //
-  // A soundtrack replaces the source's own audio rather than mixing with it.
-  // Mixing means decoding both to PCM and summing, and a laid-over track is
-  // almost always meant to be the sound rather than an addition to it.
-  const laid = audio && soundtrack ? await openAudio(soundtrack.blob) : null;
-  const audioTrack = laid ?? (audio ? await input.getPrimaryAudioTrack() : null);
+  // Two shapes. A laid track means mixing, which is a whole decode of both
+  // sources into one buffer, so it goes through `AudioBufferSource`. The clip's
+  // own sound on its own is the common case and streams sample by sample,
+  // which costs no memory beyond the frames in flight.
+  const laid = music ? soundtrack : undefined;
+  const clipTrack = audio ? await input.getPrimaryAudioTrack() : null;
+  const mixing = Boolean(laid);
+  const audioTrack = mixing ? null : clipTrack;
+  const encodable = await canEncodeAudio(AUDIO_CODEC);
+
   const sound =
-    audioTrack && (await canEncodeAudio(AUDIO_CODEC))
-      ? new AudioSampleSource({ codec: AUDIO_CODEC, quality: QUALITY_HIGH })
+    (mixing || audioTrack) && encodable
+      ? mixing
+        ? new AudioBufferSource({ codec: AUDIO_CODEC, quality: QUALITY_HIGH })
+        : new AudioSampleSource({ codec: AUDIO_CODEC, quality: QUALITY_HIGH })
       : null;
   if (sound) output.addAudioTrack(sound);
 
@@ -297,15 +311,23 @@ export async function renderVideo({
     // the muxer interleaves them at finalize, and audio for a clip this length
     // is a fraction of the video's time, so it is not worth a second progress
     // phase to report.
-    if (sound && audioTrack) {
+    if (sound instanceof AudioBufferSource) {
+      // One buffer, already the export's length, so the placement and any
+      // silence in front of the track are inside it rather than being a gap
+      // in the stream.
+      const mixed = await mixAudio({
+        clip: audio && clipTrack ? source : undefined,
+        soundtrack: laid,
+        trim: { start: from, end: to },
+      });
+      if (mixed) await sound.add(mixed);
+    } else if (sound && audioTrack) {
       const audioSink = new AudioSampleSink(audioTrack);
       // A soundtrack carries its own slice and its own place on the clip's
       // axis. The source's own track has neither: it is already in step with
       // the picture, so its slice is the trim and its place is where it is.
-      const slice = soundtrack && laid
-        ? { from: soundtrack.start, to: soundtrack.end }
-        : { from, to };
-      const shift = soundtrack && laid ? soundtrack.offset - from : -from;
+      const slice = { from, to };
+      const shift = -from;
 
       let filled = false;
 
@@ -386,6 +408,7 @@ export async function exportVideo({
   trim,
   audio,
   soundtrack,
+  music,
   fps,
   onProgress,
   signal,
@@ -406,6 +429,7 @@ export async function exportVideo({
     trim,
     audio,
     soundtrack,
+    music,
     fps,
     onProgress,
     signal,
@@ -461,19 +485,6 @@ function measure(
       radius(style.borderBottomLeftRadius),
     ],
   };
-}
-
-/** The laid-over file's own audio track, or null if it has none to read. */
-async function openAudio(blob: Blob) {
-  try {
-    const input = new Input({
-      formats: ALL_FORMATS,
-      source: new BlobSource(blob),
-    });
-    return await input.getPrimaryAudioTrack();
-  } catch {
-    return null;
-  }
 }
 
 /**
