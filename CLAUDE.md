@@ -876,12 +876,18 @@ editor.
 Below `lg` the two panels stack and the page scrolls. Above it the app fills
 the viewport and each panel scrolls on its own.
 
-The canvas toolbar wraps below `sm`: the meta and zoom cluster take the first
-row, the export actions take the second. Without the wrap the action group is
-483px wide and Copy and Download fall off a 390px screen entirely, clipped by
-the panel rather than reachable by scrolling.
+**The canvas panel is a container, and the toolbar lays out against the
+panel's width, not the viewport's.** At 1024px the panels sit side by side and
+the canvas panel is 608px, narrower than a phone in landscape, while the old
+viewport rule still thought it was wide: Download was clipped off the panel's
+edge and the panel scrolled sideways, up to about 1170px. Below `@2xl` (42rem
+of panel) the toolbar wraps, the meta takes the first row and the zoom cluster
+and the export actions the second. Without the wrap the action group is 483px
+wide and Copy and Download fall off entirely, clipped by the panel rather than
+reachable by scrolling.
 
-Keyboard shortcut hints are `hidden sm:flex`, since a phone has no command key.
+Keyboard shortcut hints show from `@3xl` (48rem of panel). Below that the
+actions fit only without them, and a phone has no command key anyway.
 
 ## Scroll edges
 

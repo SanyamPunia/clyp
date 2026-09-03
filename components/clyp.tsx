@@ -1033,10 +1033,14 @@ export function Clyp() {
 
   return (
     <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[minmax(0,1fr)_380px] xl:grid-cols-[minmax(0,1fr)_440px] 2xl:grid-cols-[minmax(0,1fr)_520px]">
-      {/* Canvas panel */}
-      <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-stroke bg-panel">
-        <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2.5 border-b border-stroke px-4 py-3 sm:flex-nowrap sm:px-5 sm:py-3.5">
-          <div className="flex items-center gap-1.5 max-sm:w-full">
+      {/* Canvas panel. A container, so the toolbar and the trim bar lay out
+          against the panel's own width rather than the viewport's: at 1024px
+          the panels sit side by side and this one is 608px, narrower than a
+          phone in landscape, while a viewport rule still thought it was wide
+          and clipped Download off the edge. */}
+      <section className="@container flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-stroke bg-panel">
+        <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2.5 border-b border-stroke px-4 py-3 @2xl:flex-nowrap @2xl:px-5 @2xl:py-3.5">
+          <div className="flex items-center gap-1.5 @max-2xl:w-full">
             <h2 className="text-sm font-medium tracking-tight text-foreground">
               Canvas
             </h2>
@@ -1070,7 +1074,7 @@ export function Clyp() {
             )}
           </div>
 
-          <div className="flex items-center gap-0.5 rounded-full bg-track p-0.5 max-sm:order-2 sm:ml-auto">
+          <div className="flex items-center gap-0.5 rounded-full bg-track p-0.5 @max-2xl:order-2 @2xl:ml-auto">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -1136,7 +1140,7 @@ export function Clyp() {
             </Tooltip>
           </div>
 
-          <div className="flex items-center gap-2 max-sm:order-2 max-sm:ml-auto sm:w-auto">
+          <div className="flex items-center gap-2 @max-2xl:order-2 @max-2xl:ml-auto">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -1159,7 +1163,7 @@ export function Clyp() {
             >
               <CopyIcon className="size-3.5" aria-hidden="true" />
               <span className="sr-only sm:not-sr-only">Copy</span>
-              <kbd className="relative ml-1 hidden items-center gap-0.5 text-muted-foreground sm:flex">
+              <kbd className="relative ml-1 hidden items-center gap-0.5 text-muted-foreground @3xl:flex">
                 <ArrowBigUpIcon className="size-3" aria-hidden="true" />
                 <CommandIcon className="size-3" aria-hidden="true" />
                 <span className="text-xs font-medium">C</span>
@@ -1174,7 +1178,7 @@ export function Clyp() {
             >
               <DownloadIcon className="size-3.5" aria-hidden="true" />
               <span className="sr-only sm:not-sr-only">Download</span>
-              <kbd className="relative ml-1 hidden items-center gap-0.5 opacity-60 sm:flex">
+              <kbd className="relative ml-1 hidden items-center gap-0.5 opacity-60 @3xl:flex">
                 <CommandIcon className="size-3" aria-hidden="true" />
                 <span className="text-xs font-medium">S</span>
                 <span className="sr-only">Command S</span>
