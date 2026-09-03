@@ -873,6 +873,16 @@ bar takes the media's top corners.
 The field's tones are fixed colours inside the artwork, the same exception the
 lights already are. The Address row is disabled unless the browser bar is on.
 
+**The bar is sized from the media's width, not in CSS pixels.** The frame is
+laid out in the picture's own pixels, so a fixed 40px bar was a hairline with
+unreadable text on a 2250px capture and only looked right on a 640px clip. Every
+measure is a 1x macOS metric (a 28px bar, 12px lights) multiplied by the width
+over 1280, never below 1x and capped at 4x, so a 2560px Retina capture carries
+its bar at 2x, which is how the capture itself would have carried one, and a
+640px clip gets the bar a 640px window would have had. The width is
+`dimensions.w`, which is the rendered width because the frame never shrinks the
+artwork.
+
 ## Caption
 
 `caption` in `StyleOptions` is a line of text beside the artwork.

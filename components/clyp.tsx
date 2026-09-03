@@ -1155,6 +1155,7 @@ export function Clyp() {
                             {styleOptions.windowChrome !== "none" && (
                               <WindowNavbar
                                 variant={styleOptions.windowChrome}
+                                width={dimensions?.w ?? 1280}
                                 dark={styleOptions.windowNavbarDark}
                                 url={styleOptions.windowUrl}
                                 style={{
