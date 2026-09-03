@@ -144,7 +144,7 @@ function Caption({
 
   return (
     <p
-      className="w-0 min-w-full text-center font-medium leading-tight text-balance wrap-break-word"
+      className="artwork-ease w-0 min-w-full text-center font-medium leading-tight text-balance wrap-break-word transition-[font-size,margin,color,text-shadow]"
       style={{
         fontSize: size,
         color: dark ? "rgba(0,0,0,0.85)" : "rgba(255,255,255,0.95)",
@@ -1104,7 +1104,7 @@ export function Clyp() {
                     the image, not on the ref. */}
                 <div
                   ref={screenshotRef}
-                  className="w-max overflow-hidden"
+                  className="artwork-ease w-max overflow-hidden transition-[border-radius]"
                   style={{
                     borderRadius: `${styleOptions.outerRadius}px`,
                   }}
@@ -1121,8 +1121,12 @@ export function Clyp() {
                         content wider than the target, `min-height` wins and the
                         ratio is simply lost, and nothing re-grows the width to
                         restore it. */}
+                    {/* The box eases between two shapes. From or to Auto it
+                        snaps, since Auto has no explicit size for a transition
+                        to run from or to, and giving it one would clip a
+                        caption or bar switching on while the frame caught up. */}
                     <div
-                      className="flex items-center justify-center"
+                      className="artwork-ease flex items-center justify-center transition-[padding,width,height]"
                       style={{
                         padding: `${styleOptions.padding}px`,
                         ...(shaped && {
@@ -1192,7 +1196,7 @@ export function Clyp() {
                                 onClick={togglePlayback}
                                 className={cn(
                                   styleOptions.shadow,
-                                  "block h-auto max-w-full cursor-pointer select-none",
+                                  "artwork-ease block h-auto max-w-full cursor-pointer select-none transition-[border-radius,box-shadow]",
                                 )}
                                 style={{ borderRadius: mediaRadius }}
                               />
@@ -1205,7 +1209,7 @@ export function Clyp() {
                                 alt="Your screenshot"
                                 className={cn(
                                   styleOptions.shadow,
-                                  "block h-auto max-w-full select-none",
+                                  "artwork-ease block h-auto max-w-full select-none transition-[border-radius,box-shadow]",
                                 )}
                                 style={{ borderRadius: mediaRadius }}
                                 draggable={false}

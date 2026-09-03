@@ -76,7 +76,7 @@ export function WindowNavbar({
     return (
       <div
         className={cn(
-          "flex items-center transition-colors duration-200",
+          "artwork-ease flex items-center transition-[background-color,border-radius]",
           tone,
           className,
         )}
@@ -93,7 +93,7 @@ export function WindowNavbar({
   return (
     <div
       className={cn(
-        "grid grid-cols-[1fr_minmax(0,2fr)_1fr] items-center transition-colors duration-200",
+        "artwork-ease grid grid-cols-[1fr_minmax(0,2fr)_1fr] items-center transition-[background-color,border-radius]",
         tone,
         className,
       )}
@@ -106,7 +106,7 @@ export function WindowNavbar({
       {lights}
       <div
         className={cn(
-          "mx-auto flex w-full min-w-0 items-center justify-center",
+          "artwork-ease mx-auto flex w-full min-w-0 items-center justify-center transition-[background-color,color]",
           dark ? "bg-white/10" : "bg-black/6",
         )}
         style={{

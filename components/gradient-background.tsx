@@ -66,18 +66,19 @@ export function GradientBackground({
         }}
       />
 
-      {grain > 0 && (
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-0 z-20 mix-blend-overlay"
-          style={{
-            opacity: grain,
-            backgroundImage: `url("${NOISE_TILE_URL}")`,
-            backgroundRepeat: "repeat",
-            backgroundSize: `${NOISE_TILE_SIZE}px ${NOISE_TILE_SIZE}px`,
-          }}
-        />
-      )}
+      {/* Always mounted, at opacity 0 when off, so switching grain on or
+          changing its amount eases rather than snaps. At 0 an overlay blend
+          is a no-op, in the preview and in the export alike. */}
+      <div
+        aria-hidden="true"
+        className="artwork-ease pointer-events-none absolute inset-0 z-20 mix-blend-overlay transition-opacity"
+        style={{
+          opacity: grain,
+          backgroundImage: `url("${NOISE_TILE_URL}")`,
+          backgroundRepeat: "repeat",
+          backgroundSize: `${NOISE_TILE_SIZE}px ${NOISE_TILE_SIZE}px`,
+        }}
+      />
 
       <div className="relative z-30">{children}</div>
     </div>

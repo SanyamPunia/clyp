@@ -949,6 +949,25 @@ the top of the file. See `components/clyp.tsx` and
 `app/globals.css` and disabled under `prefers-reduced-motion`. There is no
 animation library.
 
+**Every style change inside the frame eases over 200 ms ease-out, half the
+gradient cross-fade.** A radius chip, a shadow chip, the padding slider, a
+target shape, the bar's tone and corners, the caption's size and colour, and
+the grain's amount all transition from a to b rather than snapping. The
+background swap keeps its 400 ms because it is the one change big enough to
+carry it; on a radius chip that length read as lag. `.artwork-ease` in
+`globals.css` carries the timing as
+`--tw-duration` and `--tw-ease`, which every `transition-[...]` utility reads,
+so the number lives once and reduced motion zeroes it once. Each element names
+only the properties it eases: `all` would also animate a new picture's size
+out of the previous one's. Two things still snap by nature: a shape change from
+or to Auto, since Auto has no explicit size for a transition to run from or to,
+and a window bar appearing, since it mounts. Giving Auto an explicit measured
+size would fix the first and break more: a caption or bar switching on would
+then be clipped for 400 ms while the frame caught up with the artwork.
+
+The grain layer stays mounted at opacity 0 when grain is off, so switching it
+on eases too. An overlay blend at opacity 0 is a no-op in the export.
+
 ## Build gate
 
 `pnpm check` runs typecheck, lint, and build. A green run is the gate for any

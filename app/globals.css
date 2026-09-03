@@ -127,6 +127,26 @@
 }
 
 @layer components {
+  /*
+   * Style changes inside the frame ease between values rather than snapping,
+   * at half the gradient cross-fade's length: a radius or shadow chip is a
+   * small change and 400ms of it reads as lag, where the background swap is
+   * the one change big enough to carry the longer fade. Each element names the
+   * properties it eases through a `transition-[...]` utility, which reads
+   * these two variables. Nothing uses `all`: that would also animate a new
+   * picture's size out of the old one's.
+   */
+  .artwork-ease {
+    --tw-duration: 200ms;
+    --tw-ease: ease-out;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .artwork-ease {
+      --tw-duration: 0s;
+    }
+  }
+
   /* Dot grid the artwork floats on. Sized so it stays legible at any zoom. */
   .canvas-grid {
     background-color: var(--canvas);
