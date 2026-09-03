@@ -867,6 +867,13 @@ body. Seeding state from storage during render would break hydration, because
 neither store exists on the server. Nothing is written until the restore has
 run, or the first render would overwrite the draft with defaults.
 
+**`restored` flips only once the media is in place**, from inside the loader's
+callback. It used to flip as soon as the record was read, while the file was
+still being probed, and every persist effect then ran one pass against the
+defaults: the media effect deleted the Blob and rewrote it a moment later,
+forty megabytes for nothing on every reload. A load that fails toasts and
+flips it anyway, so the session still persists what comes next.
+
 Every storage call swallows its own errors and reports absence. A private
 window and disabled site data are both normal, and neither should break the
 editor.

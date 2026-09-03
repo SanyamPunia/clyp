@@ -65,6 +65,7 @@ import {
   type LoadedMedia,
   formatDuration,
   kindOf,
+  loadMedia as loadMediaFile,
   loadSoundtrack,
 } from "@/lib/media";
 import {
@@ -616,6 +617,12 @@ export function Clyp() {
   // Restore the draft. Reading on the client only: localStorage does not
   // exist while rendering on the server, and seeding state from it would
   // produce a hydration mismatch.
+  //
+  // `restored` flips only once the media is in place. It used to flip as soon
+  // as the record was read, while the file was still being probed, and the
+  // persist effects then ran against the defaults: the media effect deleted
+  // the Blob and rewrote it a moment later, forty megabytes for nothing on
+  // every reload.
   useEffect(() => {
     let cancelled = false;
 
@@ -625,13 +632,18 @@ export function Clyp() {
         if (cancelled) return;
 
         setStyleOptions(readStyle(DEFAULT_STYLE));
+        const done = () => {
+          if (!cancelled) setRestored(true);
+        };
 
         if (stored?.kind === "image" && typeof stored.payload === "string") {
           const probe = new Image();
           probe.onload = () => {
             setMedia({ kind: "image", src: probe.src, name: stored.name });
             setDimensions({ w: probe.naturalWidth, h: probe.naturalHeight });
+            done();
           };
+          probe.onerror = done;
           probe.src = stored.payload;
         } else if (stored?.kind === "video" && stored.payload instanceof Blob) {
           // Back through the same loader the drop path uses, so a restored
@@ -639,29 +651,35 @@ export function Clyp() {
           const file = new File([stored.payload], stored.name ?? "clyp", {
             type: stored.payload.type,
           });
-          // The soundtrack is restored from inside the media's own callback,
-          // and it has to be: `loadMedia` clears the soundtrack, since one
-          // placed against a clip that has been replaced means nothing. Run
-          // side by side, whichever finished last won, and the soundtrack lost
-          // about half the time.
           const audio = stored.audio;
-          readMediaFile(file, (loaded) => {
-            loadMedia(loaded);
-            if (!audio) return;
 
-            // Back through the same loader an upload uses, which re-measures
-            // it and mints a fresh object URL. Its placement starts over,
-            // since that was never stored.
-            const track = new File([audio], stored.audioName ?? "audio", {
-              type: audio.type,
+          loadMediaFile(file)
+            .then((loaded) => {
+              // The soundtrack is restored from in here, after the media it
+              // belongs to: `loadMedia` clears the soundtrack, since one placed
+              // against a clip that has been replaced means nothing, so run
+              // side by side the soundtrack lost about half the time.
+              loadMedia(loaded);
+              done();
+
+              if (!audio) return;
+              // Back through the same loader an upload uses, which re-measures
+              // it and mints a fresh object URL. Its placement starts over,
+              // since that was never stored.
+              const track = new File([audio], stored.audioName ?? "audio", {
+                type: audio.type,
+              });
+              loadSoundtrack(track, loaded.media.duration ?? 0)
+                .then(setSoundtrack)
+                .catch(() => undefined);
+            })
+            .catch((error: Error) => {
+              toast.error(error.message);
+              done();
             });
-            loadSoundtrack(track, loaded.media.duration ?? 0)
-              .then(setSoundtrack)
-              .catch(() => undefined);
-          });
+        } else {
+          done();
         }
-
-        setRestored(true);
       });
 
     return () => {
