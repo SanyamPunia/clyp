@@ -32,6 +32,7 @@ import {
   canEncodeAudio,
 } from "mediabunny";
 
+import { type ZoomRegion, sourceRect, zoomAt } from "@/lib/clip-zoom";
 import type { Trim } from "@/types/screenshot";
 
 export interface Box {
@@ -67,6 +68,8 @@ export interface RenderRequest {
   trim: Trim;
   /** The playback rate. 2 writes the clip in half its own time. */
   speed: number;
+  /** Stretches of the clip that close in on a point of the picture. */
+  zooms: ZoomRegion[];
   /** Stream the clip's own sound across. Only true at 1x with nothing laid. */
   audio: boolean;
   /** A finished mix to write instead. Present whenever a track is laid. */
@@ -114,6 +117,7 @@ export async function renderVideo({
   source,
   trim,
   speed,
+  zooms,
   audio,
   mixed,
   fps,
@@ -206,7 +210,26 @@ export async function renderVideo({
       ctx.beginPath();
       ctx.roundRect(box.x, box.y, box.width, box.height, radii);
       ctx.clip();
-      sample.draw(ctx, box.x, box.y, box.width, box.height);
+      // A zoom is the same draw from a smaller source rectangle. The chrome
+      // stays baked, and the rectangle comes from the same arithmetic the
+      // preview's transform does, on the source's own clock.
+      const zoom = zoomAt(zooms, sample.timestamp, speed);
+      if (zoom) {
+        const rect = sourceRect(zoom, sample.displayWidth, sample.displayHeight);
+        sample.draw(
+          ctx,
+          rect.x,
+          rect.y,
+          rect.width,
+          rect.height,
+          box.x,
+          box.y,
+          box.width,
+          box.height,
+        );
+      } else {
+        sample.draw(ctx, box.x, box.y, box.width, box.height);
+      }
       ctx.restore();
 
       const span = ((sample.duration || 0) + carried) / speed;

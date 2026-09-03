@@ -14,9 +14,9 @@
  * across and the worker does the rest.
  */
 
-import { toPng } from "html-to-image";
-
 import { mixAudio } from "@/lib/audio-mix";
+import type { ZoomRegion } from "@/lib/clip-zoom";
+import { rasterize } from "@/lib/raster";
 import {
   type Box,
   type MixedAudio,
@@ -31,8 +31,12 @@ import { QUALITY_HIGH, canEncodeVideo } from "mediabunny";
 export interface VideoExportRequest {
   /** The node the PNG export rasterizes, which is the whole frame. */
   frame: HTMLElement;
-  /** The element inside it the decoded frames replace. */
-  video: HTMLVideoElement;
+  /**
+   * The clip's box inside the frame, which the decoded frames replace. The
+   * box rather than the `<video>`, since the preview transforms the video for
+   * a zoom and the box is what holds still, carries the radius and is measured.
+   */
+  box: HTMLElement;
   /** The original file. */
   source: Blob;
   /** The export scale, the same number the PNG export passes as `pixelRatio`. */
@@ -41,6 +45,8 @@ export interface VideoExportRequest {
   trim: Trim;
   /** The playback rate. */
   speed?: number;
+  /** Stretches of the clip that close in on a point of the picture. */
+  zooms?: ZoomRegion[];
   /** Carry the clip's own sound across. Ignored when it has none, or past 1x. */
   audio?: boolean;
   /** A track laid over the clip. */
@@ -136,11 +142,12 @@ export function formatSpeed(speed: number): string {
  */
 export async function exportVideo({
   frame,
-  video,
+  box: clip,
   source,
   scale,
   trim,
   speed = 1,
+  zooms = [],
   audio = true,
   soundtrack,
   music = true,
@@ -148,13 +155,13 @@ export async function exportVideo({
   onProgress,
   signal,
 }: VideoExportRequest): Promise<Blob> {
-  const dataUrl = await toPng(frame, { cacheBust: true, pixelRatio: scale });
+  const dataUrl = await rasterize(frame, scale);
   const chrome = await createImageBitmap(await (await fetch(dataUrl)).blob());
   // The raster cannot be interrupted, so the earliest a cancel during it can
   // be heard is here, before any encoder is opened.
   if (signal?.aborted) throw aborted();
 
-  const { box, radii } = measure(frame, video, chrome);
+  const { box, radii } = measure(frame, clip, chrome);
 
   // The clip's own sound exists only at 1x. See `SPEED_OPTIONS`.
   const clipSound = audio && speed === 1;
@@ -181,6 +188,7 @@ export async function exportVideo({
       source,
       trim,
       speed,
+      zooms,
       audio: clipSound && !mixed,
       mixed: mixed ? planar(mixed) : null,
       fps,
@@ -261,7 +269,7 @@ function aborted() {
 }
 
 /**
- * Where the video sits inside the rasterized frame, in output pixels.
+ * Where the clip's box sits inside the rasterized frame, in output pixels.
  *
  * Both factors are ratios against the raster rather than against the export
  * scale, so they absorb the canvas zoom, which is a transform on a wrapper
@@ -273,16 +281,16 @@ function aborted() {
  */
 function measure(
   frame: HTMLElement,
-  video: HTMLVideoElement,
+  clip: HTMLElement,
   chrome: { width: number },
 ): { box: Box; radii: Radii } {
   const frameRect = frame.getBoundingClientRect();
-  const videoRect = video.getBoundingClientRect();
+  const videoRect = clip.getBoundingClientRect();
 
   const onScreen = chrome.width / frameRect.width;
   const inLayout = chrome.width / frame.offsetWidth;
 
-  const style = getComputedStyle(video);
+  const style = getComputedStyle(clip);
   const radius = (value: string) =>
     (Number.parseFloat(value) || 0) * inLayout;
 

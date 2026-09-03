@@ -1,6 +1,5 @@
 "use client";
 
-import { toPng } from "html-to-image";
 import {
   ArrowBigUpIcon,
   CommandIcon,
@@ -38,6 +37,15 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { WindowNavbar } from "@/components/window-navbar";
+import { ZoomFocusMarker } from "@/components/zoom-focus";
+import {
+  type ZoomRegion,
+  DEFAULT_ZOOM_LEVEL,
+  newZoomId,
+  placeZoom,
+  zoomAt,
+} from "@/lib/clip-zoom";
+import { rasterize } from "@/lib/raster";
 import {
   defaultCustomGradient,
   defaultGradientId,
@@ -230,6 +238,15 @@ export function Clyp() {
    * out of the file.
    */
   const [speed, setSpeed] = useState(1);
+  /**
+   * Stretches of the clip that close in on a point of the picture. On the
+   * source's axis like the trim, and not persisted like it. `selectedZoom` is
+   * the one whose focus marker is on the picture and whose level the bar
+   * offers chips for.
+   */
+  const [zooms, setZooms] = useState<ZoomRegion[]>([]);
+  const [selectedZoom, setSelectedZoom] = useState<string | null>(null);
+  const [removeZoomOpen, setRemoveZoomOpen] = useState(false);
   const [soundtrack, setSoundtrack] = useState<Soundtrack | null>(null);
   /**
    * The preview's own volume, not the export's, and one per source.
@@ -289,7 +306,14 @@ export function Clyp() {
 
   const screenshotRef = useRef<HTMLDivElement>(null);
   const artworkRef = useRef<HTMLDivElement>(null);
+  /** The clip's box: what holds still, carries the radius, and is measured. */
+  const clipBoxRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  // For the zoom's frame loop, which is bound once per clip and would
+  // otherwise close over the regions it mounted with. Written in an effect.
+  const zoomsRef = useRef(zooms);
+  /** True while the focus marker is being dragged. */
+  const aimingRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
 
@@ -381,6 +405,11 @@ export function Clyp() {
   );
   const caption = styleOptions.caption.trim();
   const zoomed = zoom !== 1 && frameSize.width > 0;
+  const selectedRegion = zooms.find((r) => r.id === selectedZoom) ?? null;
+
+  useEffect(() => {
+    zoomsRef.current = zooms;
+  }, [zooms]);
 
   /**
    * Takes over from the loader in `lib/media.ts`, which has already read and
@@ -397,6 +426,8 @@ export function Clyp() {
       loaded.media.duration ? { start: 0, end: loaded.media.duration } : null,
     );
     setSpeed(1);
+    setZooms([]);
+    setSelectedZoom(null);
     // Audible again for a new clip, whatever the last one was left at.
     setMuted(false);
     setMusicMuted(false);
@@ -458,6 +489,68 @@ export function Clyp() {
     },
     [duration],
   );
+
+  /**
+   * A new zoom lands at the playhead: the default length, or what the gap
+   * there holds, pulled back from a neighbour or the end. Snapped to the frame
+   * grid like everything else on the lane, and selected, so the marker is on
+   * the picture at once.
+   */
+  const addZoom = useCallback(() => {
+    const video = videoRef.current;
+    if (!video || !duration) return;
+
+    const grid = (seconds: number) => Math.round(seconds * EDIT_FPS) / EDIT_FPS;
+    const placed = placeZoom(zooms, grid(video.currentTime), duration);
+    if (!placed) {
+      toast.error("There is no room for a zoom at the playhead");
+      return;
+    }
+
+    const region: ZoomRegion = {
+      id: newZoomId(),
+      start: grid(placed.start),
+      end: grid(placed.end),
+      scale: DEFAULT_ZOOM_LEVEL,
+      focus: { x: 0.5, y: 0.5 },
+    };
+    setZooms((previous) =>
+      [...previous, region].sort((a, b) => a.start - b.start),
+    );
+    setSelectedZoom(region.id);
+  }, [duration, zooms]);
+
+  const updateZoom = useCallback((next: ZoomRegion) => {
+    setZooms((previous) =>
+      previous
+        .map((r) => (r.id === next.id ? next : r))
+        .sort((a, b) => a.start - b.start),
+    );
+  }, []);
+
+  /**
+   * Selecting a region also shows it. One the playhead is outside of shows
+   * nothing, and a marker for a zoom nobody can see is a dead control, so the
+   * playhead moves into its hold.
+   */
+  const selectZoom = useCallback(
+    (id: string | null) => {
+      setSelectedZoom(id);
+      const video = videoRef.current;
+      const region = zooms.find((r) => r.id === id);
+      if (!video || !region) return;
+      if (video.currentTime < region.start || video.currentTime >= region.end) {
+        video.currentTime = (region.start + region.end) / 2;
+      }
+    },
+    [zooms],
+  );
+
+  const removeZoom = useCallback(() => {
+    setZooms((previous) => previous.filter((r) => r.id !== selectedZoom));
+    setSelectedZoom(null);
+    setRemoveZoomOpen(false);
+  }, [selectedZoom]);
 
   // Only for a target shape, which is the only thing that reads it.
   useEffect(() => {
@@ -662,8 +755,8 @@ export function Clyp() {
       setProgress(exportsVideo ? 0 : null);
       try {
         if (exportsVideo) {
-          const video = videoRef.current;
-          if (!video || !media.blob || !trim) {
+          const box = clipBoxRef.current;
+          if (!box || !media.blob || !trim) {
             throw new Error("That clip is not loaded");
           }
 
@@ -672,11 +765,12 @@ export function Clyp() {
 
           const blob = await exportVideo({
             frame,
-            video,
+            box,
             source: media.blob,
             scale: options.quality,
             trim,
             speed,
+            zooms,
             audio: options.audio,
             soundtrack: soundtrack ?? undefined,
             music: options.music,
@@ -687,10 +781,7 @@ export function Clyp() {
           downloadBlob(blob, filenameFor(options.filename, "mp4", media.name));
           toast.success("Video downloaded");
         } else {
-          const dataUrl = await toPng(frame, {
-            cacheBust: true,
-            pixelRatio: options.quality,
-          });
+          const dataUrl = await rasterize(frame, options.quality);
 
           if (exportAction === "copy") {
             const blob = await fetch(dataUrl).then((res) => res.blob());
@@ -725,7 +816,7 @@ export function Clyp() {
         setProgress(null);
       }
     },
-    [exportAction, exportsVideo, media, soundtrack, speed, trim],
+    [exportAction, exportsVideo, media, soundtrack, speed, trim, zooms],
   );
 
   const handleCancelExport = useCallback(() => {
@@ -762,6 +853,43 @@ export function Clyp() {
     const video = videoRef.current;
     if (video) video.playbackRate = speed;
   }, [speed, source]);
+
+  /**
+   * The zoom, applied to the preview every frame.
+   *
+   * A transform on the `<video>` inside its box, which is what holds still and
+   * carries the radius and the shadow, so the picture grows inside its own
+   * corners. The regions are read from a ref because a drag rewrites them on
+   * every frame and this is bound once per clip. While the focus marker is
+   * being dragged the picture is shown plain, so the point is placed on the
+   * picture rather than on a moving enlargement of it.
+   */
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !source) return;
+
+    let frame = 0;
+    const apply = () => {
+      frame = requestAnimationFrame(apply);
+
+      const state = aimingRef.current
+        ? null
+        : zoomAt(zoomsRef.current, video.currentTime, speed);
+      const transform = state && state.scale > 1.0001 ? `scale(${state.scale})` : "";
+      const origin = state ? `${state.focus.x * 100}% ${state.focus.y * 100}%` : "";
+      if (video.style.transform !== transform) video.style.transform = transform;
+      if (video.style.transformOrigin !== origin) {
+        video.style.transformOrigin = origin;
+      }
+    };
+
+    frame = requestAnimationFrame(apply);
+    return () => {
+      cancelAnimationFrame(frame);
+      video.style.transform = "";
+      video.style.transformOrigin = "";
+    };
+  }, [source, speed]);
 
   /**
    * A track that has just arrived does not start playing.
@@ -893,6 +1021,8 @@ export function Clyp() {
     setDimensions(null);
     setTrim(null);
     setSpeed(1);
+    setZooms([]);
+    setSelectedZoom(null);
     removeSoundtrack();
     setZoom(1);
     setZoomMode("fit");
@@ -1173,6 +1303,13 @@ export function Clyp() {
                             )}
                             {media.kind === "video" ? (
                               /*
+                               * The video sits in a box of its own. The box
+                               * carries the radius, the shadow and the clip,
+                               * and is what the export measures, so a zoom's
+                               * transform on the video grows the picture inside
+                               * its own corners and moves nothing the
+                               * composite is aimed at.
+                               *
                                * Inline, and started from an effect rather than
                                * by `autoPlay`, which cannot report a browser
                                * refusing to play with sound. Its own mute is its
@@ -1186,20 +1323,38 @@ export function Clyp() {
                                * frame loop owns it instead, and its loop control
                                * switches it off.
                                */
-                              <video
-                                ref={videoRef}
-                                src={media.src}
-                                // Silent past 1x, because the export is. See
-                                // `SPEED_OPTIONS`.
-                                muted={muted || speed !== 1}
-                                playsInline
-                                onClick={togglePlayback}
+                              <div
+                                ref={clipBoxRef}
                                 className={cn(
                                   styleOptions.shadow,
-                                  "artwork-ease block h-auto max-w-full cursor-pointer select-none transition-[border-radius,box-shadow]",
+                                  "artwork-ease relative overflow-hidden transition-[border-radius,box-shadow]",
                                 )}
                                 style={{ borderRadius: mediaRadius }}
-                              />
+                              >
+                                <video
+                                  ref={videoRef}
+                                  src={media.src}
+                                  // Silent past 1x, because the export is. See
+                                  // `SPEED_OPTIONS`.
+                                  muted={muted || speed !== 1}
+                                  playsInline
+                                  onClick={togglePlayback}
+                                  className="block h-auto max-w-full cursor-pointer select-none"
+                                />
+                                {selectedRegion && (
+                                  <ZoomFocusMarker
+                                    focus={selectedRegion.focus}
+                                    canvasZoom={zoom}
+                                    box={clipBoxRef}
+                                    onChange={(focus) =>
+                                      updateZoom({ ...selectedRegion, focus })
+                                    }
+                                    onDragChange={(dragging) => {
+                                      aimingRef.current = dragging;
+                                    }}
+                                  />
+                                )}
+                              </div>
                             ) : (
                               /* eslint-disable-next-line @next/next/no-img-element -- the
                           source is a client-side data URL, which next/image cannot
@@ -1296,6 +1451,12 @@ export function Clyp() {
               onToggle={togglePlayback}
               speed={speed}
               onSpeedChange={handleSpeedChange}
+              zooms={zooms}
+              selectedZoom={selectedZoom}
+              onZoomAdd={addZoom}
+              onZoomChange={updateZoom}
+              onZoomSelect={selectZoom}
+              onZoomRemove={() => setRemoveZoomOpen(true)}
               hasClipSound={media.hasAudio ?? false}
               soundtrack={soundtrack}
               onSoundtrackChange={setSoundtrack}
@@ -1375,6 +1536,17 @@ export function Clyp() {
           removeSoundtrack();
           setRemoveTrackOpen(false);
         }}
+      />
+
+      {/* A region is four numbers and a point that took a minute to place, the
+          same kind of loss as a soundtrack's placement. */}
+      <ConfirmDialog
+        open={removeZoomOpen}
+        onOpenChange={setRemoveZoomOpen}
+        title="Remove this zoom?"
+        description="The picture plays plain through that stretch again. Its length, level and aim are not kept."
+        confirmLabel="Remove"
+        onConfirm={removeZoom}
       />
 
       <ConfirmDialog

@@ -124,6 +124,12 @@ up in the PNG. Two consequences:
 - The export ref attaches only when a real image exists. The upload card
   renders inside the same frame so styling previews before upload, and it must
   never reach the export.
+- A control that has to sit on the picture itself is the one thing allowed
+  inside the frame that is not artwork. It carries `data-export-ignore`, and
+  `rasterize` in `lib/raster.ts`, which both exports and the video's chrome go
+  through, filters it out. The zoom's focus marker is the one case. Feedback
+  that needs no picture coordinates, like the play flash, stays outside the
+  frame instead.
 
 Both exports leave through `download` or `downloadBlob` in `lib/download.ts`,
 and the extension is imposed by `filenameFor` in the same file rather than
@@ -529,6 +535,61 @@ export as 120 frames at 60 fps over 2.000 s.
   size estimate all read `(end - start) / speed`. The trim bar's own readout
   stays in source seconds, since that is the axis its handles cut on. A frame
   step moves `FRAME * speed` of source, which is one output frame.
+
+## Zoom
+
+`lib/clip-zoom.ts` is the model and the arithmetic. A region is a stretch of
+the clip on the source's axis, like the trim, a level from `ZOOM_LEVELS` (1.5,
+2, 3), and a focus point as fractions of the picture, so it means the same
+thing in the preview at any canvas zoom and in the export at any scale. The
+regions live in `clyp.tsx` beside the trim and the speed and are not
+persisted, for the same reason those are not.
+
+Verified through the export, which is the only place it can be proved. A 2x
+region aimed at a quarter in from the top left, on a 640x360 clip exported at
+1x: the frame inside the region matches the source cropped to that quarter and
+scaled at SSIM 0.82, where the plain source frame scores 0.43 and an untouched
+frame scores 0.87 against its own source, which is the compression floor. A
+frame outside the region differs from the source by zero around the marker's
+position, so the marker never reached the file.
+
+- **One arithmetic, two consumers.** `zoomAt` gives the scale and focus at an
+  instant, with a cubic ramp of `ZOOM_RAMP` output seconds in and out, capped
+  at half the region so a short one never overshoots its own end. The
+  preview's frame loop sets `transform: scale(s)` on the `<video>` with
+  `transform-origin` at the focus. The worker draws the rectangle `sourceRect`
+  gives for the same state into the same box. Scaling about a point inside the
+  picture always covers the box, so nothing is left uncovered and neither side
+  clamps anything.
+- **The video sits in a box of its own.** The box carries the radius, the
+  shadow and `overflow-hidden`, and is what the export measures, so the
+  picture grows inside its own corners and a transform on the video moves
+  nothing the composite is aimed at.
+- **The focus marker sits inside the box and is filtered out of the raster.**
+  A fraction of the box is a fraction of the picture, so it needs no measuring,
+  which is why it is inside the frame at all. It is counter-scaled by the
+  canvas zoom so it stays one size on screen. While it is being dragged the
+  preview shows the plain picture, so the point is placed on the picture rather
+  than on a moving enlargement of it. Arrow keys nudge it by 2%, Shift by 10%.
+- **The lane is the soundtrack's geometry.** Regions are blocks on a lane
+  under the picture's, labelled with their level, dragged by the body and
+  resized by the edges, snapped to the frame grid and bounded by their
+  neighbours through `roomFor`, so two can never overlap. A press selects a
+  region and seeks into it when the playhead is outside, since a marker for a
+  zoom nobody can see is a dead control. A second press on the selected one
+  without moving, or a press on the bare lane, deselects.
+- **A region is not bounded by the trim.** Like a soundtrack, it lives on the
+  file's axis, so trimming never moves or cuts it. One in the cut-away part
+  plays nothing and is drawn over the rail there, which says so.
+- **Adding one lands at the playhead**: the default two seconds from there, or
+  what is left before a neighbour or the end. Only when less than the shortest
+  region is left is it pulled back to fit, since a press means "from here"
+  whenever that is possible. Inside an existing region there is no room, and
+  the button says so with a toast rather than doing nothing.
+- **Removing one confirms first**, the same as a soundtrack: a region is four
+  numbers and a point that took a minute to place.
+- **Speed plays a region faster rather than moving it**, since both are on the
+  source's axis. The ramp is in output seconds, so it feels the same at 2x.
 
 ## Soundtrack
 

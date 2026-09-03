@@ -17,6 +17,7 @@ import {
   Volume2Icon,
   VolumeXIcon,
   XIcon,
+  ZoomInIcon,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -25,6 +26,12 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  type ZoomRegion,
+  MIN_ZOOM_LENGTH,
+  ZOOM_LEVELS,
+  roomFor,
+} from "@/lib/clip-zoom";
 import { AUDIO_ACCEPT, formatPrecise } from "@/lib/media";
 import { drawWaveform, readWaveform, type Waveform } from "@/lib/waveform";
 import { EDIT_FPS, SPEED_OPTIONS, formatSpeed } from "@/lib/video-export";
@@ -127,6 +134,17 @@ interface TrimBarProps {
    */
   speed: number;
   onSpeedChange: (speed: number) => void;
+  /**
+   * Stretches of the clip that close in on the picture, on the same axis as
+   * the trim. The bar draws and moves them. The picture and the export are
+   * the owner's business.
+   */
+  zooms: ZoomRegion[];
+  selectedZoom: string | null;
+  onZoomAdd: () => void;
+  onZoomChange: (zoom: ZoomRegion) => void;
+  onZoomSelect: (id: string | null) => void;
+  onZoomRemove: () => void;
   disabled?: boolean;
 }
 
@@ -180,6 +198,12 @@ export function TrimBar({
   onMusicMutedChange,
   speed,
   onSpeedChange,
+  zooms,
+  selectedZoom,
+  onZoomAdd,
+  onZoomChange,
+  onZoomSelect,
+  onZoomRemove,
   disabled = false,
 }: TrimBarProps) {
   const [playing, setPlaying] = useState(true);
@@ -697,6 +721,68 @@ export function TrimBar({
     [disabled, duration, onSoundtrackChange, soundtrack, speed, timeAt],
   );
 
+  /**
+   * A zoom region's body and its two edges, the soundtrack's geometry again.
+   *
+   * The body slides it and the edges resize it, snapped to the frame grid and
+   * bounded by its neighbours, so two regions can never overlap. A press
+   * selects the region before anything moves. A press that does not move on
+   * the region already selected deselects it, which is the one way to put the
+   * marker away without picking another.
+   */
+  const dragZoom = useCallback(
+    (region: ZoomRegion, part: "body" | "head" | "tail") =>
+      (event: React.PointerEvent<HTMLDivElement>) => {
+        if (disabled) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onZoomSelect(region.id);
+        event.currentTarget.setPointerCapture(event.pointerId);
+
+        const origin = timeAt(event.clientX);
+        const from = region;
+        const { lo, hi } = roomFor(zooms, region.id, duration);
+        const length = from.end - from.start;
+        const wasSelected = selectedZoom === region.id;
+        let moved = false;
+
+        const move = (ev: PointerEvent) => {
+          const by = timeAt(ev.clientX) - origin;
+          if (!moved && Math.abs(by) < FRAME / 2) return;
+          moved = true;
+
+          if (part === "body") {
+            const start = snap(clamp(from.start + by, lo, hi - length));
+            onZoomChange({ ...from, start, end: start + length });
+          } else if (part === "head") {
+            onZoomChange({
+              ...from,
+              start: snap(clamp(from.start + by, lo, from.end - MIN_ZOOM_LENGTH)),
+            });
+          } else {
+            onZoomChange({
+              ...from,
+              end: snap(clamp(from.end + by, from.start + MIN_ZOOM_LENGTH, hi)),
+            });
+          }
+        };
+
+        const release = () => {
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", release);
+          window.removeEventListener("pointercancel", release);
+          if (!moved && wasSelected) onZoomSelect(null);
+        };
+
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", release);
+        window.addEventListener("pointercancel", release);
+      },
+    [disabled, duration, onZoomChange, onZoomSelect, selectedZoom, timeAt, zooms],
+  );
+
+  const selectedRegion = zooms.find((z) => z.id === selectedZoom) ?? null;
+
   const first = trim.start / duration;
   const last = trim.end / duration;
   const trimmed = trim.start > 0 || trim.end < duration;
@@ -864,6 +950,94 @@ export function TrimBar({
               />
             </div>
 
+            {/* Zoom regions, under the picture's lane and on its axis. A press on
+                the bare lane puts the marker away. */}
+            {zooms.length > 0 && (
+              <div
+                className="relative mt-1 h-7"
+                onPointerDown={() => onZoomSelect(null)}
+              >
+                {zooms.map((region) => {
+                  const selected = region.id === selectedZoom;
+                  return (
+                    <div key={region.id}>
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Zoom ${formatSpeed(region.scale)}, ${formatPrecise(region.start, duration)} to ${formatPrecise(region.end, duration)}`}
+                        aria-pressed={selected}
+                        onPointerDown={dragZoom(region, "body")}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            onZoomSelect(selected ? null : region.id);
+                          }
+                        }}
+                        className={cn(
+                          "absolute inset-y-0 flex cursor-grab items-center justify-center overflow-hidden rounded-md bg-elevated text-[11px] tabular-nums ring-1 transition-colors duration-150 active:cursor-grabbing",
+                          "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+                          selected
+                            ? "text-foreground ring-brand"
+                            : "text-muted-foreground ring-stroke hover:text-foreground",
+                        )}
+                        style={{
+                          left: `calc(${at(region.start / duration)} + ${INSET}px)`,
+                          width: at((region.end - region.start) / duration),
+                        }}
+                      >
+                        {formatSpeed(region.scale)}
+                      </div>
+                      <LaneEdge
+                        label="Zoom start"
+                        position={at(region.start / duration)}
+                        onPointerDown={dragZoom(region, "head")}
+                      />
+                      <LaneEdge
+                        label="Zoom end"
+                        position={at(region.end / duration)}
+                        onPointerDown={dragZoom(region, "tail")}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* The selected region's level and its remove, shown only while one is
+                selected. The level chips are the speed pill's shape with a glass in
+                front, so the two rows of "2x" cannot be mistaken for each other. */}
+            {selectedRegion && (
+              <div className="mt-1.5 flex items-center gap-2">
+                <div
+                  role="group"
+                  aria-label="Zoom level"
+                  className="flex items-center gap-0.5 rounded-full bg-track p-0.5"
+                >
+                  <ZoomInIcon
+                    className="mx-1.5 size-3.5 shrink-0 text-muted-foreground"
+                    aria-hidden="true"
+                  />
+                  {ZOOM_LEVELS.map((level) => (
+                    <Chip
+                      key={level}
+                      active={selectedRegion.scale === level}
+                      onClick={() => onZoomChange({ ...selectedRegion, scale: level })}
+                    >
+                      {formatSpeed(level)}
+                    </Chip>
+                  ))}
+                </div>
+                <span className="min-w-0 truncate text-[13px] text-muted-foreground">
+                  Drag the target on the picture to aim it
+                </span>
+                <div className="ml-auto">
+                  <Transport label="Remove the zoom" onClick={onZoomRemove}>
+                    <XIcon className="size-4" aria-hidden="true" />
+                  </Transport>
+                </div>
+              </div>
+            )}
+
             {/* Laid under the picture on the same axis, so where the sound starts is
                 read against where the clip does rather than described in a number. */}
             {soundtrack && (
@@ -909,12 +1083,12 @@ export function TrimBar({
                   </TooltipContent>
                 </Tooltip>
 
-                <SoundEdge
+                <LaneEdge
                   label="Soundtrack start"
                   position={at(soundtrack.offset / duration)}
                   onPointerDown={dragSound("head")}
                 />
-                <SoundEdge
+                <LaneEdge
                   label="Soundtrack end"
                   position={at(
                     (soundtrack.offset +
@@ -977,27 +1151,38 @@ export function TrimBar({
             {/* Wraps, so on a phone the speed and the mutes drop to a second line
                 rather than pushing past the panel's edge. */}
             <div className="mt-2.5 flex flex-wrap items-center gap-x-1 gap-y-2">
-              {soundtrack ? (
-                <>
-                  <MusicIcon
-                    className="size-3.5 shrink-0 text-muted-foreground"
-                    aria-hidden="true"
-                  />
-                  <span className="min-w-0 truncate text-[13px] text-muted-foreground">
-                    {soundtrack.name}
-                  </span>
-                </>
-              ) : (
+              <div className="flex min-w-0 items-center gap-1">
+                {soundtrack ? (
+                  <>
+                    <MusicIcon
+                      className="ml-2 size-3.5 shrink-0 text-muted-foreground"
+                      aria-hidden="true"
+                    />
+                    <span className="min-w-0 truncate text-[13px] text-muted-foreground">
+                      {soundtrack.name}
+                    </span>
+                  </>
+                ) : (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => fileRef.current?.click()}
+                    className="text-muted-foreground hover:text-foreground"
+                  >
+                    <MusicIcon className="size-3.5" aria-hidden="true" />
+                    Add a soundtrack
+                  </Button>
+                )}
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => fileRef.current?.click()}
-                  className="text-muted-foreground hover:text-foreground"
+                  onClick={onZoomAdd}
+                  className="shrink-0 text-muted-foreground hover:text-foreground"
                 >
-                  <MusicIcon className="size-3.5" aria-hidden="true" />
-                  Add a soundtrack
+                  <ZoomInIcon className="size-3.5" aria-hidden="true" />
+                  Add a zoom
                 </Button>
-              )}
+              </div>
 
               <div className="ml-auto flex items-center gap-2">
                 {/* The same recessed pill as the transport, with text chips rather
@@ -1013,21 +1198,13 @@ export function TrimBar({
                     aria-hidden="true"
                   />
                   {SPEED_OPTIONS.map((rate) => (
-                    <button
+                    <Chip
                       key={rate}
-                      type="button"
-                      aria-pressed={speed === rate}
+                      active={speed === rate}
                       onClick={() => onSpeedChange(rate)}
-                      className={cn(
-                        "h-7 cursor-pointer rounded-full px-2 text-[13px] tabular-nums",
-                        "transition-all duration-150 active:scale-[0.97]",
-                        speed === rate
-                          ? "bg-track-active text-foreground shadow-sm"
-                          : "text-muted-foreground hover:text-foreground",
-                      )}
                     >
                       {formatSpeed(rate)}
-                    </button>
+                    </Chip>
                   ))}
                 </div>
 
@@ -1133,9 +1310,9 @@ function Wave({
   );
 }
 
-/** An edge of the soundtrack's region. Narrower than a trim handle, since it
- * sits on a shorter lane and there are four grips in one column of pixels. */
-function SoundEdge({
+/** An edge of a soundtrack or zoom region. Narrower than a trim handle, since
+ * it sits on a shorter lane and there are four grips in one column of pixels. */
+function LaneEdge({
   label,
   position,
   onPointerDown,
@@ -1181,6 +1358,34 @@ function ticks(duration: number, width: number): Tick[] {
     marks.push({ at, major, label: major ? axisLabel(at, step, duration) : undefined });
   }
   return marks;
+}
+
+/** A text option inside a recessed pill, the shape the speed and zoom levels share. */
+function Chip({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      className={cn(
+        "h-7 cursor-pointer rounded-full px-2 text-[13px] tabular-nums",
+        "transition-all duration-150 active:scale-[0.97]",
+        active
+          ? "bg-track-active text-foreground shadow-sm"
+          : "text-muted-foreground hover:text-foreground",
+      )}
+    >
+      {children}
+    </button>
+  );
 }
 
 function Transport({
