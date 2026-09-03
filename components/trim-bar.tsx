@@ -796,8 +796,10 @@ export function TrimBar({
     >
       {/* Equal side columns rather than `justify-between`, which hands the
           middle whatever is left and walks the transport sideways every time
-          the readout gains a digit or picks up its "of" clause. */}
-      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+          the readout gains a digit or picks up its "of" clause. Below `@sm` of
+          the panel the three cannot share a line, so the clocks take one and
+          the pill sits centred under them. */}
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 @max-sm:grid-cols-2">
         {/* Where the playhead is, exactly. The lane says roughly, and roughly
             is not enough to cut on. */}
         <span
@@ -809,7 +811,7 @@ export function TrimBar({
 
         {/* The same recessed pill the canvas toolbar gives its zoom cluster, so
             the two groups of icon buttons read as the same kind of thing. */}
-        <div className="flex items-center gap-0.5 rounded-full bg-track p-0.5">
+        <div className="flex items-center gap-0.5 rounded-full bg-track p-0.5 @max-sm:order-3 @max-sm:col-span-2 @max-sm:mt-1 @max-sm:justify-self-center">
           <Transport label="Back to the start" onClick={stop}>
             <SquareIcon className="size-3.5" aria-hidden="true" />
           </Transport>
@@ -1179,7 +1181,9 @@ export function TrimBar({
                 )}
               </div>
 
-              <div className="ml-auto flex items-center gap-2">
+              {/* Wraps too, so at 320px the mutes drop under the speed pill rather
+            than pushing the row past the panel. */}
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
                 {/* The same recessed pill as the transport, with text chips rather
                     than glyphs: "2x" is its own label and needs no tooltip. The gauge
                     is what says the numbers are a rate rather than a zoom. */}

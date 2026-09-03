@@ -889,6 +889,16 @@ reachable by scrolling.
 Keyboard shortcut hints show from `@3xl` (48rem of panel). Below that the
 actions fit only without them, and a phone has no command key anyway.
 
+The trim bar's transport row is three columns, and below `@sm` (24rem of
+panel) it is two lines: the clocks on the first, the pill centred on the
+second, since a 296px panel cannot hold a clock, five buttons and a duration
+with its chevron side by side.
+
+The trim bar's bottom row wraps in two stages: the row itself, so the speed
+pill drops under the soundtrack and zoom controls below about 430px, and the
+right cluster inside it, so at 320px the mutes drop under the speed pill
+rather than pushing the row past the panel.
+
 ## Scroll edges
 
 `ScrollFade` fades the edge a scroll region continues past, using `mask-image`
