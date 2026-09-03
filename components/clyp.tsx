@@ -626,7 +626,9 @@ export function Clyp() {
       try {
         if (exportsVideo) {
           const video = videoRef.current;
-          if (!video || !media.blob) throw new Error("That clip is not loaded");
+          if (!video || !media.blob || !trim) {
+            throw new Error("That clip is not loaded");
+          }
 
           const controller = new AbortController();
           abortRef.current = controller;
@@ -636,7 +638,7 @@ export function Clyp() {
             video,
             source: media.blob,
             scale: options.quality,
-            trim: trim ?? undefined,
+            trim,
             audio: options.audio,
             soundtrack: soundtrack ?? undefined,
             music: options.music,

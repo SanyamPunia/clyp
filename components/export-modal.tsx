@@ -378,12 +378,12 @@ export function ExportModal({
 
           {/* A video is decoded and encoded frame by frame, so it can run for
               a while. A PNG is one shot and has nothing to report.
-              Zero means the frame is still being rasterized, which is one
-              `toPng` call with no fraction inside it to read. */}
+              Zero means the frame is still being rasterized and any soundtrack
+              mixed, neither of which has a fraction inside it to read. */}
           {pending && progress !== null && (
             <div className="flex flex-col gap-1.5">
               <div className="flex items-center justify-between text-[13px] text-muted-foreground">
-                <span>{progress === 0 ? "Rendering the frame" : "Encoding"}</span>
+                <span>{progress === 0 ? "Preparing" : "Encoding"}</span>
                 {progress > 0 && (
                   <span className="tabular-nums">
                     {Math.round(progress * 100)}%

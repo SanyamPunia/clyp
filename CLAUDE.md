@@ -210,6 +210,24 @@ padding, the radius, the shadow and the title bar.** That is a second renderer,
 it has to be kept in step with the DOM one forever, and the day it drifts the
 preview starts lying about the export.
 
+- **The encode runs in a worker.** `lib/video-render.ts` is the loop, written
+  against `OffscreenCanvas` and `ImageBitmap` and touching nothing on the
+  document. `lib/video-render.worker.ts` is the glue, spawned by `exportVideo`
+  through `new Worker(new URL(...), import.meta.url)`, which Turbopack bundles.
+  A minute of 1080p is seconds of solid work, and on the main thread that was
+  a frozen tab with a progress bar that could not move.
+  - **What needs the document stays on the main thread.** `toPng` reads the
+    DOM, the video's box is measured off it, and a laid soundtrack is mixed
+    through `OfflineAudioContext`, which no worker has. The chrome crosses as
+    a transferred `ImageBitmap` and the mix as one planar `Float32Array`,
+    since an `AudioBuffer` can neither be posted nor built in a worker. The
+    worker slices it into one-second `AudioSample`s and closes each one.
+  - **Terminating the worker is the cancel.** It releases the encoder and every
+    decoded frame in flight in one step, so the loop carries no signal. A
+    cancel is heard on the main thread after the raster and after the mix.
+  - One worker per export, terminated when the reply lands. The first export
+    pays for the worker's compile: measured at about 5 s for a 4 s clip
+    against 1.6 s for the next.
 - **`html-to-image` handles the `<video>` on its own.** `cloneVideoElement`
   draws the currently displayed frame into a canvas and substitutes an `<img>`
   carrying the element's computed style, so the radius and the shadow bake and
@@ -301,10 +319,10 @@ preview starts lying about the export.
   source export at exactly 3.000 s.
 - **Cancel aborts a running encode.** `handleExport` holds an `AbortController`
   for the length of one video export and the modal's Cancel calls it while
-  pending, since Escape and the backdrop stay blocked. The signal is checked
-  once per frame in the sample loop and once after the raster, which is the
-  earliest a cancel during `toPng` can be heard. An `AbortError` closes the
-  dialog and says nothing, because a cancel is not a failure.
+  pending, since Escape and the backdrop stay blocked. The signal terminates
+  the worker, and is checked once after the raster and once after the mix,
+  which are the earliest a cancel during either can be heard. An `AbortError`
+  closes the dialog and says nothing, because a cancel is not a failure.
 - **WebCodecs presence is read with `useSyncExternalStore`,** not from an
   effect: the lint rule forbids a synchronous `setState` in an effect body, and
   seeding state from `window` during render would not survive hydration. The
@@ -318,9 +336,9 @@ preview starts lying about the export.
   Play and pressing space would toggle twice. The page's own scroll is taken
   with `preventDefault`.
 - **Progress has two phases and only one of them has a fraction.** Zero means
-  the chrome is still rasterizing, which is one `toPng` call with nothing to
-  read inside it. Anything above zero is the encode, reported off the end of
-  each written frame so the first report is not also zero.
+  the export is still being prepared: the raster and any mix, neither with a
+  fraction to read inside it. Anything above zero is the encode, reported off
+  the end of each written frame so the first report is not also zero.
 - **The preview is `autoPlay loop muted playsInline`.** Muted and inline, or a
   browser refuses to play it without a gesture. Looping, because the canvas is
   a preview of styling rather than a player: there are no controls, and
@@ -544,12 +562,12 @@ the region's length on its own.
     to be switched off rather than letting the tab run out of memory
     mid-encode.
   - **So the export has two audio paths.** A laid track means a mix, which is
-    a whole decode of both sources into one buffer and goes out through
-    `AudioBufferSource`. The clip's own sound alone is the common case and
-    still streams sample by sample through `AudioSampleSource`, costing no
-    memory beyond the frames in flight. The buffer path also needs none of the
-    silence padding, since a buffer of the export's own length has the quiet
-    inside it rather than as a gap.
+    a whole decode of both sources into one buffer on the main thread, handed
+    to the worker as planar floats and written in one-second samples. The
+    clip's own sound alone is the common case and still streams sample by
+    sample inside the worker, costing no memory beyond the frames in flight.
+    The mix path also needs none of the silence padding, since a buffer of the
+    export's own length has the quiet inside it rather than as a gap.
   - **A track placed before the in point is skipped into, not shifted.** The
     schedule starts at zero and reads that much further into the file, so what
     plays at the first frame is the part of the track that lines up with it.

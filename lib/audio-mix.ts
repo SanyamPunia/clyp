@@ -44,12 +44,18 @@ const CHANNELS = 2;
 export const MAX_MIX_SECONDS = 180;
 
 export interface MixRequest {
-  /** The clip's own file, read for its audio track. Absent leaves it out. */
+  /**
+   * The clip's own file, read for its audio track. Absent leaves it out. Only
+   * meaningful at 1x: the clip's sound is not stretched, so the caller leaves
+   * it out at any other speed.
+   */
   clip?: Blob;
   /** The laid track and where it sits. Absent leaves it out. */
   soundtrack?: Soundtrack;
   /** The export's range on the clip's own timeline. */
   trim: Trim;
+  /** The playback rate, which is what maps the clip's axis onto the output's. */
+  speed?: number;
 }
 
 /**
@@ -64,16 +70,21 @@ export async function mixAudio({
   clip,
   soundtrack,
   trim,
+  speed = 1,
 }: MixRequest): Promise<AudioBuffer | null> {
   if (!clip && !soundtrack) return null;
 
-  const length = Math.max(trim.end - trim.start, 0);
+  // The output's length, not the source's: at 2x the buffer is half the trim.
+  const length = Math.max(trim.end - trim.start, 0) / speed;
   if (!length) return null;
 
   // Where the track's region lands inside the export, and which part of the
-  // file that is. A negative placement means it starts before the in point, so
-  // the schedule begins at zero and reads that much further in.
-  const at = soundtrack ? soundtrack.offset - trim.start : 0;
+  // file that is. The region is anchored to a source frame, so its place on
+  // the output's clock is that frame's, which at 2x is half as far in. The
+  // track itself plays at its own tempo from there. A negative placement means
+  // it starts before the in point, so the schedule begins at zero and reads
+  // that much further in.
+  const at = soundtrack ? (soundtrack.offset - trim.start) / speed : 0;
   const skipped = Math.max(-at, 0);
   const place = Math.max(at, 0);
   const from = soundtrack ? soundtrack.start + skipped : 0;
