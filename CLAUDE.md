@@ -578,6 +578,13 @@ position, so the marker never reached the file.
   region and seeks into it when the playhead is outside, since a marker for a
   zoom nobody can see is a dead control. A second press on the selected one
   without moving, or a press on the bare lane, deselects.
+- **The selected region's level and remove take the add button's slot** in
+  the bottom row, and give it back on deselect. The first build gave them a row
+  of their own between the lanes and the axis, with a sentence of hint beside
+  them, and the bar was five rows tall with its ruler pushed away from the
+  lanes it measures. The slot keeps the row count fixed and keeps the level
+  chips off the right side, where they would sit beside the speed pill as two
+  runs of "2x" that read as one control. The hint is the marker's tooltip.
 - **A region is not bounded by the trim.** Like a soundtrack, it lives on the
   file's axis, so trimming never moves or cuts it. One in the cut-away part
   plays nothing and is drawn over the rail there, which says so.

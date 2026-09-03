@@ -1003,41 +1003,6 @@ export function TrimBar({
               </div>
             )}
 
-            {/* The selected region's level and its remove, shown only while one is
-                selected. The level chips are the speed pill's shape with a glass in
-                front, so the two rows of "2x" cannot be mistaken for each other. */}
-            {selectedRegion && (
-              <div className="mt-1.5 flex items-center gap-2">
-                <div
-                  role="group"
-                  aria-label="Zoom level"
-                  className="flex items-center gap-0.5 rounded-full bg-track p-0.5"
-                >
-                  <ZoomInIcon
-                    className="mx-1.5 size-3.5 shrink-0 text-muted-foreground"
-                    aria-hidden="true"
-                  />
-                  {ZOOM_LEVELS.map((level) => (
-                    <Chip
-                      key={level}
-                      active={selectedRegion.scale === level}
-                      onClick={() => onZoomChange({ ...selectedRegion, scale: level })}
-                    >
-                      {formatSpeed(level)}
-                    </Chip>
-                  ))}
-                </div>
-                <span className="min-w-0 truncate text-[13px] text-muted-foreground">
-                  Drag the target on the picture to aim it
-                </span>
-                <div className="ml-auto">
-                  <Transport label="Remove the zoom" onClick={onZoomRemove}>
-                    <XIcon className="size-4" aria-hidden="true" />
-                  </Transport>
-                </div>
-              </div>
-            )}
-
             {/* Laid under the picture on the same axis, so where the sound starts is
                 read against where the clip does rather than described in a number. */}
             {soundtrack && (
@@ -1173,15 +1138,45 @@ export function TrimBar({
                     Add a soundtrack
                   </Button>
                 )}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={onZoomAdd}
-                  className="shrink-0 text-muted-foreground hover:text-foreground"
-                >
-                  <ZoomInIcon className="size-3.5" aria-hidden="true" />
-                  Add a zoom
-                </Button>
+                {/* One slot for the zoom: the add while nothing is selected, the
+                    selected region's level and remove while one is. Swapping them in
+                    place keeps the row's shape, and keeps the level chips away from
+                    the speed pill on the right, where two runs of "2x" side by side
+                    would read as one control. Deselecting brings the add back. */}
+                {selectedRegion ? (
+                  <div
+                    role="group"
+                    aria-label="Zoom level"
+                    className="flex shrink-0 items-center gap-0.5 rounded-full bg-track p-0.5"
+                  >
+                    <ZoomInIcon
+                      className="mx-1.5 size-3.5 shrink-0 text-muted-foreground"
+                      aria-hidden="true"
+                    />
+                    {ZOOM_LEVELS.map((level) => (
+                      <Chip
+                        key={level}
+                        active={selectedRegion.scale === level}
+                        onClick={() => onZoomChange({ ...selectedRegion, scale: level })}
+                      >
+                        {formatSpeed(level)}
+                      </Chip>
+                    ))}
+                    <Transport label="Remove the zoom" onClick={onZoomRemove}>
+                      <XIcon className="size-4" aria-hidden="true" />
+                    </Transport>
+                  </div>
+                ) : (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={onZoomAdd}
+                    className="shrink-0 text-muted-foreground hover:text-foreground"
+                  >
+                    <ZoomInIcon className="size-3.5" aria-hidden="true" />
+                    Add a zoom
+                  </Button>
+                )}
               </div>
 
               <div className="ml-auto flex items-center gap-2">

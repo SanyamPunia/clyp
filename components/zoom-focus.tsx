@@ -2,6 +2,11 @@
 
 import type React from "react";
 
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type { ZoomFocus as Focus } from "@/lib/clip-zoom";
 import { EXPORT_IGNORE } from "@/lib/raster";
 
@@ -83,33 +88,40 @@ export function ZoomFocusMarker({
     onChange({ x: clamp(focus.x + move[0]), y: clamp(focus.y + move[1]) });
   };
 
+  // The tooltip is portaled, so it is never inside the frame. It carries what
+  // used to be a sentence of its own under the lane.
   return (
-    <div
-      {...{ [EXPORT_IGNORE]: "" }}
-      role="button"
-      tabIndex={0}
-      aria-label="Zoom target. Drag or use the arrow keys to aim it."
-      onPointerDown={drag}
-      onKeyDown={nudge}
-      onClick={(event) => event.stopPropagation()}
-      className="absolute z-10 grid size-8 cursor-move touch-none place-items-center rounded-full outline-none focus-visible:ring-[3px] focus-visible:ring-white/50"
-      style={{
-        left: `${focus.x * 100}%`,
-        top: `${focus.y * 100}%`,
-        transform: `translate(-50%, -50%) scale(${1 / canvasZoom})`,
-        border: "2px solid rgba(255,255,255,0.95)",
-        boxShadow:
-          "0 0 0 1px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(0,0,0,0.45)",
-      }}
-    >
-      <span
-        aria-hidden="true"
-        className="block size-1.5 rounded-full"
-        style={{
-          backgroundColor: "rgba(255,255,255,0.95)",
-          boxShadow: "0 0 0 1px rgba(0,0,0,0.45)",
-        }}
-      />
-    </div>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div
+          {...{ [EXPORT_IGNORE]: "" }}
+          role="button"
+          tabIndex={0}
+          aria-label="Zoom target. Drag or use the arrow keys to aim it."
+          onPointerDown={drag}
+          onKeyDown={nudge}
+          onClick={(event) => event.stopPropagation()}
+          className="absolute z-10 grid size-8 cursor-move touch-none place-items-center rounded-full outline-none focus-visible:ring-[3px] focus-visible:ring-white/50"
+          style={{
+            left: `${focus.x * 100}%`,
+            top: `${focus.y * 100}%`,
+            transform: `translate(-50%, -50%) scale(${1 / canvasZoom})`,
+            border: "2px solid rgba(255,255,255,0.95)",
+            boxShadow:
+              "0 0 0 1px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(0,0,0,0.45)",
+          }}
+        >
+          <span
+            aria-hidden="true"
+            className="block size-1.5 rounded-full"
+            style={{
+              backgroundColor: "rgba(255,255,255,0.95)",
+              boxShadow: "0 0 0 1px rgba(0,0,0,0.45)",
+            }}
+          />
+        </div>
+      </TooltipTrigger>
+      <TooltipContent>Drag to aim the zoom, arrow keys to nudge</TooltipContent>
+    </Tooltip>
   );
 }
