@@ -6,6 +6,8 @@ import {
   ChevronDownIcon,
   ChevronUpIcon,
   GaugeIcon,
+  Loader2Icon,
+  MousePointer2Icon,
   Music2Icon,
   MusicIcon,
   PauseIcon,
@@ -141,6 +143,8 @@ interface TrimBarProps {
    */
   zooms: ZoomRegion[];
   selectedZoom: string | null;
+  /** The selected region's motion is still being read. */
+  zoomAnalyzing: boolean;
   onZoomAdd: () => void;
   onZoomChange: (zoom: ZoomRegion) => void;
   onZoomSelect: (id: string | null) => void;
@@ -200,6 +204,7 @@ export function TrimBar({
   onSpeedChange,
   zooms,
   selectedZoom,
+  zoomAnalyzing,
   onZoomAdd,
   onZoomChange,
   onZoomSelect,
@@ -1164,6 +1169,24 @@ export function TrimBar({
                         {formatSpeed(level)}
                       </Chip>
                     ))}
+                    {/* Follow the action or hold the aim. A toggle's label names
+                        what a press will do. While the motion is being read the
+                        glyph spins, which is the only wait in the editor. */}
+                    <Transport
+                      label={
+                        selectedRegion.follow ? "Aim by hand instead" : "Follow the action"
+                      }
+                      onClick={() =>
+                        onZoomChange({ ...selectedRegion, follow: !selectedRegion.follow })
+                      }
+                      pressed={Boolean(selectedRegion.follow)}
+                    >
+                      {zoomAnalyzing ? (
+                        <Loader2Icon className="size-4 animate-spin" aria-hidden="true" />
+                      ) : (
+                        <MousePointer2Icon className="size-4" aria-hidden="true" />
+                      )}
+                    </Transport>
                     <Transport label="Remove the zoom" onClick={onZoomRemove}>
                       <XIcon className="size-4" aria-hidden="true" />
                     </Transport>

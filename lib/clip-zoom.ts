@@ -12,7 +12,16 @@
  * preview's frame loop, which sets a CSS transform on the video, and the
  * worker's encode loop, which draws a source rectangle of each decoded frame.
  * The two cannot disagree, because neither has any arithmetic of its own.
+ *
+ * A region can follow the action instead of holding its aim. The motion track
+ * for its span is read from the picture by `lib/motion.ts`, and `zoomAt` turns
+ * the action's position into a focus that keeps it centred, clamped so the
+ * window never leaves the picture. The regions carry only the flag. The
+ * tracks are handed in beside them, keyed by region id, since they are derived
+ * from the file rather than edits on it.
  */
+
+import { type MotionTrack, motionAt } from "@/lib/motion";
 
 export interface ZoomFocus {
   x: number;
@@ -28,7 +37,15 @@ export interface ZoomRegion {
   scale: number;
   /** The point the picture closes in on, 0 to 1 in each axis. */
   focus: ZoomFocus;
+  /**
+   * Follow the action rather than hold the aim. `focus` is then the fallback
+   * for a stretch with no motion to follow.
+   */
+  follow?: boolean;
 }
+
+/** The motion tracks, by region id, for the regions that follow. */
+export type MotionTracks = Record<string, MotionTrack>;
 
 /** What the picture is doing at one instant. */
 export interface ZoomState {
@@ -70,6 +87,7 @@ export function zoomAt(
   regions: readonly ZoomRegion[],
   time: number,
   speed = 1,
+  tracks: MotionTracks = {},
 ): ZoomState | null {
   const region = regions.find((r) => time >= r.start && time < r.end);
   if (!region) return null;
@@ -79,10 +97,35 @@ export function zoomAt(
     ramp > 0
       ? clamp(Math.min(time - region.start, region.end - time) / ramp, 0, 1)
       : 1;
+  const scale = 1 + (region.scale - 1) * easeInOut(progress);
+
+  const track = region.follow ? tracks[region.id] : undefined;
+  const action = track ? motionAt(track, time) : null;
 
   return {
-    scale: 1 + (region.scale - 1) * easeInOut(progress),
-    focus: region.focus,
+    scale,
+    focus: action ? centredOn(action, scale) : region.focus,
+  };
+}
+
+/**
+ * The focus that puts `point` at the centre of the zoomed window, clamped so
+ * the window stays inside the picture.
+ *
+ * A focus is the point that holds still while the picture grows, so a focus at
+ * the action keeps the action where it was, not centred. The window's left
+ * edge is `focus.x * (1 - 1 / scale)` and its width is `1 / scale`, so the
+ * point sits at the centre when the focus is the point pulled in by half a
+ * window and rescaled. At the picture's edges that runs past 0 or 1, and the
+ * clamp is what holds the window against the edge instead.
+ */
+export function centredOn(point: ZoomFocus, scale: number): ZoomFocus {
+  const window = 1 / scale;
+  const span = 1 - window;
+  if (span <= 1e-6) return point;
+  return {
+    x: clamp((point.x - window / 2) / span, 0, 1),
+    y: clamp((point.y - window / 2) / span, 0, 1),
   };
 }
 

@@ -19,6 +19,13 @@ const clamp = (value: number) => Math.min(Math.max(value, 0), 1);
 interface ZoomFocusProps {
   focus: Focus;
   /**
+   * Following the action rather than aimed. The marker then shows where the
+   * zoom is looking, positioned every frame by its owner through `ref`, and
+   * takes no input: there is nothing to aim.
+   */
+  live?: boolean;
+  ref?: React.Ref<HTMLDivElement>;
+  /**
    * The canvas zoom, which the marker is counter-scaled by. It sits inside the
    * frame, so it would otherwise shrink with the picture and be a speck at 37%.
    */
@@ -40,6 +47,8 @@ interface ZoomFocusProps {
  */
 export function ZoomFocusMarker({
   focus,
+  live = false,
+  ref,
   canvasZoom,
   box,
   onChange,
@@ -88,12 +97,46 @@ export function ZoomFocusMarker({
     onChange({ x: clamp(focus.x + move[0]), y: clamp(focus.y + move[1]) });
   };
 
+  const ring = (
+    <span
+      aria-hidden="true"
+      className="block size-1.5 rounded-full"
+      style={{
+        backgroundColor: "rgba(255,255,255,0.95)",
+        boxShadow: "0 0 0 1px rgba(0,0,0,0.45)",
+      }}
+    />
+  );
+  const look = {
+    transform: `translate(-50%, -50%) scale(${1 / canvasZoom})`,
+    border: "2px solid rgba(255,255,255,0.95)",
+    boxShadow: "0 0 0 1px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(0,0,0,0.45)",
+  };
+
+  // Live, the marker is a readout. Its position is the loop's, so React sets
+  // none, and pointer events pass through to the picture underneath.
+  if (live) {
+    return (
+      <div
+        ref={ref}
+        {...{ [EXPORT_IGNORE]: "" }}
+        role="img"
+        aria-label="Where the zoom is following"
+        className="pointer-events-none absolute z-10 grid size-8 place-items-center rounded-full"
+        style={look}
+      >
+        {ring}
+      </div>
+    );
+  }
+
   // The tooltip is portaled, so it is never inside the frame. It carries what
   // used to be a sentence of its own under the lane.
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <div
+          ref={ref}
           {...{ [EXPORT_IGNORE]: "" }}
           role="button"
           tabIndex={0}
@@ -103,22 +146,12 @@ export function ZoomFocusMarker({
           onClick={(event) => event.stopPropagation()}
           className="absolute z-10 grid size-8 cursor-move touch-none place-items-center rounded-full outline-none focus-visible:ring-[3px] focus-visible:ring-white/50"
           style={{
+            ...look,
             left: `${focus.x * 100}%`,
             top: `${focus.y * 100}%`,
-            transform: `translate(-50%, -50%) scale(${1 / canvasZoom})`,
-            border: "2px solid rgba(255,255,255,0.95)",
-            boxShadow:
-              "0 0 0 1px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(0,0,0,0.45)",
           }}
         >
-          <span
-            aria-hidden="true"
-            className="block size-1.5 rounded-full"
-            style={{
-              backgroundColor: "rgba(255,255,255,0.95)",
-              boxShadow: "0 0 0 1px rgba(0,0,0,0.45)",
-            }}
-          />
+          {ring}
         </div>
       </TooltipTrigger>
       <TooltipContent>Drag to aim the zoom, arrow keys to nudge</TooltipContent>

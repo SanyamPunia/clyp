@@ -39,12 +39,15 @@ import {
 import { WindowNavbar } from "@/components/window-navbar";
 import { ZoomFocusMarker } from "@/components/zoom-focus";
 import {
+  type MotionTracks,
   type ZoomRegion,
   DEFAULT_ZOOM_LEVEL,
   newZoomId,
   placeZoom,
   zoomAt,
 } from "@/lib/clip-zoom";
+import { MOTION_LEAD, motionAt } from "@/lib/motion";
+import { readMotion } from "@/lib/read-motion";
 import { rasterize } from "@/lib/raster";
 import {
   defaultCustomGradient,
@@ -262,6 +265,15 @@ export function Clyp() {
   const [zooms, setZooms] = useState<ZoomRegion[]>([]);
   const [selectedZoom, setSelectedZoom] = useState<string | null>(null);
   const [removeZoomOpen, setRemoveZoomOpen] = useState(false);
+  /**
+   * The motion tracks for the regions that follow, by region id, and the ids
+   * still being read. Derived from the file rather than edits on it, so they
+   * are not stored: a restore reads them again.
+   */
+  const [tracks, setTracks] = useState<MotionTracks>({});
+  const [analyzing, setAnalyzing] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const [soundtrack, setSoundtrack] = useState<Soundtrack | null>(null);
   /**
    * The preview's own volume, not the export's, and one per source.
@@ -327,6 +339,12 @@ export function Clyp() {
   // For the zoom's frame loop, which is bound once per clip and would
   // otherwise close over the regions it mounted with. Written in an effect.
   const zoomsRef = useRef(zooms);
+  const tracksRef = useRef(tracks);
+  const selectedZoomRef = useRef(selectedZoom);
+  /** Which span each following region's track was read for, by id. */
+  const readSpansRef = useRef(new Map<string, string>());
+  /** The marker while it follows, positioned by the loop rather than React. */
+  const liveMarkerRef = useRef<HTMLDivElement>(null);
   /** True while the focus marker is being dragged. */
   const aimingRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -424,7 +442,9 @@ export function Clyp() {
 
   useEffect(() => {
     zoomsRef.current = zooms;
-  }, [zooms]);
+    tracksRef.current = tracks;
+    selectedZoomRef.current = selectedZoom;
+  }, [zooms, tracks, selectedZoom]);
 
   /**
    * Takes over from the loader in `lib/media.ts`, which has already read and
@@ -443,6 +463,8 @@ export function Clyp() {
     setSpeed(1);
     setZooms([]);
     setSelectedZoom(null);
+    setTracks({});
+    readSpansRef.current.clear();
     // Audible again for a new clip, whatever the last one was left at.
     setMuted(false);
     setMusicMuted(false);
@@ -585,9 +607,66 @@ export function Clyp() {
 
   const removeZoom = useCallback(() => {
     setZooms((previous) => previous.filter((r) => r.id !== selectedZoom));
+    setTracks((previous) => {
+      if (!selectedZoom || !(selectedZoom in previous)) return previous;
+      const next = { ...previous };
+      delete next[selectedZoom];
+      return next;
+    });
+    if (selectedZoom) readSpansRef.current.delete(selectedZoom);
     setSelectedZoom(null);
     setRemoveZoomOpen(false);
   }, [selectedZoom]);
+
+  /**
+   * Reads the motion for every region that follows, a moment after its span
+   * settles.
+   *
+   * Keyed on the region's span, so a drag rewrites the key and the track is
+   * read again for the new stretch, and a reply for a span that has since
+   * moved on is dropped. The read starts a little before the region so the
+   * smoothing has settled by the time the region does. A track is kept when
+   * follow is switched off, since switching it back on is then instant.
+   */
+  const clipBlob = media?.kind === "video" ? media.blob : undefined;
+
+  useEffect(() => {
+    if (!clipBlob) return;
+
+    const stale = zooms.filter(
+      (z) =>
+        z.follow && readSpansRef.current.get(z.id) !== `${z.start}:${z.end}`,
+    );
+    if (stale.length === 0) return;
+
+    const timer = window.setTimeout(() => {
+      for (const region of stale) {
+        const span = `${region.start}:${region.end}`;
+        readSpansRef.current.set(region.id, span);
+        setAnalyzing((previous) => new Set(previous).add(region.id));
+
+        readMotion({
+          source: clipBlob,
+          from: region.start - MOTION_LEAD,
+          to: region.end,
+        })
+          .then((track) => {
+            // Superseded by a later drag, or the region is gone.
+            if (readSpansRef.current.get(region.id) !== span) return;
+            setTracks((previous) => ({ ...previous, [region.id]: track }));
+          })
+          .catch((error: Error) => toast.error(error.message))
+          .finally(() =>
+            setAnalyzing((previous) => {
+              const next = new Set(previous);
+              next.delete(region.id);
+              return next;
+            }),
+          );
+      }
+    }, EDITS_DEBOUNCE);
+    return () => window.clearTimeout(timer);
+  }, [clipBlob, zooms]);
 
   // Only for a target shape, which is the only thing that reads it.
   useEffect(() => {
@@ -890,6 +969,7 @@ export function Clyp() {
             trim,
             speed,
             zooms,
+            tracks,
             audio: options.audio,
             soundtrack: soundtrack ?? undefined,
             music: options.music,
@@ -935,7 +1015,7 @@ export function Clyp() {
         setProgress(null);
       }
     },
-    [exportAction, exportsVideo, media, soundtrack, speed, trim, zooms],
+    [exportAction, exportsVideo, media, soundtrack, speed, tracks, trim, zooms],
   );
 
   const handleCancelExport = useCallback(() => {
@@ -993,12 +1073,34 @@ export function Clyp() {
 
       const state = aimingRef.current
         ? null
-        : zoomAt(zoomsRef.current, video.currentTime, speed);
+        : zoomAt(zoomsRef.current, video.currentTime, speed, tracksRef.current);
       const transform = state && state.scale > 1.0001 ? `scale(${state.scale})` : "";
       const origin = state ? `${state.focus.x * 100}% ${state.focus.y * 100}%` : "";
       if (video.style.transform !== transform) video.style.transform = transform;
       if (video.style.transformOrigin !== origin) {
         video.style.transformOrigin = origin;
+      }
+
+      // The marker of a following region shows where the action is, written
+      // here like the playhead rather than rendered: it moves every frame.
+      // Projected through the zoom, since the marker sits beside the video
+      // rather than inside its transform: a point of the picture shows at the
+      // focus plus its distance from the focus times the scale. The hand-aimed
+      // marker needs none of this, because the focus is the one point a
+      // transform leaves where it was.
+      const marker = liveMarkerRef.current;
+      const region = zoomsRef.current.find((r) => r.id === selectedZoomRef.current);
+      if (marker && region?.follow) {
+        const track = tracksRef.current[region.id];
+        const at = (track && motionAt(track, video.currentTime)) ?? region.focus;
+        const shown = state
+          ? {
+              x: state.focus.x + (at.x - state.focus.x) * state.scale,
+              y: state.focus.y + (at.y - state.focus.y) * state.scale,
+            }
+          : at;
+        marker.style.left = `${shown.x * 100}%`;
+        marker.style.top = `${shown.y * 100}%`;
       }
     };
 
@@ -1466,6 +1568,8 @@ export function Clyp() {
                                 />
                                 {selectedRegion && (
                                   <ZoomFocusMarker
+                                    ref={liveMarkerRef}
+                                    live={Boolean(selectedRegion.follow)}
                                     focus={selectedRegion.focus}
                                     canvasZoom={zoom}
                                     box={clipBoxRef}
@@ -1576,6 +1680,9 @@ export function Clyp() {
               onSpeedChange={handleSpeedChange}
               zooms={zooms}
               selectedZoom={selectedZoom}
+              zoomAnalyzing={
+                selectedZoom !== null && analyzing.has(selectedZoom)
+              }
               onZoomAdd={addZoom}
               onZoomChange={updateZoom}
               onZoomSelect={selectZoom}
