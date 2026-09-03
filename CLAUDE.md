@@ -414,9 +414,10 @@ have to agree about where a second is.
 - **`clipSeconds` in `clyp.tsx` is the one length everything reads**, so the
   toolbar, the duration readout, the size estimate and the encode cannot
   describe a length nobody asked for.
-- **The trim is not persisted, the same call zoom makes.** It is an edit on the
-  draft rather than part of it, and putting it in the stored record would
-  rewrite the whole Blob on every drag of a handle.
+- **The trim is stored under the edits key, never beside the Blob.** It is an
+  edit on the draft rather than part of it, and putting it in the media record
+  would rewrite the whole Blob on every drag of a handle. See Draft
+  persistence.
 - The shortest a trim may leave is `MIN_TRIM`, 0.2 s. Arrow keys step 0.1 s and
   Shift steps 1 s, on both handles, which are real sliders with their own
   labels and values.
@@ -507,7 +508,7 @@ have to agree about where a second is.
 
 `speed` in `clyp.tsx` is the clip's playback rate, one of `SPEED_OPTIONS` in
 `lib/video-export.ts` (1, 1.5, 2, 3), set from a chip pill in the trim bar's
-bottom row. It is an edit like the trim and is not persisted. The preview plays
+bottom row. It is an edit like the trim and is stored with it. The preview plays
 at it through `playbackRate`, and the export divides every timestamp by it, so
 a 4 s clip at 2x is a 2.000 s file. Verified: 120 source frames at 30 fps
 export as 120 frames at 60 fps over 2.000 s.
@@ -542,8 +543,8 @@ export as 120 frames at 60 fps over 2.000 s.
 the clip on the source's axis, like the trim, a level from `ZOOM_LEVELS` (1.5,
 2, 3), and a focus point as fractions of the picture, so it means the same
 thing in the preview at any canvas zoom and in the export at any scale. The
-regions live in `clyp.tsx` beside the trim and the speed and are not
-persisted, for the same reason those are not.
+regions live in `clyp.tsx` beside the trim and the speed and are stored with
+them under the edits key.
 
 Verified through the export, which is the only place it can be proved. A 2x
 region aimed at a quarter in from the top left, on a 640x360 clip exported at
@@ -802,9 +803,10 @@ the region's length on its own.
 - **A dropped sound file is routed on the file rather than on what the canvas
   holds**, so dropping a track never clears the clip it was meant to go with.
   Paste works the same way.
-- **The file persists and the placement does not**, the same split the trim
-  makes: the file is an asset the user supplied, where it sits is an edit on
-  one, and storing the placement would rewrite both Blobs on every drag.
+- **The file and the placement are stored apart**, the same split the trim
+  makes: the file is an asset the user supplied and lives beside the clip's
+  Blob, where it sits is an edit and lives under the edits key, so a drag
+  never rewrites either Blob.
 - **The soundtrack is restored from inside the media's own callback.**
   `loadMedia` clears it, since a soundtrack placed against a clip that has been
   replaced means nothing, so run side by side the two raced and the soundtrack
@@ -862,16 +864,40 @@ Style options are a few hundred bytes and stay in localStorage, merged over
 `DEFAULT_STYLE` on read so an object written by an older build cannot leave a
 field undefined.
 
+**The clip's edits are stored under a key of their own, `edits`, in the same
+IndexedDB store.** The trim, the speed, the zoom regions and the soundtrack's
+placement are a few hundred bytes. They were not stored at all at first,
+because the only record held the Blob and rewriting forty megabytes on every
+drag of a handle was out of the question. A second key costs nothing to
+rewrite, so the edits follow every change on a 300 ms debounce, which a drag
+settles well inside, and the Blob is never touched.
+
+- **The record names the clip it belongs to**: the file's name, size and
+  duration. A restore applies it only when the restored clip matches on size
+  and duration, so edits made on one file never cut a different one, and a
+  stale record after a new drop is simply overwritten.
+- **It is applied from inside the media's restore callback**, after
+  `loadMedia`, which resets every edit for a new clip and would otherwise wipe
+  what was just restored. The soundtrack's placement is applied inside the
+  soundtrack's own restore for the same reason, clamped to the track's length.
+- **Everything is clamped to the restored duration and snapped to the frame
+  grid on the way in.** A record that disagrees with its file can never cut
+  past the end. A speed outside `SPEED_OPTIONS` falls back to 1.
+- An image has no edits and clears the key. Removing the clip clears it. The
+  fold and the selected zoom are view state and are not stored.
+
 Reading happens on the client only, inside a promise rather than the effect
 body. Seeding state from storage during render would break hydration, because
 neither store exists on the server. Nothing is written until the restore has
 run, or the first render would overwrite the draft with defaults.
 
-**`restored` flips only once the media is in place**, from inside the loader's
-callback. It used to flip as soon as the record was read, while the file was
-still being probed, and every persist effect then ran one pass against the
-defaults: the media effect deleted the Blob and rewrote it a moment later,
-forty megabytes for nothing on every reload. A load that fails toasts and
+**`restored` flips only once the media is in place and its edits applied**,
+from inside the loader's callback. It used to flip as soon as the record was
+read, while the file was still being probed, and every persist effect then ran
+one pass against the defaults: the media effect deleted the Blob and rewrote
+it a moment later, forty megabytes for nothing on every reload, and the edits
+effect deleted the edits before the restore had read them, so the first
+version of the edits store restored nothing. A load that fails toasts and
 flips it anyway, so the session still persists what comes next.
 
 Every storage call swallows its own errors and reports absence. A private

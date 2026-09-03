@@ -69,14 +69,23 @@ import {
   loadSoundtrack,
 } from "@/lib/media";
 import {
+  type StoredEdits,
+  deleteEdits,
   deleteMedia,
   deleteStyle,
+  readEdits,
   readMedia,
   readStyle,
+  writeEdits,
   writeMedia,
   writeStyle,
 } from "@/lib/storage";
-import { EDIT_FPS, canExportVideo, exportVideo } from "@/lib/video-export";
+import {
+  EDIT_FPS,
+  SPEED_OPTIONS,
+  canExportVideo,
+  exportVideo,
+} from "@/lib/video-export";
 import { download, downloadBlob, filenameFor } from "@/lib/download";
 import { cn } from "@/lib/utils";
 import type {
@@ -196,6 +205,12 @@ const TIMING = {
   toolbarMeta: 120, // dimensions readout rises in
 };
 
+/** How long an edit sits before it is written. A drag settles well inside it. */
+const EDITS_DEBOUNCE = 300;
+
+const clamp = (value: number, low: number, high: number) =>
+  Math.min(Math.max(value, low), Math.max(low, high));
+
 const DEFAULT_STYLE: StyleOptions = {
   gradientId: defaultGradientId,
   gradientAngle: 180,
@@ -227,23 +242,22 @@ export function Clyp() {
   const [dimensions, setDimensions] = useState<{ w: number; h: number } | null>(
     null,
   );
-  // The clip's in and out points, null for an image. Not persisted, the same
-  // call zoom makes: it is an edit on the draft rather than part of it, and
-  // writing it would rewrite the whole Blob on every drag of a handle.
+  // The clip's in and out points, null for an image. An edit on the draft
+  // rather than part of it, so it is stored under the edits key rather than
+  // beside the Blob, which must not be rewritten on every drag of a handle.
   const [trim, setTrim] = useState<Trim | null>(null);
   /**
-   * The clip's playback rate, an edit like the trim and not persisted for the
-   * same reason. The preview plays at it and the export writes at it, so the
-   * two agree, and it is the one place the clip's own sound gives way: past
-   * 1x there is no stretch that keeps the pitch, so it is muted here and left
-   * out of the file.
+   * The clip's playback rate, an edit like the trim and stored with it. The
+   * preview plays at it and the export writes at it, so the two agree, and it
+   * is the one place the clip's own sound gives way: past 1x there is no
+   * stretch that keeps the pitch, so it is muted here and left out of the file.
    */
   const [speed, setSpeed] = useState(1);
   /**
    * Stretches of the clip that close in on a point of the picture. On the
-   * source's axis like the trim, and not persisted like it. `selectedZoom` is
-   * the one whose focus marker is on the picture and whose level the bar
-   * offers chips for.
+   * source's axis like the trim, and stored with it. `selectedZoom` is the one
+   * whose focus marker is on the picture and whose level the bar offers chips
+   * for.
    */
   const [zooms, setZooms] = useState<ZoomRegion[]>([]);
   const [selectedZoom, setSelectedZoom] = useState<string | null>(null);
@@ -440,6 +454,28 @@ export function Clyp() {
     });
   }, []);
 
+  /**
+   * Puts stored edits back onto a clip that has just been loaded, clamped to
+   * its duration and snapped to the frame grid, so a record that somehow
+   * disagrees with the file can never cut past its end.
+   */
+  const applyEdits = useCallback((edits: StoredEdits, length: number) => {
+    const grid = (seconds: number) =>
+      Math.round(clamp(seconds, 0, length) * EDIT_FPS) / EDIT_FPS;
+    const start = grid(edits.trim.start);
+    const end = Math.max(grid(edits.trim.end), start);
+    if (end > start) setTrim({ start, end });
+
+    const rate = edits.speed as (typeof SPEED_OPTIONS)[number];
+    setSpeed(SPEED_OPTIONS.includes(rate) ? rate : 1);
+    setZooms(
+      edits.zooms
+        .map((z) => ({ ...z, start: grid(z.start), end: grid(z.end) }))
+        .filter((z) => z.end > z.start)
+        .sort((a, b) => a.start - b.start),
+    );
+  }, []);
+
   const addSoundtrack = useCallback(
     (file: File) => {
       // It lands filling the clip, and the clip at 2x is half as long on the
@@ -618,11 +654,12 @@ export function Clyp() {
   // exist while rendering on the server, and seeding state from it would
   // produce a hydration mismatch.
   //
-  // `restored` flips only once the media is in place. It used to flip as soon
-  // as the record was read, while the file was still being probed, and the
-  // persist effects then ran against the defaults: the media effect deleted
-  // the Blob and rewrote it a moment later, forty megabytes for nothing on
-  // every reload.
+  // `restored` flips only once the media is in place and its edits applied.
+  // It used to flip as soon as the record was read, while the file was still
+  // being probed, and the persist effects then ran against the defaults: the
+  // media effect deleted the Blob and rewrote it a moment later, forty
+  // megabytes for nothing on every reload, and the edits effect deleted the
+  // edits before the restore had read them.
   useEffect(() => {
     let cancelled = false;
 
@@ -654,23 +691,49 @@ export function Clyp() {
           const audio = stored.audio;
 
           loadMediaFile(file)
-            .then((loaded) => {
-              // The soundtrack is restored from in here, after the media it
-              // belongs to: `loadMedia` clears the soundtrack, since one placed
-              // against a clip that has been replaced means nothing, so run
-              // side by side the soundtrack lost about half the time.
+            .then(async (loaded) => {
+              // The edits and the soundtrack are restored from in here, after
+              // the media they belong to: `loadMedia` resets every edit and
+              // clears the soundtrack, since edits made on a clip that has
+              // been replaced mean nothing, so run side by side the restore
+              // lost about half the time.
               loadMedia(loaded);
+              const length = loaded.media.duration ?? 0;
+
+              // Applied only when the restored clip is the one the edits were
+              // made on, so a stale record never cuts a different file.
+              const edits = await readEdits().catch(() => null);
+              const kept =
+                edits &&
+                edits.of.width === loaded.width &&
+                edits.of.height === loaded.height &&
+                Math.abs(edits.of.duration - length) < 0.01
+                  ? edits
+                  : null;
+              if (kept) applyEdits(kept, length);
               done();
 
               if (!audio) return;
               // Back through the same loader an upload uses, which re-measures
-              // it and mints a fresh object URL. Its placement starts over,
-              // since that was never stored.
+              // it and mints a fresh object URL. Where it sat is put back from
+              // the edits, clamped to the file.
               const track = new File([audio], stored.audioName ?? "audio", {
                 type: audio.type,
               });
-              loadSoundtrack(track, loaded.media.duration ?? 0)
-                .then(setSoundtrack)
+              loadSoundtrack(track, length)
+                .then((next) => {
+                  const place = kept?.soundtrack;
+                  setSoundtrack(
+                    place
+                      ? {
+                          ...next,
+                          offset: clamp(place.offset, 0, next.duration),
+                          start: clamp(place.start, 0, next.duration),
+                          end: clamp(place.end, place.start, next.duration),
+                        }
+                      : next,
+                  );
+                })
                 .catch(() => undefined);
             })
             .catch((error: Error) => {
@@ -685,7 +748,7 @@ export function Clyp() {
     return () => {
       cancelled = true;
     };
-  }, [loadMedia]);
+  }, [applyEdits, loadMedia]);
 
   // Persist. Both skip until the restore has run.
   useEffect(() => {
@@ -713,6 +776,44 @@ export function Clyp() {
     if (!restored) return;
     writeStyle(styleOptions);
   }, [styleOptions, restored]);
+
+  /**
+   * The edits, written a moment after they settle.
+   *
+   * A drag rewrites the trim or a region on every frame, and a write per frame
+   * is sixty transactions a second for nothing, so the write waits for a pause.
+   * The record names the clip it belongs to, so the restore can refuse edits
+   * made on a different file. An image has none of these and clears the key.
+   */
+  useEffect(() => {
+    if (!restored) return;
+
+    if (!media || media.kind !== "video" || !trim || !dimensions) {
+      deleteEdits();
+      return;
+    }
+
+    const record: StoredEdits = {
+      of: {
+        name: media.name,
+        width: dimensions.w,
+        height: dimensions.h,
+        duration: media.duration ?? 0,
+      },
+      trim,
+      speed,
+      zooms,
+      soundtrack: soundtrack
+        ? {
+            offset: soundtrack.offset,
+            start: soundtrack.start,
+            end: soundtrack.end,
+          }
+        : undefined,
+    };
+    const timer = window.setTimeout(() => writeEdits(record), EDITS_DEBOUNCE);
+    return () => window.clearTimeout(timer);
+  }, [restored, media, dimensions, trim, speed, zooms, soundtrack]);
 
   // Paste anywhere on the page drops an image onto the canvas.
   useEffect(() => {

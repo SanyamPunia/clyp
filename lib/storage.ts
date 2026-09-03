@@ -12,12 +12,14 @@
  * neither is a reason to break the editor.
  */
 
-import type { MediaKind, StyleOptions } from "@/types/screenshot";
+import type { ZoomRegion } from "@/lib/clip-zoom";
+import type { MediaKind, StyleOptions, Trim } from "@/types/screenshot";
 
 const DB_NAME = "clyp";
 const DB_VERSION = 1;
 const STORE = "draft";
 const MEDIA_KEY = "image";
+const EDITS_KEY = "edits";
 const STYLE_KEY = "clyp:style";
 
 function openDatabase(): Promise<IDBDatabase> {
@@ -90,6 +92,39 @@ export async function writeMedia(media: StoredMedia): Promise<void> {
 
 export async function deleteMedia(): Promise<void> {
   await withStore("readwrite", (store) => store.delete(MEDIA_KEY));
+}
+
+/**
+ * The edits made on a clip: the cut, the rate, the zooms, and where the
+ * soundtrack sits. A few hundred bytes, under a key of their own.
+ *
+ * They were not stored at all at first, because the only record held the Blob
+ * and rewriting forty megabytes on every drag of a handle was out of the
+ * question. A second key costs nothing to rewrite, so the edits can follow
+ * every change on a short debounce and the Blob is never touched.
+ *
+ * `of` names the clip they belong to. A restore applies them only when the
+ * restored clip matches, so edits made on one file never cut a different one.
+ */
+export interface StoredEdits {
+  of: { name?: string; width: number; height: number; duration: number };
+  trim: Trim;
+  speed: number;
+  zooms: ZoomRegion[];
+  /** The laid track's placement. Absent when there is no track. */
+  soundtrack?: { offset: number; start: number; end: number };
+}
+
+export async function readEdits(): Promise<StoredEdits | null> {
+  return withStore<StoredEdits>("readonly", (store) => store.get(EDITS_KEY));
+}
+
+export async function writeEdits(edits: StoredEdits): Promise<void> {
+  await withStore("readwrite", (store) => store.put(edits, EDITS_KEY));
+}
+
+export async function deleteEdits(): Promise<void> {
+  await withStore("readwrite", (store) => store.delete(EDITS_KEY));
 }
 
 /**
