@@ -488,6 +488,14 @@ have to agree about where a second is.
   the second place in this app the shared cursor-pointer rule gives way. The
   two cursors say which gesture each part answers: drag the middle, resize the
   edges. A press on a handle stops propagating, so it never also scrubs.
+- **The bar folds to its transport row.** A chevron beside the length readout
+  hides the lane, the axis, the soundtrack and the speed pill, for more canvas
+  once the cut is settled. The folded part stays mounted and is hidden by
+  height alone, by transitioning `grid-template-rows` to `0fr`, because the
+  frame loop reads the lane's playhead and would stop wrapping playback at the
+  out point if the lane unmounted. `inert` keeps the handles and chips out of
+  the tab order while they are out of sight. The state is the bar's own and is
+  not persisted.
 
 ## Speed
 

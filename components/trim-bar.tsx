@@ -3,6 +3,8 @@
 import type React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ChevronDownIcon,
+  ChevronUpIcon,
   GaugeIcon,
   Music2Icon,
   MusicIcon,
@@ -182,6 +184,14 @@ export function TrimBar({
 }: TrimBarProps) {
   const [playing, setPlaying] = useState(true);
   const [looping, setLooping] = useState(true);
+  /**
+   * Folded to the transport row, for more canvas while the cut is settled.
+   *
+   * The folded part stays mounted and is hidden by height alone, since the
+   * frame loop above reads the lane's playhead and would otherwise stop
+   * wrapping playback at the out point the moment the lane went away.
+   */
+  const [collapsed, setCollapsed] = useState(false);
   // Kept beside the file it was read from, so a new upload never shows the
   // last one's shape while it decodes.
   const [wave, setWave] = useState<{ of: Blob; data: Waveform } | null>(null);
@@ -701,7 +711,7 @@ export function TrimBar({
       {/* Equal side columns rather than `justify-between`, which hands the
           middle whatever is left and walks the transport sideways every time
           the readout gains a digit or picks up its "of" clause. */}
-      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 pb-2">
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
         {/* Where the playhead is, exactly. The lane says roughly, and roughly
             is not enough to cut on. */}
         <span
@@ -762,281 +772,318 @@ export function TrimBar({
           </Transport>
         </div>
 
-        <span className="justify-self-end text-right text-[13px] text-muted-foreground">
-          <span className="tabular-nums text-foreground">
-            {formatPrecise(trim.end - trim.start, duration)}
+        <span className="flex items-center justify-self-end gap-1.5 text-right text-[13px] text-muted-foreground">
+          <span>
+            <span className="tabular-nums text-foreground">
+              {formatPrecise(trim.end - trim.start, duration)}
+            </span>
+            {trimmed && (
+              <span className="tabular-nums"> of {formatPrecise(duration)}</span>
+            )}
           </span>
-          {trimmed && (
-            <span className="tabular-nums"> of {formatPrecise(duration)}</span>
-          )}
+          {/* A disclosure, so `aria-expanded` rather than `aria-pressed`, and
+              the open-trigger hover the button variant ties to that attribute
+              is switched off: this is not a menu that is open. */}
+          <Transport
+            label={collapsed ? "Show the timeline" : "Hide the timeline"}
+            onClick={() => setCollapsed(!collapsed)}
+            expanded={!collapsed}
+            controls="trim-timeline"
+            className="aria-expanded:bg-transparent"
+          >
+            {collapsed ? (
+              <ChevronUpIcon className="size-4" aria-hidden="true" />
+            ) : (
+              <ChevronDownIcon className="size-4" aria-hidden="true" />
+            )}
+          </Transport>
         </span>
       </div>
 
-      {/* The lane is a region the pointer scrubs rather than a control. Both
-          handles in it are real sliders with their own keyboard behaviour,
-          which is what a keyboard needs here. */}
+      {/* Folded by transitioning the grid row rather than by measuring a
+          height, so nothing here has to know how tall the soundtrack row is.
+          `inert` keeps the handles and chips out of the tab order while they
+          are out of sight. */}
       <div
-        ref={laneRef}
-        onPointerDown={scrub}
-        className="relative h-9 cursor-grab touch-none active:cursor-grabbing"
+        id="trim-timeline"
+        inert={collapsed}
+        className={cn(
+          "grid transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none",
+          collapsed ? "grid-rows-[0fr]" : "grid-rows-[1fr]",
+        )}
       >
-        {/* What is cut. A rail rather than a second tone across the same bar:
-            two fills a few steps apart over one flat lane read as one lane, so
-            the height is what says which part survives. */}
-        <div className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-track" />
+        {/* `pb-1` leaves room for the focus ring on the bottom row's buttons,
+            which the clip would otherwise take the lower edge off. */}
+        <div className="min-h-0 overflow-hidden">
+          <div className="pt-2 pb-1">
+            {/* The lane is a region the pointer scrubs rather than a control. Both
+                handles in it are real sliders with their own keyboard behaviour,
+                which is what a keyboard needs here. */}
+            <div
+              ref={laneRef}
+              onPointerDown={scrub}
+              className="relative h-9 cursor-grab touch-none active:cursor-grabbing"
+            >
+              {/* What is cut. A rail rather than a second tone across the same bar:
+                  two fills a few steps apart over one flat lane read as one lane, so
+                  the height is what says which part survives. */}
+              <div className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-track" />
 
-        {/* What is kept. */}
-        <div
-          className="absolute inset-y-0 rounded-md bg-track-active"
-          style={{
-            left: `calc(${at(first)} + ${INSET}px)`,
-            width: at(last - first),
-          }}
-        />
-
-        {/* Brand is spent once on this surface, and this is it: the playhead
-            has to be told apart from the two handles at a glance. */}
-        <div
-          ref={playheadRef}
-          aria-hidden="true"
-          className="absolute inset-y-1.5 left-1 w-0.5 rounded-full bg-brand"
-        />
-
-        <Handle
-          label="Trim start"
-          value={trim.start}
-          duration={duration}
-          position={at(first)}
-          onPointerDown={dragHandle("start")}
-          onKeyDown={nudge("start")}
-        />
-        <Handle
-          label="Trim end"
-          value={trim.end}
-          duration={duration}
-          position={at(last)}
-          onPointerDown={dragHandle("end")}
-          onKeyDown={nudge("end")}
-        />
-      </div>
-
-      {/* Laid under the picture on the same axis, so where the sound starts is
-          read against where the clip does rather than described in a number. */}
-      {soundtrack && (
-        <div className="relative mt-1 h-7">
-          <Tooltip>
-            <TooltipTrigger asChild>
+              {/* What is kept. */}
               <div
-                ref={regionRef}
-                role="group"
-                aria-label={`Soundtrack, ${soundtrack.name}`}
-                onPointerDown={dragSound("body")}
-                // Back to the top of the file, keeping the region where it is.
-                // A slip is easy to lose track of and this is the way back.
-                onDoubleClick={() =>
-                  onSoundtrackChange({
-                    ...soundtrack,
-                    start: 0,
-                    end: soundtrack.end - soundtrack.start,
-                  })
-                }
-                className="absolute inset-y-0 cursor-grab overflow-hidden rounded-md bg-elevated ring-1 ring-stroke active:cursor-grabbing"
-                // Stretched by the speed. The track keeps its own tempo while
-                // the picture races past it, so a second of sound covers two
-                // seconds of a 2x lane, and the waveform is drawn to that.
+                className="absolute inset-y-0 rounded-md bg-track-active"
                 style={{
-                  left: `calc(${at(soundtrack.offset / duration)} + ${INSET}px)`,
-                  width: at(
-                    ((soundtrack.end - soundtrack.start) * speed) / duration,
-                  ),
+                  left: `calc(${at(first)} + ${INSET}px)`,
+                  width: at(last - first),
                 }}
-              >
-                <Wave
-                  wave={shape}
-                  from={soundtrack.start}
-                  to={soundtrack.end}
-                  width={laneWidth}
-                  duration={duration}
+              />
+
+              {/* Brand is spent once on this surface, and this is it: the playhead
+                  has to be told apart from the two handles at a glance. */}
+              <div
+                ref={playheadRef}
+                aria-hidden="true"
+                className="absolute inset-y-1.5 left-1 w-0.5 rounded-full bg-brand"
+              />
+
+              <Handle
+                label="Trim start"
+                value={trim.start}
+                duration={duration}
+                position={at(first)}
+                onPointerDown={dragHandle("start")}
+                onKeyDown={nudge("start")}
+              />
+              <Handle
+                label="Trim end"
+                value={trim.end}
+                duration={duration}
+                position={at(last)}
+                onPointerDown={dragHandle("end")}
+                onKeyDown={nudge("end")}
+              />
+            </div>
+
+            {/* Laid under the picture on the same axis, so where the sound starts is
+                read against where the clip does rather than described in a number. */}
+            {soundtrack && (
+              <div className="relative mt-1 h-7">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div
+                      ref={regionRef}
+                      role="group"
+                      aria-label={`Soundtrack, ${soundtrack.name}`}
+                      onPointerDown={dragSound("body")}
+                      // Back to the top of the file, keeping the region where it is.
+                      // A slip is easy to lose track of and this is the way back.
+                      onDoubleClick={() =>
+                        onSoundtrackChange({
+                          ...soundtrack,
+                          start: 0,
+                          end: soundtrack.end - soundtrack.start,
+                        })
+                      }
+                      className="absolute inset-y-0 cursor-grab overflow-hidden rounded-md bg-elevated ring-1 ring-stroke active:cursor-grabbing"
+                      // Stretched by the speed. The track keeps its own tempo while
+                      // the picture races past it, so a second of sound covers two
+                      // seconds of a 2x lane, and the waveform is drawn to that.
+                      style={{
+                        left: `calc(${at(soundtrack.offset / duration)} + ${INSET}px)`,
+                        width: at(
+                          ((soundtrack.end - soundtrack.start) * speed) / duration,
+                        ),
+                      }}
+                    >
+                      <Wave
+                        wave={shape}
+                        from={soundtrack.start}
+                        to={soundtrack.end}
+                        width={laneWidth}
+                        duration={duration}
+                      />
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    Drag to move, scroll to slip, double-click to reset
+                  </TooltipContent>
+                </Tooltip>
+
+                <SoundEdge
+                  label="Soundtrack start"
+                  position={at(soundtrack.offset / duration)}
+                  onPointerDown={dragSound("head")}
+                />
+                <SoundEdge
+                  label="Soundtrack end"
+                  position={at(
+                    (soundtrack.offset +
+                      (soundtrack.end - soundtrack.start) * speed) /
+                      duration,
+                  )}
+                  onPointerDown={dragSound("tail")}
                 />
               </div>
-            </TooltipTrigger>
-            <TooltipContent>
-              Drag to move, scroll to slip, double-click to reset
-            </TooltipContent>
-          </Tooltip>
-
-          <SoundEdge
-            label="Soundtrack start"
-            position={at(soundtrack.offset / duration)}
-            onPointerDown={dragSound("head")}
-          />
-          <SoundEdge
-            label="Soundtrack end"
-            position={at(
-              (soundtrack.offset +
-                (soundtrack.end - soundtrack.start) * speed) /
-                duration,
             )}
-            onPointerDown={dragSound("tail")}
-          />
-        </div>
-      )}
 
-      {/* The axis is what turns the lane from two proportions into a length.
-          It is `aria-hidden` because both handles already report their value in
-          seconds, so a reader hears the numbers that matter. */}
-      {/* `h-5` is what the row actually occupies: a 4px tick, 2px of gap, and
-          an 11px label. At `h-4` the numbers painted outside their own box, so
-          the margin below could not see them and the control under the axis sat
-          against the labels however much it was given. */}
-      <div aria-hidden="true" className="relative mt-1.5 h-5">
-        {ticks(duration, laneWidth).map(({ at, major, label }) => (
-          <div
-            key={at}
-            className="absolute top-0 flex flex-col items-start"
-            style={{ left: centre(at / duration) }}
-          >
-            <span
-              className={cn(
-                "block w-px",
-                major ? "h-1 bg-stroke-strong" : "h-0.5 bg-stroke",
-                at > 0 && "-translate-x-1/2",
-              )}
-            />
-            {label && (
-              <span
-                className={cn(
-                  "mt-0.5 block text-[11px] tabular-nums leading-none text-muted-foreground",
-                  at > 0 && at < duration && "-translate-x-1/2",
-                  at === duration && "-translate-x-full",
-                )}
-              >
-                {label}
-              </span>
-            )}
-          </div>
-        ))}
-      </div>
-
-      <input
-        ref={fileRef}
-        type="file"
-        accept={AUDIO_ACCEPT}
-        className="hidden"
-        onChange={(event) => {
-          const file = event.target.files?.[0];
-          if (file) onSoundtrackAdd(file);
-          event.target.value = "";
-        }}
-      />
-
-      {/* Wraps, so on a phone the speed and the mutes drop to a second line
-          rather than pushing past the panel's edge. */}
-      <div className="mt-2.5 flex flex-wrap items-center gap-x-1 gap-y-2">
-        {soundtrack ? (
-          <>
-            <MusicIcon
-              className="size-3.5 shrink-0 text-muted-foreground"
-              aria-hidden="true"
-            />
-            <span className="min-w-0 truncate text-[13px] text-muted-foreground">
-              {soundtrack.name}
-            </span>
-          </>
-        ) : (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => fileRef.current?.click()}
-            className="text-muted-foreground hover:text-foreground"
-          >
-            <MusicIcon className="size-3.5" aria-hidden="true" />
-            Add a soundtrack
-          </Button>
-        )}
-
-        <div className="ml-auto flex items-center gap-2">
-          {/* The same recessed pill as the transport, with text chips rather
-              than glyphs: "2x" is its own label and needs no tooltip. The gauge
-              is what says the numbers are a rate rather than a zoom. */}
-          <div
-            role="group"
-            aria-label="Playback speed"
-            className="flex items-center gap-0.5 rounded-full bg-track p-0.5"
-          >
-            <GaugeIcon
-              className="mx-1.5 size-3.5 shrink-0 text-muted-foreground"
-              aria-hidden="true"
-            />
-            {SPEED_OPTIONS.map((rate) => (
-              <button
-                key={rate}
-                type="button"
-                aria-pressed={speed === rate}
-                onClick={() => onSpeedChange(rate)}
-                className={cn(
-                  "h-7 cursor-pointer rounded-full px-2 text-[13px] tabular-nums",
-                  "transition-all duration-150 active:scale-[0.97]",
-                  speed === rate
-                    ? "bg-track-active text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {formatSpeed(rate)}
-              </button>
-            ))}
-          </div>
-
-          {/* One control per source, because a clip can arrive with sound and
-              then have music laid over it, and the two mix in the export rather
-              than one replacing the other. A single mute could only silence
-              both, which is not the question being asked when music is added
-              over a recording that already talks. Each names what it silences,
-              so two adjacent speaker glyphs are never ambiguous.
-
-              Past 1x the clip's own mute has nothing to do: the sound is out
-              of the file, so the preview is silent too, and the control says
-              why rather than toggling a state that changes nothing. */}
-          <div className="flex items-center gap-0.5">
-            {hasClipSound && (
-              <Transport
-                label={
-                  speed !== 1
-                    ? `The clip's own sound is left out at ${formatSpeed(speed)}`
-                    : muted
-                      ? "Unmute the clip's own sound"
-                      : "Mute the clip's own sound"
-                }
-                onClick={() => onMutedChange(!muted)}
-                disabled={speed !== 1}
-              >
-                {muted || speed !== 1 ? (
-                  <VolumeXIcon className="size-4" aria-hidden="true" />
-                ) : (
-                  <Volume2Icon className="size-4" aria-hidden="true" />
-                )}
-              </Transport>
-            )}
-            {soundtrack && (
-              <>
-                <Transport
-                  label={musicMuted ? "Unmute the music" : "Mute the music"}
-                  onClick={() => onMusicMutedChange(!musicMuted)}
+            {/* The axis is what turns the lane from two proportions into a length.
+                It is `aria-hidden` because both handles already report their value in
+                seconds, so a reader hears the numbers that matter. */}
+            {/* `h-5` is what the row actually occupies: a 4px tick, 2px of gap, and
+                an 11px label. At `h-4` the numbers painted outside their own box, so
+                the margin below could not see them and the control under the axis sat
+                against the labels however much it was given. */}
+            <div aria-hidden="true" className="relative mt-1.5 h-5">
+              {ticks(duration, laneWidth).map(({ at, major, label }) => (
+                <div
+                  key={at}
+                  className="absolute top-0 flex flex-col items-start"
+                  style={{ left: centre(at / duration) }}
                 >
-                  {musicMuted ? (
-                    <Music2Icon className="size-4 opacity-40" aria-hidden="true" />
-                  ) : (
-                    <Music2Icon className="size-4" aria-hidden="true" />
+                  <span
+                    className={cn(
+                      "block w-px",
+                      major ? "h-1 bg-stroke-strong" : "h-0.5 bg-stroke",
+                      at > 0 && "-translate-x-1/2",
+                    )}
+                  />
+                  {label && (
+                    <span
+                      className={cn(
+                        "mt-0.5 block text-[11px] tabular-nums leading-none text-muted-foreground",
+                        at > 0 && at < duration && "-translate-x-1/2",
+                        at === duration && "-translate-x-full",
+                      )}
+                    >
+                      {label}
+                    </span>
                   )}
-                </Transport>
-                <Transport
-                  label="Remove the soundtrack"
-                  onClick={onSoundtrackRemove}
+                </div>
+              ))}
+            </div>
+
+            <input
+              ref={fileRef}
+              type="file"
+              accept={AUDIO_ACCEPT}
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) onSoundtrackAdd(file);
+                event.target.value = "";
+              }}
+            />
+
+            {/* Wraps, so on a phone the speed and the mutes drop to a second line
+                rather than pushing past the panel's edge. */}
+            <div className="mt-2.5 flex flex-wrap items-center gap-x-1 gap-y-2">
+              {soundtrack ? (
+                <>
+                  <MusicIcon
+                    className="size-3.5 shrink-0 text-muted-foreground"
+                    aria-hidden="true"
+                  />
+                  <span className="min-w-0 truncate text-[13px] text-muted-foreground">
+                    {soundtrack.name}
+                  </span>
+                </>
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => fileRef.current?.click()}
+                  className="text-muted-foreground hover:text-foreground"
                 >
-                  <XIcon className="size-4" aria-hidden="true" />
-                </Transport>
-              </>
-            )}
+                  <MusicIcon className="size-3.5" aria-hidden="true" />
+                  Add a soundtrack
+                </Button>
+              )}
+
+              <div className="ml-auto flex items-center gap-2">
+                {/* The same recessed pill as the transport, with text chips rather
+                    than glyphs: "2x" is its own label and needs no tooltip. The gauge
+                    is what says the numbers are a rate rather than a zoom. */}
+                <div
+                  role="group"
+                  aria-label="Playback speed"
+                  className="flex items-center gap-0.5 rounded-full bg-track p-0.5"
+                >
+                  <GaugeIcon
+                    className="mx-1.5 size-3.5 shrink-0 text-muted-foreground"
+                    aria-hidden="true"
+                  />
+                  {SPEED_OPTIONS.map((rate) => (
+                    <button
+                      key={rate}
+                      type="button"
+                      aria-pressed={speed === rate}
+                      onClick={() => onSpeedChange(rate)}
+                      className={cn(
+                        "h-7 cursor-pointer rounded-full px-2 text-[13px] tabular-nums",
+                        "transition-all duration-150 active:scale-[0.97]",
+                        speed === rate
+                          ? "bg-track-active text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      {formatSpeed(rate)}
+                    </button>
+                  ))}
+                </div>
+
+                {/* One control per source, because a clip can arrive with sound and
+                    then have music laid over it, and the two mix in the export rather
+                    than one replacing the other. A single mute could only silence
+                    both, which is not the question being asked when music is added
+                    over a recording that already talks. Each names what it silences,
+                    so two adjacent speaker glyphs are never ambiguous.
+
+                    Past 1x the clip's own mute has nothing to do: the sound is out
+                    of the file, so the preview is silent too, and the control says
+                    why rather than toggling a state that changes nothing. */}
+                <div className="flex items-center gap-0.5">
+                  {hasClipSound && (
+                    <Transport
+                      label={
+                        speed !== 1
+                          ? `The clip's own sound is left out at ${formatSpeed(speed)}`
+                          : muted
+                            ? "Unmute the clip's own sound"
+                            : "Mute the clip's own sound"
+                      }
+                      onClick={() => onMutedChange(!muted)}
+                      disabled={speed !== 1}
+                    >
+                      {muted || speed !== 1 ? (
+                        <VolumeXIcon className="size-4" aria-hidden="true" />
+                      ) : (
+                        <Volume2Icon className="size-4" aria-hidden="true" />
+                      )}
+                    </Transport>
+                  )}
+                  {soundtrack && (
+                    <>
+                      <Transport
+                        label={musicMuted ? "Unmute the music" : "Mute the music"}
+                        onClick={() => onMusicMutedChange(!musicMuted)}
+                      >
+                        {musicMuted ? (
+                          <Music2Icon className="size-4 opacity-40" aria-hidden="true" />
+                        ) : (
+                          <Music2Icon className="size-4" aria-hidden="true" />
+                        )}
+                      </Transport>
+                      <Transport
+                        label="Remove the soundtrack"
+                        onClick={onSoundtrackRemove}
+                      >
+                        <XIcon className="size-4" aria-hidden="true" />
+                      </Transport>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -1140,14 +1187,21 @@ function Transport({
   label,
   onClick,
   pressed,
+  expanded,
+  controls,
   disabled,
+  className,
   children,
 }: {
   label: string;
   onClick: () => void;
   pressed?: boolean;
+  /** For a disclosure: what it is showing, and the id of what it shows. */
+  expanded?: boolean;
+  controls?: string;
   /** Disabled, with the label saying why. */
   disabled?: boolean;
+  className?: string;
   children: React.ReactNode;
 }) {
   const button = (
@@ -1156,9 +1210,14 @@ function Transport({
       size="icon-sm"
       aria-label={label}
       aria-pressed={pressed}
+      aria-expanded={expanded}
+      aria-controls={controls}
       disabled={disabled}
       onClick={onClick}
-      className={cn(pressed && "bg-track-active text-foreground shadow-sm")}
+      className={cn(
+        pressed && "bg-track-active text-foreground shadow-sm",
+        className,
+      )}
     >
       {children}
     </Button>
