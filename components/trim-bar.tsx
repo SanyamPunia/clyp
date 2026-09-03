@@ -3,6 +3,7 @@
 import type React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  GaugeIcon,
   Music2Icon,
   MusicIcon,
   PauseIcon,
@@ -24,7 +25,7 @@ import {
 } from "@/components/ui/tooltip";
 import { AUDIO_ACCEPT, formatPrecise } from "@/lib/media";
 import { drawWaveform, readWaveform, type Waveform } from "@/lib/waveform";
-import { EDIT_FPS } from "@/lib/video-export";
+import { EDIT_FPS, SPEED_OPTIONS, formatSpeed } from "@/lib/video-export";
 import { cn } from "@/lib/utils";
 import type { Soundtrack, Trim } from "@/types/screenshot";
 
@@ -117,6 +118,13 @@ interface TrimBarProps {
   onPlayback: (playing: boolean) => void;
   /** Play or pause. The rule lives with whoever owns the element and the trim. */
   onToggle: () => void;
+  /**
+   * The playback rate. The lane stays in the source's own seconds whatever it
+   * is, since that is what the handles cut on, and a soundtrack's region is
+   * the one thing drawn against it that runs on the output's clock instead.
+   */
+  speed: number;
+  onSpeedChange: (speed: number) => void;
   disabled?: boolean;
 }
 
@@ -168,6 +176,8 @@ export function TrimBar({
   onMutedChange,
   musicMuted,
   onMusicMutedChange,
+  speed,
+  onSpeedChange,
   disabled = false,
 }: TrimBarProps) {
   const [playing, setPlaying] = useState(true);
@@ -304,12 +314,16 @@ export function TrimBar({
 
   // Plain functions: they are only handed to buttons in this component's own
   // render and feed no effect, so the compiler memoizes them on its own.
+  // A step is one frame of the export, and at 2x an output frame is two of
+  // the source's, so the step on the source's clock is that much longer.
   const step = (by: number) => {
     const element = video.current;
     if (!element) return;
 
     onPlayback(false);
-    onSeek(clamp(element.currentTime + by, trim.start, trim.end - FRAME));
+    onSeek(
+      clamp(element.currentTime + by * speed, trim.start, trim.end - FRAME),
+    );
   };
 
   const stop = () => {
@@ -514,14 +528,15 @@ export function TrimBar({
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
       // Scaled to the lane, so a wheel of so many pixels slips the same amount
-      // a drag of so many pixels would.
-      const perPixel = duration / Math.max(spanRef.current, 1);
+      // a drag of so many pixels would. The region is stretched by the speed,
+      // so a pixel of it is that much less of the track.
+      const perPixel = duration / Math.max(spanRef.current, 1) / speed;
       slip((event.deltaX || event.deltaY) * perPixel);
     };
 
     node.addEventListener("wheel", onWheel, { passive: false });
     return () => node.removeEventListener("wheel", onWheel);
-  }, [disabled, duration, slip, placed]);
+  }, [disabled, duration, slip, placed, speed]);
 
   /**
    * Space plays and pauses, from anywhere on the page.
@@ -571,6 +586,11 @@ export function TrimBar({
    * is a part that cannot be heard, so drawing it outside the lane says the
    * control is broken rather than that the sound runs on. Hearing a later
    * stretch of the file is what `head` is for.
+   *
+   * Two clocks meet here. `offset` is on the lane's, the source's seconds, and
+   * `start` and `end` are on the track's own, which is also the output's. At
+   * 2x a second of track covers two seconds of lane, so a lane distance `by`
+   * is `by / speed` of track, and a track length is `length * speed` of lane.
    */
   const dragSound = useCallback(
     (part: "body" | "head" | "tail") =>
@@ -587,6 +607,8 @@ export function TrimBar({
         event.currentTarget.setPointerCapture(event.pointerId);
 
         const length = from.end - from.start;
+        /** The region's footprint on the lane. */
+        const span = length * speed;
 
         const move = (moved: PointerEvent) => {
           const by = timeAt(moved.clientX) - origin;
@@ -595,7 +617,7 @@ export function TrimBar({
             // Absolute against the snapshot, so this needs none of the wheel's
             // accumulating.
             const step = snap(
-              clamp(by, -from.start, from.duration - from.end),
+              clamp(by / speed, -from.start, from.duration - from.end),
             );
             onSoundtrackChange({
               ...from,
@@ -608,7 +630,7 @@ export function TrimBar({
           if (part === "body") {
             onSoundtrackChange({
               ...from,
-              offset: snap(clamp(from.offset + by, 0, duration - length)),
+              offset: snap(clamp(from.offset + by, 0, duration - span)),
             });
             return;
           }
@@ -616,15 +638,22 @@ export function TrimBar({
           if (part === "head") {
             // Bounded three ways: by what is left of the file behind the head,
             // by the clip's own start, and by the minimum the region may be.
-            const room = clamp(
-              by,
-              -Math.min(from.start, from.offset),
-              length - MIN_TRIM,
-            );
+            // The offset moves by the snapped lane distance and the start by
+            // that same distance in track time, so the anchor cannot drift
+            // from the sound under it by a rounding.
+            const room =
+              snap(
+                from.offset +
+                  clamp(
+                    by,
+                    -Math.min(from.start * speed, from.offset),
+                    (length - MIN_TRIM) * speed,
+                  ),
+              ) - from.offset;
             onSoundtrackChange({
               ...from,
-              offset: snap(from.offset + room),
-              start: snap(from.start + room),
+              offset: from.offset + room,
+              start: from.start + room / speed,
             });
             return;
           }
@@ -633,10 +662,13 @@ export function TrimBar({
             ...from,
             end: snap(
               clamp(
-                from.end + by,
+                from.end + by / speed,
                 from.start + MIN_TRIM,
                 // The file's own end, or the clip's, whichever comes first.
-                Math.min(from.duration, from.start + duration - from.offset),
+                Math.min(
+                  from.duration,
+                  from.start + (duration - from.offset) / speed,
+                ),
               ),
             ),
           });
@@ -652,9 +684,8 @@ export function TrimBar({
         window.addEventListener("pointerup", release);
         window.addEventListener("pointercancel", release);
       },
-    [disabled, duration, onSoundtrackChange, soundtrack, timeAt],
+    [disabled, duration, onSoundtrackChange, soundtrack, speed, timeAt],
   );
-
 
   const first = trim.start / duration;
   const last = trim.end / duration;
@@ -810,9 +841,14 @@ export function TrimBar({
                   })
                 }
                 className="absolute inset-y-0 cursor-grab overflow-hidden rounded-md bg-elevated ring-1 ring-stroke active:cursor-grabbing"
+                // Stretched by the speed. The track keeps its own tempo while
+                // the picture races past it, so a second of sound covers two
+                // seconds of a 2x lane, and the waveform is drawn to that.
                 style={{
                   left: `calc(${at(soundtrack.offset / duration)} + ${INSET}px)`,
-                  width: at((soundtrack.end - soundtrack.start) / duration),
+                  width: at(
+                    ((soundtrack.end - soundtrack.start) * speed) / duration,
+                  ),
                 }}
               >
                 <Wave
@@ -837,7 +873,9 @@ export function TrimBar({
           <SoundEdge
             label="Soundtrack end"
             position={at(
-              (soundtrack.offset + soundtrack.end - soundtrack.start) / duration,
+              (soundtrack.offset +
+                (soundtrack.end - soundtrack.start) * speed) /
+                duration,
             )}
             onPointerDown={dragSound("tail")}
           />
@@ -892,7 +930,9 @@ export function TrimBar({
         }}
       />
 
-      <div className="mt-2.5 flex items-center gap-1">
+      {/* Wraps, so on a phone the speed and the mutes drop to a second line
+          rather than pushing past the panel's edge. */}
+      <div className="mt-2.5 flex flex-wrap items-center gap-x-1 gap-y-2">
         {soundtrack ? (
           <>
             <MusicIcon
@@ -915,47 +955,89 @@ export function TrimBar({
           </Button>
         )}
 
-        {/* One control per source, because a clip can arrive with sound and
-            then have music laid over it, and the two mix in the export rather
-            than one replacing the other. A single mute could only silence
-            both, which is not the question being asked when music is added
-            over a recording that already talks. Each names what it silences,
-            so two adjacent speaker glyphs are never ambiguous. */}
-        <div className="ml-auto flex items-center gap-0.5">
-          {hasClipSound && (
-            <Transport
-              label={
-                muted ? "Unmute the clip's own sound" : "Mute the clip's own sound"
-              }
-              onClick={() => onMutedChange(!muted)}
-            >
-              {muted ? (
-                <VolumeXIcon className="size-4" aria-hidden="true" />
-              ) : (
-                <Volume2Icon className="size-4" aria-hidden="true" />
-              )}
-            </Transport>
-          )}
-          {soundtrack && (
-            <>
-              <Transport
-                label={musicMuted ? "Unmute the music" : "Mute the music"}
-                onClick={() => onMusicMutedChange(!musicMuted)}
+        <div className="ml-auto flex items-center gap-2">
+          {/* The same recessed pill as the transport, with text chips rather
+              than glyphs: "2x" is its own label and needs no tooltip. The gauge
+              is what says the numbers are a rate rather than a zoom. */}
+          <div
+            role="group"
+            aria-label="Playback speed"
+            className="flex items-center gap-0.5 rounded-full bg-track p-0.5"
+          >
+            <GaugeIcon
+              className="mx-1.5 size-3.5 shrink-0 text-muted-foreground"
+              aria-hidden="true"
+            />
+            {SPEED_OPTIONS.map((rate) => (
+              <button
+                key={rate}
+                type="button"
+                aria-pressed={speed === rate}
+                onClick={() => onSpeedChange(rate)}
+                className={cn(
+                  "h-7 cursor-pointer rounded-full px-2 text-[13px] tabular-nums",
+                  "transition-all duration-150 active:scale-[0.97]",
+                  speed === rate
+                    ? "bg-track-active text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
               >
-                {musicMuted ? (
-                  <Music2Icon className="size-4 opacity-40" aria-hidden="true" />
+                {formatSpeed(rate)}
+              </button>
+            ))}
+          </div>
+
+          {/* One control per source, because a clip can arrive with sound and
+              then have music laid over it, and the two mix in the export rather
+              than one replacing the other. A single mute could only silence
+              both, which is not the question being asked when music is added
+              over a recording that already talks. Each names what it silences,
+              so two adjacent speaker glyphs are never ambiguous.
+
+              Past 1x the clip's own mute has nothing to do: the sound is out
+              of the file, so the preview is silent too, and the control says
+              why rather than toggling a state that changes nothing. */}
+          <div className="flex items-center gap-0.5">
+            {hasClipSound && (
+              <Transport
+                label={
+                  speed !== 1
+                    ? `The clip's own sound is left out at ${formatSpeed(speed)}`
+                    : muted
+                      ? "Unmute the clip's own sound"
+                      : "Mute the clip's own sound"
+                }
+                onClick={() => onMutedChange(!muted)}
+                disabled={speed !== 1}
+              >
+                {muted || speed !== 1 ? (
+                  <VolumeXIcon className="size-4" aria-hidden="true" />
                 ) : (
-                  <Music2Icon className="size-4" aria-hidden="true" />
+                  <Volume2Icon className="size-4" aria-hidden="true" />
                 )}
               </Transport>
-              <Transport
-                label="Remove the soundtrack"
-                onClick={onSoundtrackRemove}
-              >
-                <XIcon className="size-4" aria-hidden="true" />
-              </Transport>
-            </>
-          )}
+            )}
+            {soundtrack && (
+              <>
+                <Transport
+                  label={musicMuted ? "Unmute the music" : "Mute the music"}
+                  onClick={() => onMusicMutedChange(!musicMuted)}
+                >
+                  {musicMuted ? (
+                    <Music2Icon className="size-4 opacity-40" aria-hidden="true" />
+                  ) : (
+                    <Music2Icon className="size-4" aria-hidden="true" />
+                  )}
+                </Transport>
+                <Transport
+                  label="Remove the soundtrack"
+                  onClick={onSoundtrackRemove}
+                >
+                  <XIcon className="size-4" aria-hidden="true" />
+                </Transport>
+              </>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -1058,28 +1140,36 @@ function Transport({
   label,
   onClick,
   pressed,
+  disabled,
   children,
 }: {
   label: string;
   onClick: () => void;
   pressed?: boolean;
+  /** Disabled, with the label saying why. */
+  disabled?: boolean;
   children: React.ReactNode;
 }) {
+  const button = (
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      aria-label={label}
+      aria-pressed={pressed}
+      disabled={disabled}
+      onClick={onClick}
+      className={cn(pressed && "bg-track-active text-foreground shadow-sm")}
+    >
+      {children}
+    </Button>
+  );
+
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label={label}
-          aria-pressed={pressed}
-          onClick={onClick}
-          className={cn(
-            pressed && "bg-track-active text-foreground shadow-sm",
-          )}
-        >
-          {children}
-        </Button>
+        {/* A disabled button emits no pointer events of its own, so the
+            reason it is disabled hangs off a wrapper instead. */}
+        {disabled ? <span className="inline-flex">{button}</span> : button}
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>

@@ -36,6 +36,7 @@ import {
   DEFAULT_FPS,
   FPS_OPTIONS,
   canEncodeSize,
+  formatSpeed,
 } from "@/lib/video-export";
 import type { ExportOptions, MediaKind } from "@/types/screenshot";
 
@@ -55,8 +56,10 @@ interface ExportModalProps {
   frameSize: { width: number; height: number };
   hasGrain: boolean;
   kind: MediaKind;
-  /** Video only, in seconds. */
+  /** Video only, in seconds. What the file will run, so already at speed. */
   duration?: number;
+  /** Video only. The playback rate. Past 1x the clip's own sound is left out. */
+  speed?: number;
   /** Video only. Whether the clip arrived with sound of its own. */
   hasClipAudio?: boolean;
   /** Set when a soundtrack is laid over the clip, which mixes with its own. */
@@ -79,6 +82,7 @@ export function ExportModal({
   hasGrain,
   kind,
   duration,
+  speed = 1,
   hasClipAudio = false,
   soundtrackName,
   progress = null,
@@ -164,10 +168,12 @@ export function ExportModal({
       : Math.max(...usable);
 
   const refused = QUALITY_OPTIONS.map((o) => o.value).filter((v) => !fits(v));
+  // The clip's own sound is only carried at 1x. See `SPEED_OPTIONS`.
+  const clipSound = hasClipAudio && speed === 1;
   // Summing two sources holds three buffers of the export's own length, so a
   // long one has to pick rather than run the tab out of memory mid-encode.
   const bothSounds = Boolean(
-    isVideo && hasClipAudio && soundtrackName && options.audio && options.music,
+    isVideo && clipSound && soundtrackName && options.audio && options.music,
   );
   const tooLongToMix = bothSounds && seconds > MAX_MIX_SECONDS;
   const fps = options.fps ?? DEFAULT_FPS;
@@ -322,7 +328,14 @@ export function ExportModal({
               shape every other toggle in the app takes. */}
           {isVideo && (hasClipAudio || soundtrackName) && (
             <div className="flex flex-col gap-3">
-              {hasClipAudio && (
+              {/* Past 1x there is no switch, since it would be a switch over
+                  silence. The line says what happened to the sound instead. */}
+              {hasClipAudio && !clipSound && (
+                <p className="text-xs text-muted-foreground">
+                  {`The clip's own sound is left out at ${formatSpeed(speed)}.`}
+                </p>
+              )}
+              {clipSound && (
                 <div className="flex items-center justify-between gap-4">
                   <FieldLabel htmlFor="keep-audio" className="cursor-pointer">
                     {"The clip's own sound"}

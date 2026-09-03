@@ -489,6 +489,39 @@ have to agree about where a second is.
   two cursors say which gesture each part answers: drag the middle, resize the
   edges. A press on a handle stops propagating, so it never also scrubs.
 
+## Speed
+
+`speed` in `clyp.tsx` is the clip's playback rate, one of `SPEED_OPTIONS` in
+`lib/video-export.ts` (1, 1.5, 2, 3), set from a chip pill in the trim bar's
+bottom row. It is an edit like the trim and is not persisted. The preview plays
+at it through `playbackRate`, and the export divides every timestamp by it, so
+a 4 s clip at 2x is a 2.000 s file. Verified: 120 source frames at 30 fps
+export as 120 frames at 60 fps over 2.000 s.
+
+- **The clip's own sound is left out above 1x.** A browser offers no offline
+  time stretch that keeps the pitch, and a buffer source at `playbackRate` 2
+  doubles the pitch, which is worse than silence. So the export drops it, the
+  preview mutes it so the two agree, the trim bar's clip mute is disabled with
+  the reason in its tooltip, and the export modal shows a line in place of the
+  switch. A hand-written WSOLA is the way to bring it back if it is wanted.
+- **A soundtrack keeps its own tempo and its anchor.** `offset` stays on the
+  source's axis, so trimming never moves the region and a speed change leaves
+  its left edge on the same frame. `start` and `end` are on the track's own
+  clock, which is also the output's, so on the lane the region spans
+  `(end - start) * speed`. Every drag converts between the two: a lane distance
+  is `by / speed` of track. The mix places the region at
+  `(offset - trim.start) / speed`. Verified on a track that steps 440 Hz to
+  880 Hz at 3 s: exported at 2x over 2 s, the last 0.35 s still reads 440 Hz,
+  where a sped track would read 880.
+- **A faster clip has less lane behind the anchor**, so the region's tail is
+  cut to fit when the speed rises, in `handleSpeedChange`, and a track that
+  arrives above 1x is cut on arrival, since `loadSoundtrack` is handed
+  `duration / speed`. It is never drawn past the lane.
+- **`clipSeconds` is the output's length**, so the toolbar, the modal and the
+  size estimate all read `(end - start) / speed`. The trim bar's own readout
+  stays in source seconds, since that is the axis its handles cut on. A frame
+  step moves `FRAME * speed` of source, which is one output frame.
+
 ## Soundtrack
 
 A sound file laid over the clip, on its own lane under the picture's.

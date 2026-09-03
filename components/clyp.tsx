@@ -222,6 +222,14 @@ export function Clyp() {
   // call zoom makes: it is an edit on the draft rather than part of it, and
   // writing it would rewrite the whole Blob on every drag of a handle.
   const [trim, setTrim] = useState<Trim | null>(null);
+  /**
+   * The clip's playback rate, an edit like the trim and not persisted for the
+   * same reason. The preview plays at it and the export writes at it, so the
+   * two agree, and it is the one place the clip's own sound gives way: past
+   * 1x there is no stretch that keeps the pitch, so it is muted here and left
+   * out of the file.
+   */
+  const [speed, setSpeed] = useState(1);
   const [soundtrack, setSoundtrack] = useState<Soundtrack | null>(null);
   /**
    * The preview's own volume, not the export's, and one per source.
@@ -340,10 +348,12 @@ export function Clyp() {
       ? "This browser cannot encode video"
       : null;
   const exportsVideo = media?.kind === "video" && exportAction === "download";
-  // What will actually be encoded, which is the trim rather than the file. The
-  // duration readout, the size estimate and the encode all read this one
-  // value, so none of them can describe a length nobody asked for.
-  const clipSeconds = trim ? trim.end - trim.start : media?.duration;
+  // What will actually be encoded, which is the trim at the chosen speed rather
+  // than the file. The duration readout, the size estimate and the encode all
+  // read this one value, so none of them can describe a length nobody asked
+  // for. The trim bar's own readout stays in the source's seconds, since that
+  // is the axis its handles cut on.
+  const clipSeconds = trim ? (trim.end - trim.start) / speed : media?.duration;
 
   /**
    * The frame's box when a shape is asked for.
@@ -386,6 +396,7 @@ export function Clyp() {
     setTrim(
       loaded.media.duration ? { start: 0, end: loaded.media.duration } : null,
     );
+    setSpeed(1);
     // Audible again for a new clip, whatever the last one was left at.
     setMuted(false);
     setMusicMuted(false);
@@ -399,7 +410,9 @@ export function Clyp() {
 
   const addSoundtrack = useCallback(
     (file: File) => {
-      loadSoundtrack(file, media?.duration ?? 0)
+      // It lands filling the clip, and the clip at 2x is half as long on the
+      // track's own clock, so that is the length it is cut to.
+      loadSoundtrack(file, (media?.duration ?? 0) / speed)
         .then((next) => {
           setSoundtrack((previous) => {
             if (previous) URL.revokeObjectURL(previous.src);
@@ -412,7 +425,7 @@ export function Clyp() {
         })
         .catch((error: Error) => toast.error(error.message));
     },
-    [media?.duration],
+    [media?.duration, speed],
   );
 
   const removeSoundtrack = useCallback(() => {
@@ -421,6 +434,30 @@ export function Clyp() {
       return null;
     });
   }, []);
+
+  /**
+   * A faster clip has less lane behind a soundtrack's anchor.
+   *
+   * The region starts on a source frame and runs at the track's own tempo, so
+   * on the lane it spans `speed` times its length. At 2x a region that filled
+   * the last three seconds now needs six, and a part hanging off the end is a
+   * part that cannot be heard. Its tail is cut to fit rather than drawn past
+   * the lane, which would say the control is broken.
+   */
+  const duration = media?.duration;
+  const handleSpeedChange = useCallback(
+    (next: number) => {
+      setSpeed(next);
+      setSoundtrack((previous) => {
+        if (!previous || !duration) return previous;
+        const room = (duration - previous.offset) / next;
+        return previous.end - previous.start > room
+          ? { ...previous, end: previous.start + room }
+          : previous;
+      });
+    },
+    [duration],
+  );
 
   // Only for a target shape, which is the only thing that reads it.
   useEffect(() => {
@@ -639,6 +676,7 @@ export function Clyp() {
             source: media.blob,
             scale: options.quality,
             trim,
+            speed,
             audio: options.audio,
             soundtrack: soundtrack ?? undefined,
             music: options.music,
@@ -687,7 +725,7 @@ export function Clyp() {
         setProgress(null);
       }
     },
-    [exportAction, exportsVideo, media, soundtrack, trim],
+    [exportAction, exportsVideo, media, soundtrack, speed, trim],
   );
 
   const handleCancelExport = useCallback(() => {
@@ -717,6 +755,13 @@ export function Clyp() {
       void video.play().catch(() => {});
     });
   }, [source]);
+
+  // The rate is an element property rather than an attribute, and it outlives
+  // a `src` change, which is why a new clip resets the state to 1 as well.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video) video.playbackRate = speed;
+  }, [speed, source]);
 
   /**
    * A track that has just arrived does not start playing.
@@ -751,7 +796,11 @@ export function Clyp() {
     const follow = () => {
       frame = requestAnimationFrame(follow);
 
-      const at = video.currentTime - soundtrack.offset + soundtrack.start;
+      // The region is anchored to a source frame and the track keeps its own
+      // tempo, so the distance past the anchor is read on the output's clock,
+      // which at 2x runs half as fast as the element's.
+      const at =
+        (video.currentTime - soundtrack.offset) / speed + soundtrack.start;
       const inside = at >= soundtrack.start && at < soundtrack.end;
 
       if (!inside || video.paused) {
@@ -771,7 +820,7 @@ export function Clyp() {
       cancelAnimationFrame(frame);
       audio.pause();
     };
-  }, [soundtrack]);
+  }, [soundtrack, speed]);
 
   // The trim bar reads the preview's clock and hands these back, since a ref
   // passed down as a prop belongs to whoever created it.
@@ -843,6 +892,7 @@ export function Clyp() {
     });
     setDimensions(null);
     setTrim(null);
+    setSpeed(1);
     removeSoundtrack();
     setZoom(1);
     setZoomMode("fit");
@@ -1134,7 +1184,9 @@ export function Clyp() {
                               <video
                                 ref={videoRef}
                                 src={media.src}
-                                muted={muted}
+                                // Silent past 1x, because the export is. See
+                                // `SPEED_OPTIONS`.
+                                muted={muted || speed !== 1}
                                 playsInline
                                 onClick={togglePlayback}
                                 className={cn(
@@ -1237,6 +1289,8 @@ export function Clyp() {
               onSeek={handleSeek}
               onPlayback={handlePlayback}
               onToggle={togglePlayback}
+              speed={speed}
+              onSpeedChange={handleSpeedChange}
               hasClipSound={media.hasAudio ?? false}
               soundtrack={soundtrack}
               onSoundtrackChange={setSoundtrack}
@@ -1287,6 +1341,7 @@ export function Clyp() {
         hasGrain={styleOptions.showNoiseOverlay}
         kind={media?.kind ?? "image"}
         duration={clipSeconds}
+        speed={speed}
         hasClipAudio={media?.hasAudio ?? false}
         soundtrackName={soundtrack?.name}
         progress={progress}
