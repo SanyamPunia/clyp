@@ -4,6 +4,7 @@ import { CheckIcon } from "lucide-react";
 
 import { ColorPicker } from "@/components/color-picker";
 import { FieldLabel } from "@/components/ui/field-label";
+import { Input } from "@/components/ui/input";
 import { SegmentedGroup, SegmentedOption } from "@/components/ui/segmented";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
@@ -18,11 +19,14 @@ import {
 } from "@/lib/gradients";
 import {
   aspectOptions,
+  CAPTION_SIZE,
+  captionPositionOptions,
   CORNER_ORDER,
   cornerPresets,
   cornerRadius,
   radiusSizes,
   shadowOptions,
+  windowChromeOptions,
   type Corner,
   type Corners,
 } from "@/lib/style-options";
@@ -42,6 +46,7 @@ export function StyleControls({
 }: StyleControlsProps) {
   const activePreset = getGradient(options.gradientId);
   const angleApplies = options.useCustomGradient || supportsAngle(activePreset);
+  const captioned = options.caption.trim().length > 0;
 
   return (
     <div
@@ -252,6 +257,75 @@ export function StyleControls({
         />
       </Section>
 
+      <Section title="Window">
+        <ChoiceRow
+          label="Style"
+          name="window"
+          value={options.windowChrome}
+          options={windowChromeOptions}
+          onChange={(windowChrome) => onChange({ windowChrome })}
+        />
+
+        <ToggleRow
+          id="window-navbar-theme"
+          label="Dark title bar"
+          checked={options.windowNavbarDark}
+          disabled={options.windowChrome === "none"}
+          onCheckedChange={(checked) => onChange({ windowNavbarDark: checked })}
+        />
+
+        <TextRow
+          id="window-url"
+          label="Address"
+          value={options.windowUrl}
+          placeholder="example.com"
+          disabled={options.windowChrome !== "browser"}
+          onChange={(windowUrl) => onChange({ windowUrl })}
+        />
+      </Section>
+
+      {/* The rows under the text follow it: with nothing to place there is
+          nothing for them to do, the same way the grain amount follows the
+          grain switch. */}
+      <Section title="Caption">
+        <TextRow
+          id="caption"
+          label="Text"
+          value={options.caption}
+          placeholder="Add a caption"
+          onChange={(caption) => onChange({ caption })}
+        />
+
+        <ChoiceRow
+          label="Position"
+          name="caption-position"
+          value={options.captionPosition}
+          options={captionPositionOptions}
+          columns={2}
+          disabled={!captioned}
+          onChange={(captionPosition) => onChange({ captionPosition })}
+        />
+
+        <SliderRow
+          label="Size"
+          value={options.captionSize}
+          min={CAPTION_SIZE.min}
+          max={CAPTION_SIZE.max}
+          step={CAPTION_SIZE.step}
+          suffix="px"
+          disabled={!captioned}
+          onChange={(value) => onChange({ captionSize: value })}
+        />
+
+        <ToggleRow
+          id="caption-dark"
+          label="Dark text"
+          checked={options.captionDark}
+          disabled={!captioned}
+          onCheckedChange={(checked) => onChange({ captionDark: checked })}
+        />
+      </Section>
+
       <Section title="Depth">
         <ChoiceRow
           label="Shadow"
@@ -260,27 +334,6 @@ export function StyleControls({
           options={shadowOptions}
           onChange={(value) => onChange({ shadow: value })}
         />
-
-        <div className="flex flex-col gap-3 border-t border-stroke pt-4">
-          <ToggleRow
-            id="window-navbar"
-            label="Title bar"
-            checked={options.showWindowNavbar}
-            onCheckedChange={(checked) =>
-              onChange({ showWindowNavbar: checked })
-            }
-          />
-
-          <ToggleRow
-            id="window-navbar-theme"
-            label="Dark title bar"
-            checked={options.windowNavbarDark}
-            disabled={!options.showWindowNavbar}
-            onCheckedChange={(checked) =>
-              onChange({ windowNavbarDark: checked })
-            }
-          />
-        </div>
       </Section>
     </div>
   );
@@ -494,29 +547,47 @@ function isSameCorners(a: Corners, b: Corners): boolean {
   return CORNER_ORDER.every((corner) => a[corner.key] === b[corner.key]);
 }
 
-function ChoiceRow({
+/** Spelled out rather than built, so Tailwind sees every class it has to ship. */
+const COLUMNS: Record<number, string> = {
+  2: "grid-cols-2",
+  3: "grid-cols-3",
+  5: "grid-cols-5",
+};
+
+/**
+ * Generic over the option value, so a field typed as a union stays one through
+ * the control instead of widening to `string` on the way back.
+ */
+function ChoiceRow<T extends string>({
   label,
   name,
   value,
   options,
   columns = 3,
+  disabled,
   onChange,
 }: {
   label: string;
   name: string;
-  value: string;
-  options: { value: string; label: string }[];
+  value: T;
+  options: readonly { value: T; label: string }[];
   /** How many across. Five short labels read better on one line than 3 and 2. */
-  columns?: number;
-  onChange: (value: string) => void;
+  columns?: 2 | 3 | 5;
+  disabled?: boolean;
+  onChange: (value: T) => void;
 }) {
   return (
-    <div className="flex flex-col gap-2">
+    <div
+      className={cn(
+        "flex flex-col gap-2 transition-opacity duration-150",
+        disabled && "opacity-50"
+      )}
+    >
       <FieldLabel>{label}</FieldLabel>
       <SegmentedGroup
         value={value}
-        onValueChange={onChange}
-        className={columns === 5 ? "grid-cols-5" : "grid-cols-3"}
+        onValueChange={(next) => onChange(next as T)}
+        className={COLUMNS[columns]}
       >
         {options.map((option) => (
           <SegmentedOption
@@ -524,12 +595,49 @@ function ChoiceRow({
             id={`${name}-${option.value}`}
             value={option.value}
             selected={value === option.value}
+            disabled={disabled}
             className="h-8"
           >
             {option.label}
           </SegmentedOption>
         ))}
       </SegmentedGroup>
+    </div>
+  );
+}
+
+function TextRow({
+  id,
+  label,
+  value,
+  placeholder,
+  disabled,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  placeholder: string;
+  disabled?: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex flex-col gap-2 transition-opacity duration-150",
+        disabled && "opacity-50"
+      )}
+    >
+      <FieldLabel htmlFor={id}>{label}</FieldLabel>
+      <Input
+        id={id}
+        value={value}
+        placeholder={placeholder}
+        disabled={disabled}
+        spellCheck={false}
+        onChange={(event) => onChange(event.target.value)}
+        className="text-xs placeholder:text-xs"
+      />
     </div>
   );
 }

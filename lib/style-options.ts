@@ -43,6 +43,32 @@ export function aspectBox(
     : { width, height: Math.round(width / ratio) };
 }
 
+export type WindowChrome = "none" | "mac" | "browser";
+
+/**
+ * What sits above the media. The title bar is a bare macOS bar with the three
+ * lights. The browser bar adds an address field, for a clip of a web page.
+ */
+export const windowChromeOptions: { value: WindowChrome; label: string }[] = [
+  { value: "none", label: "None" },
+  { value: "mac", label: "Title bar" },
+  { value: "browser", label: "Browser" },
+];
+
+export type CaptionPosition = "above" | "below";
+
+export const captionPositionOptions: {
+  value: CaptionPosition;
+  label: string;
+}[] = [
+  { value: "above", label: "Above" },
+  { value: "below", label: "Below" },
+];
+
+/** The caption's size range in px. The frame is in media pixels, so a 4K
+ * capture needs the top of it and a phone clip the bottom. */
+export const CAPTION_SIZE = { min: 12, max: 120, step: 4 };
+
 export const radiusSizes = [
   { value: 0, label: "None" },
   { value: 4, label: "Small" },

@@ -117,6 +117,47 @@ function Hint({
   );
 }
 
+/**
+ * A line of text beside the picture, inside the export.
+ *
+ * It sits in the frame subtree, so both exports bake it for free through the
+ * same raster as everything else. It carries its own colours for the same
+ * reason the title bar does: it sits over an arbitrary gradient, and the
+ * exported PNG has no theme. Light text gets a faint shadow, since white on a
+ * pale gradient needs the help and dark on a dark one is a choice the toggle
+ * already offers a way out of.
+ */
+function Caption({
+  text,
+  size,
+  dark,
+  position,
+}: {
+  text: string;
+  size: number;
+  dark: boolean;
+  position: "above" | "below";
+}) {
+  // The gap scales with the type, so a large title does not sit tight against
+  // the picture while a small caption floats away from it.
+  const gap = Math.round(size * 0.75);
+
+  return (
+    <p
+      className="w-0 min-w-full text-center font-medium leading-tight text-balance wrap-break-word"
+      style={{
+        fontSize: size,
+        color: dark ? "rgba(0,0,0,0.85)" : "rgba(255,255,255,0.95)",
+        textShadow: dark ? undefined : "0 1px 2px rgba(0,0,0,0.2)",
+        marginTop: position === "below" ? gap : undefined,
+        marginBottom: position === "above" ? gap : undefined,
+      }}
+    >
+      {text}
+    </p>
+  );
+}
+
 /* ─────────────────────────────────────────────────────────
  * ANIMATION STORYBOARD - artwork entry
  *
@@ -155,11 +196,16 @@ const DEFAULT_STYLE: StyleOptions = {
   imageRadius: 8,
   imageCorners: ALL_CORNERS,
   shadow: "shadow-2xl",
-  // Off. The bar is a frame around a window, and plenty of what gets dropped
+  // None. A bar is a frame around a window, and plenty of what gets dropped
   // here is not one: a clip of a chart, a phone recording, a crop of a page.
-  // Adding it is one press, and it takes the media's top corners with it.
-  showWindowNavbar: false,
+  // Adding one is one press, and it takes the media's top corners with it.
+  windowChrome: "none",
+  windowUrl: "",
   windowNavbarDark: false,
+  caption: "",
+  captionPosition: "below",
+  captionSize: 32,
+  captionDark: false,
   showNoiseOverlay: false,
   noiseIntensity: 55,
   useCustomGradient: false,
@@ -317,11 +363,13 @@ export function Clyp() {
   const removeLabel =
     media?.kind === "video" ? "Remove clip" : "Remove screenshot";
 
+  const framed = styleOptions.windowChrome !== "none";
   const mediaRadius = cornerRadius(
     styleOptions.imageRadius,
     styleOptions.imageCorners,
-    styleOptions.showWindowNavbar ? "bottom" : undefined,
+    framed ? "bottom" : undefined,
   );
+  const caption = styleOptions.caption.trim();
   const zoomed = zoom !== 1 && frameSize.width > 0;
 
   /**
@@ -1032,63 +1080,89 @@ export function Clyp() {
                       }}
                     >
                       {media ? (
+                        /* The measured artwork is the picture, its bar and its
+                           caption together, since all three have to fit
+                           inside a target shape. The caption is `w-0
+                           min-w-full`, so it takes the picture's width and
+                           wraps to it rather than widening the frame to its
+                           own unbroken length. */
                         <div
                           ref={artworkRef}
-                          className="animate-artwork-in relative inline-block"
+                          className="animate-artwork-in relative flex w-max flex-col items-center"
                           style={{ animationDelay: `${TIMING.artwork}ms` }}
                         >
-                          {styleOptions.showWindowNavbar && (
-                            <WindowNavbar
-                              dark={styleOptions.windowNavbarDark}
-                              style={{
-                                borderRadius: cornerRadius(
-                                  styleOptions.imageRadius,
-                                  styleOptions.imageCorners,
-                                  "top",
-                                ),
-                              }}
+                          {caption && styleOptions.captionPosition === "above" && (
+                            <Caption
+                              text={caption}
+                              size={styleOptions.captionSize}
+                              dark={styleOptions.captionDark}
+                              position="above"
                             />
                           )}
-                          {media.kind === "video" ? (
-                            /*
-                             * Inline, and started from an effect rather than
-                             * by `autoPlay`, which cannot report a browser
-                             * refusing to play with sound. Its own mute is its
-                             * own: a laid track mixes with this rather than
-                             * replacing it, so both play unless one is
-                             * silenced.
-                             *
-                             * No `loop` attribute: it loops at the file's end,
-                             * which is not the clip's end once there is a trim,
-                             * so the two would compete. The trim bar's own
-                             * frame loop owns it instead, and its loop control
-                             * switches it off.
-                             */
-                            <video
-                              ref={videoRef}
-                              src={media.src}
-                              muted={muted}
-                              playsInline
-                              onClick={togglePlayback}
-                              className={cn(
-                                styleOptions.shadow,
-                                "block h-auto max-w-full cursor-pointer select-none",
-                              )}
-                              style={{ borderRadius: mediaRadius }}
-                            />
-                          ) : (
-                            /* eslint-disable-next-line @next/next/no-img-element -- the
-                        source is a client-side data URL, which next/image cannot
-                        optimize and html-to-image cannot serialize. */
-                            <img
-                              src={media.src}
-                              alt="Your screenshot"
-                              className={cn(
-                                styleOptions.shadow,
-                                "block h-auto max-w-full select-none",
-                              )}
-                              style={{ borderRadius: mediaRadius }}
-                              draggable={false}
+                          <div className="relative">
+                            {styleOptions.windowChrome !== "none" && (
+                              <WindowNavbar
+                                variant={styleOptions.windowChrome}
+                                dark={styleOptions.windowNavbarDark}
+                                url={styleOptions.windowUrl}
+                                style={{
+                                  borderRadius: cornerRadius(
+                                    styleOptions.imageRadius,
+                                    styleOptions.imageCorners,
+                                    "top",
+                                  ),
+                                }}
+                              />
+                            )}
+                            {media.kind === "video" ? (
+                              /*
+                               * Inline, and started from an effect rather than
+                               * by `autoPlay`, which cannot report a browser
+                               * refusing to play with sound. Its own mute is its
+                               * own: a laid track mixes with this rather than
+                               * replacing it, so both play unless one is
+                               * silenced.
+                               *
+                               * No `loop` attribute: it loops at the file's end,
+                               * which is not the clip's end once there is a trim,
+                               * so the two would compete. The trim bar's own
+                               * frame loop owns it instead, and its loop control
+                               * switches it off.
+                               */
+                              <video
+                                ref={videoRef}
+                                src={media.src}
+                                muted={muted}
+                                playsInline
+                                onClick={togglePlayback}
+                                className={cn(
+                                  styleOptions.shadow,
+                                  "block h-auto max-w-full cursor-pointer select-none",
+                                )}
+                                style={{ borderRadius: mediaRadius }}
+                              />
+                            ) : (
+                              /* eslint-disable-next-line @next/next/no-img-element -- the
+                          source is a client-side data URL, which next/image cannot
+                          optimize and html-to-image cannot serialize. */
+                              <img
+                                src={media.src}
+                                alt="Your screenshot"
+                                className={cn(
+                                  styleOptions.shadow,
+                                  "block h-auto max-w-full select-none",
+                                )}
+                                style={{ borderRadius: mediaRadius }}
+                                draggable={false}
+                              />
+                            )}
+                          </div>
+                          {caption && styleOptions.captionPosition === "below" && (
+                            <Caption
+                              text={caption}
+                              size={styleOptions.captionSize}
+                              dark={styleOptions.captionDark}
+                              position="below"
                             />
                           )}
                         </div>

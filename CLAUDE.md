@@ -71,10 +71,10 @@ component: change the mapping in `globals.css` instead. The one exception is
 `bg-gray-1200 text-gray-100` on the primary button, where the contrast pair is
 the point.
 
-Two deliberate exceptions, both inside the exported artwork rather than app
-chrome: the window title bar traffic lights in `window-navbar.tsx`, and the
-gradient hexes in `lib/gradients.ts`. Neither follows the app theme, because
-the exported PNG has no theme.
+The exceptions are all inside the exported artwork rather than app chrome:
+the title bar and browser bar in `window-navbar.tsx`, the caption's text
+colours in `clyp.tsx`, and the gradient hexes in `lib/gradients.ts`. None of
+them follows the app theme, because the exported PNG has no theme.
 
 ## Gradients
 
@@ -801,11 +801,48 @@ On a 886x1918 clip the other branch runs and the width grows instead: 2076x2076
 at 1:1 and 3691x2076 at 16:9. The exports match, a 1408x1408 MP4 and a
 1028x1285 PNG.
 
+## Window chrome
+
+`windowChrome` in `StyleOptions` is `none`, `mac` or `browser`, and
+`WindowNavbar` in `components/window-navbar.tsx` renders the two bars. Both
+share the traffic lights and the light or dark tone. The browser bar adds an
+address field filled from `windowUrl`, centred with equal side columns and
+capped at `max-w-md`, because a field the full width of a 1280px window reads
+as a search box. The lock icon appears only when there is an address. Either
+bar takes the media's top corners.
+
+The field's tones are fixed colours inside the artwork, the same exception the
+lights already are. The Address row is disabled unless the browser bar is on.
+
+## Caption
+
+`caption` in `StyleOptions` is a line of text beside the artwork.
+`captionPosition` puts it above or below, `captionSize` is its font size in
+px, and `captionDark` flips the text from light to dark. It renders inside the
+frame subtree, so both exports bake it through the same raster as everything
+else and the video composite needs no change. Verified in an exported frame:
+the text is Inter, at the size set, at the picture's width.
+
+- **It is part of the measured artwork.** The `artworkRef` wrapper holds the
+  bar, the picture and the caption, so a target shape fits all three. The play
+  flash centres on the frame, so with a caption on one side it sits half the
+  caption's height off the picture's centre.
+- **It takes the picture's width.** The caption is `w-0 min-w-full`, which
+  contributes nothing to the wrapper's intrinsic width and then resolves to the
+  whole of it, so a long caption wraps at the picture's edge instead of
+  widening the frame to its own unbroken length.
+- **The size is in media pixels**, like the padding, because the frame is.
+  `CAPTION_SIZE` runs 12 to 120 px. The gap to the picture is three quarters of
+  the size, so a title does not sit tight while a small caption floats.
+- **The rows under the text follow it**, disabled while there is no text, the
+  way the grain amount follows the grain switch.
+- Light text carries a faint shadow for pale gradients. Dark text carries none.
+
 ## Corner radius
 
 Radii are numbers in px, not Tailwind classes, so individual corners are
 addressable. `cornerRadius(radius, corners, only?)` in `lib/style-options.ts`
-builds the shorthand. When the title bar is on it takes the top corners
+builds the shorthand. When a window bar is on it takes the top corners
 (`only: "top"`) and the screenshot takes the bottom ones, so the two always
 meet flush.
 
@@ -814,7 +851,9 @@ meet flush.
 1. Add the field to `StyleOptions` in `types/screenshot.ts`.
 2. Add its default to `DEFAULT_STYLE` in `components/clyp.tsx`.
 3. Render it in `components/style-controls.tsx` through `SliderRow`,
-   `SizeRow`, `ChoiceRow`, or `ToggleRow`. Do not hand-roll another row shape.
+   `SizeRow`, `ChoiceRow`, `ToggleRow`, or `TextRow`. Do not hand-roll another
+   row shape. `ChoiceRow` is generic over its value, so a field typed as a
+   union stays one through the control.
    Any "pick one of a few" control goes through `SegmentedGroup` /
    `SegmentedOption`, so the radius chips and the export scale tiles cannot
    drift apart.

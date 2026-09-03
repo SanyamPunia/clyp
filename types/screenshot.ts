@@ -1,4 +1,8 @@
-import type { Corners } from "@/lib/style-options";
+import type {
+  CaptionPosition,
+  Corners,
+  WindowChrome,
+} from "@/lib/style-options";
 
 export type MediaKind = "image" | "video";
 
@@ -62,8 +66,18 @@ export interface StyleOptions {
   /** Which of the screenshot's corners the image radius applies to. */
   imageCorners: Corners;
   shadow: string;
-  showWindowNavbar: boolean;
+  /** What is drawn above the media: nothing, a title bar, or a browser bar. */
+  windowChrome: WindowChrome;
+  /** The address a browser bar shows. Empty leaves the field blank. */
+  windowUrl: string;
   windowNavbarDark: boolean;
+  /** A line of text beside the artwork. Empty means none. */
+  caption: string;
+  captionPosition: CaptionPosition;
+  /** Caption font size in px. The frame is in media pixels, so this is too. */
+  captionSize: number;
+  /** Dark text, for a caption over a light background. */
+  captionDark: boolean;
   showNoiseOverlay: boolean;
   /** Grain strength, 0 to 100. */
   noiseIntensity: number;
