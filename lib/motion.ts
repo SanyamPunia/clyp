@@ -111,8 +111,7 @@ const SWEEP = 0.35;
 const TAU = 0.1;
 
 /*
- * How the window follows the action. Four numbers, and the picture is only as
- * calm as they make it.
+ * How the window follows the action.
  *
  * The first build glued the window to the action, and every wiggle of the
  * mouse moved the picture. The second let the action roam a comfort zone and
@@ -126,30 +125,42 @@ const TAU = 0.1;
  * about to be, so it arrives with it rather than after it.
  */
 
-/**
- * How much of the window the action may roam before the window is asked to
- * move, as a fraction of the window's size. The middle 60%.
- */
-const ZONE = 0.6;
-/**
- * How long the action must stay outside the zone before the window reacts, in
- * source seconds. A brief overshoot, a flick to a button and back, moves
- * nothing.
- */
-const DWELL = 0.15;
-/**
- * The glide's time constant, in source seconds. The window follows its target
- * through a critically damped spring: it starts slowly, moves, and settles
- * slowly, with no overshoot. A step settles in about four of these.
- */
-const GLIDE = 0.3;
-/**
- * How far ahead the window aims, in source seconds. A critically damped spring
- * trails a moving target by twice its time constant, so aiming that far ahead
- * cancels the trail on a steady mover, and arriving early on a stop is what a
- * settle looks like.
- */
-const LOOKAHEAD = 0.5;
+/** How the window follows: how much it lets the action roam, how long it
+ * waits, and how softly it moves. The right one depends on the recording. */
+export type FollowPace = "calm" | "balanced" | "quick";
+export const DEFAULT_PACE: FollowPace = "balanced";
+export const FOLLOW_PACES: { value: FollowPace; label: string }[] = [
+  { value: "calm", label: "Calm" },
+  { value: "balanced", label: "Balanced" },
+  { value: "quick", label: "Quick" },
+];
+
+interface PaceSettings {
+  /** How much of the window the action may roam before the window is asked
+   * to move, as a fraction of the window's size. */
+  zone: number;
+  /** How long the action must stay outside the zone before the window
+   * reacts, in source seconds. A flick to a button and back moves nothing. */
+  dwell: number;
+  /** The glide's time constant, in source seconds. The window follows its
+   * target through a critically damped spring: slow to start, slow to settle,
+   * no overshoot. A step lands in about four of these. */
+  glide: number;
+  /**
+   * How far ahead the window aims, in source seconds. A critically damped
+   * spring trails a moving target by twice its time constant, so aiming that
+   * far ahead cancels the trail on a steady mover, and arriving early on a
+   * stop is what a settle looks like.
+   */
+  lookahead: number;
+}
+
+const PACES: Record<FollowPace, PaceSettings> = {
+  calm: { zone: 0.75, dwell: 0.3, glide: 0.45, lookahead: 0.7 },
+  balanced: { zone: 0.6, dwell: 0.15, glide: 0.3, lookahead: 0.5 },
+  quick: { zone: 0.4, dwell: 0.05, glide: 0.18, lookahead: 0.3 },
+};
+
 /**
  * How far the action may get from the window's centre before the glide is
  * overruled, as a fraction of the window's half-extent. A flick across the
@@ -386,31 +397,33 @@ export function motionAt(
 
 /**
  * Where the window's centre is at `time` for a region at `scale`, following
- * the action through its comfort zone.
+ * the action at `pace`.
  *
  * The path is a sequential pass over the whole track, so it is computed once
- * per track and scale and kept on the track. It is pure in the track, which is
- * what lets the preview and the export both call it and agree.
+ * per track, scale and pace and kept on the track. It is pure in the track,
+ * which is what lets the preview and the export both call it and agree.
  */
 export function windowAt(
   track: MotionTrack,
   scale: number,
+  pace: FollowPace,
   time: number,
 ): { x: number; y: number } | null {
-  let byScale = paths.get(track);
-  if (!byScale) {
-    byScale = new Map();
-    paths.set(track, byScale);
+  let byKey = paths.get(track);
+  if (!byKey) {
+    byKey = new Map();
+    paths.set(track, byKey);
   }
-  let path = byScale.get(scale);
+  const key = `${scale}:${pace}`;
+  let path = byKey.get(key);
   if (!path) {
-    path = followPath(track.samples, scale);
-    byScale.set(scale, path);
+    path = followPath(track.samples, scale, PACES[pace]);
+    byKey.set(key, path);
   }
   return sampleAt(path, time);
 }
 
-const paths = new WeakMap<MotionTrack, Map<number, Float32Array>>();
+const paths = new WeakMap<MotionTrack, Map<string, Float32Array>>();
 
 /**
  * The window's centre over time.
@@ -422,14 +435,18 @@ const paths = new WeakMap<MotionTrack, Map<number, Float32Array>>();
  * toward the target through a critically damped spring, and is dragged along
  * outright when the present action would otherwise leave the frame.
  *
- * One pass over the track, so it is computed once per track and scale.
+ * One pass over the track, so it is computed once per track, scale and pace.
  */
-function followPath(samples: Float32Array, scale: number): Float32Array {
+function followPath(
+  samples: Float32Array,
+  scale: number,
+  pace: PaceSettings,
+): Float32Array {
   const out = new Float32Array(samples.length);
   const half = 1 / scale / 2;
-  const zone = half * ZONE;
+  const zone = half * pace.zone;
   const keep = half * KEEP;
-  const w = 1 / GLIDE;
+  const w = 1 / pace.glide;
 
   let tx = NaN;
   let ty = NaN;
@@ -457,7 +474,7 @@ function followPath(samples: Float32Array, scale: number): Float32Array {
 
         // Where the action is about to be, which is what the target aims at.
         // Off the end of the track it is where the action is.
-        while (ahead + 3 < samples.length && samples[ahead] < t + LOOKAHEAD) {
+        while (ahead + 3 < samples.length && samples[ahead] < t + pace.lookahead) {
           ahead += 3;
         }
         const fx = Number.isNaN(samples[ahead + 1]) ? ax : samples[ahead + 1];
@@ -469,7 +486,7 @@ function followPath(samples: Float32Array, scale: number): Float32Array {
         const outside = Math.abs(dx) > zone || Math.abs(dy) > zone;
         if (!outside) outsideSince = NaN;
         else if (Number.isNaN(outsideSince)) outsideSince = t;
-        if (outside && t - outsideSince >= DWELL) {
+        if (outside && t - outsideSince >= pace.dwell) {
           if (dx > zone) tx = fx - zone;
           else if (dx < -zone) tx = fx + zone;
           if (dy > zone) ty = fy - zone;

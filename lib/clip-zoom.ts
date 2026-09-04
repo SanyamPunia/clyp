@@ -20,7 +20,12 @@
  * beside them, since it is derived from the file rather than an edit on it.
  */
 
-import { type MotionTrack, windowAt } from "@/lib/motion";
+import {
+  type FollowPace,
+  type MotionTrack,
+  DEFAULT_PACE,
+  windowAt,
+} from "@/lib/motion";
 
 export interface ZoomFocus {
   x: number;
@@ -41,6 +46,8 @@ export interface ZoomRegion {
    * for a stretch with no motion to follow.
    */
   follow?: boolean;
+  /** How the window follows. Absent is `DEFAULT_PACE`. */
+  pace?: FollowPace;
 }
 
 /** What the picture is doing at one instant. */
@@ -99,7 +106,9 @@ export function zoomAt(
   // comfort zone inside the window and the window moves only when it reaches
   // the zone's edge, so a wiggle of the mouse moves nothing.
   const centre =
-    region.follow && motion ? windowAt(motion, region.scale, time) : null;
+    region.follow && motion
+      ? windowAt(motion, region.scale, region.pace ?? DEFAULT_PACE, time)
+      : null;
 
   return {
     scale,

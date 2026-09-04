@@ -643,9 +643,9 @@ the cursor, the typing, and the menus.
   it at the zone's edge, which stopped the wiggles but made every pan start and
   stop dead. `followPath` now runs two things over the smoothed track. The
   target moves only when the action has been outside the middle 60% of the
-  window (`ZONE`) for 0.15 s (`DWELL`), so a flick to a button and back moves
+  window (the pace's `zone`) for 0.15 s (`dwell`), so a flick to a button and back moves
   nothing. The window's centre glides toward the target through a critically
-  damped spring with a 0.3 s time constant (`GLIDE`): it starts slowly, moves,
+  damped spring with a 0.3 s time constant (`glide`): it starts slowly, moves,
   and settles with no overshoot, a step landing in about 1.2 s. Underneath, the
   centre is dragged along outright whenever the action would get further than
   70% of the window's half-extent from it (`KEEP`), since a flick across the
@@ -660,7 +660,7 @@ the cursor, the typing, and the menus.
   it stays in frame the whole way.
 - **The window aims at where the action is about to be.** The whole track is
   known before anything is drawn, so the operator here knows the choreography:
-  the target reads the action `LOOKAHEAD` seconds ahead and the window arrives
+  the target reads the action `lookahead` seconds ahead and the window arrives
   with the action rather than after it. A critically damped spring trails a
   moving target by twice its time constant, so the lookahead is set near that
   and cancels the trail on a steady mover. The hard bound still reads the
@@ -679,6 +679,31 @@ the cursor, the typing, and the menus.
   keeps a video playing in a tab out, since that raises the baseline. Verified
   on a square that pauses beside a two frame flash: the action snaps to the
   flash and holds until the square moves on.
+- **Three paces, chosen per region.** `FollowPace` is Calm, Balanced or Quick,
+  a table of zone, dwell, glide and lookahead in `PACES`, offered as a second
+  chip pill in the level slot while the region follows and stored with the
+  region. The right one depends on the recording, a slow walkthrough wanting
+  Calm and a quick demo wanting the window to keep up, and the constants were
+  set by feel on synthetic clips, so this is the knob a real recording gets.
+- **`centredOn` turns the window's centre into a focus, clamped to the
+  picture.** A focus is the point that holds still while the picture grows, so
+  a focus at the centre would not centre it. The window's left edge is
+  `focus.x * (1 - 1 / scale)`, so the focus that centres a point is the point
+  pulled in by half a window and rescaled, and at the picture's edges the clamp
+  holds the window against the edge.
+- **During the ramp the focus can sit at a corner.** A window that is 97% of
+  the picture cannot centre a point near its edge, so `centredOn` clamps and
+  the picture grows from the nearest corner until the window is small enough
+  to centre it. It is continuous in the scale, so nothing jumps.
+- **The marker becomes a readout while a region follows.** It shows where the
+  action is, projected through the zoom since it sits beside the video rather
+  than inside its transform, written every frame by the same loop that sets the
+  transform, takes no input and lets pointer events through. `region.focus` is
+  the fallback for a stretch with no motion, and the aim again if follow is
+  switched off.
+- The toggle sits in the level slot, pressed while following. Switching off is
+  free, switching on is free once the clip has been read, and the first time
+  asks.
 
 ## Soundtrack
 

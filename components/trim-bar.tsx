@@ -35,6 +35,7 @@ import {
   roomFor,
 } from "@/lib/clip-zoom";
 import { AUDIO_ACCEPT, formatPrecise } from "@/lib/media";
+import { DEFAULT_PACE, FOLLOW_PACES } from "@/lib/motion";
 import { drawWaveform, readWaveform, type Waveform } from "@/lib/waveform";
 import { EDIT_FPS, SPEED_OPTIONS, formatSpeed } from "@/lib/video-export";
 import { cn } from "@/lib/utils";
@@ -1191,6 +1192,7 @@ export function TrimBar({
                     the speed pill on the right, where two runs of "2x" side by side
                     would read as one control. Deselecting brings the add back. */}
                 {selectedRegion ? (
+                  <>
                   <div
                     role="group"
                     aria-label="Zoom level"
@@ -1234,6 +1236,27 @@ export function TrimBar({
                       <XIcon className="size-4" aria-hidden="true" />
                     </Transport>
                   </div>
+                  {/* How the window follows, shown only while it does. The right
+                      pace depends on the recording: a slow walkthrough wants Calm,
+                      a quick demo wants the window to keep up. */}
+                  {selectedRegion.follow && (
+                    <div
+                      role="group"
+                      aria-label="Follow pace"
+                      className="flex shrink-0 items-center gap-0.5 rounded-full bg-track p-0.5"
+                    >
+                      {FOLLOW_PACES.map((pace) => (
+                        <Chip
+                          key={pace.value}
+                          active={(selectedRegion.pace ?? DEFAULT_PACE) === pace.value}
+                          onClick={() => onZoomChange({ ...selectedRegion, pace: pace.value })}
+                        >
+                          {pace.label}
+                        </Chip>
+                      ))}
+                    </div>
+                  )}
+                  </>
                 ) : (
                   <Button
                     variant="ghost"
