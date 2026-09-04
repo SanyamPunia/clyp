@@ -1,5 +1,5 @@
 /**
- * Gradient registry.
+ * Background registry.
  *
  * One entry describes a gradient once. Both the picker swatch and the exported
  * canvas render from the same entry through `gradientToCss`, so a preset cannot
@@ -8,6 +8,12 @@
  * Linear presets keep their stops as data instead of a baked CSS string so the
  * angle control can re-render them at any direction. Mesh presets are layered
  * radial gradients over a base color and ignore the angle.
+ *
+ * A background is not always a gradient. A flat colour and no colour at all are
+ * the two other things a post needs, and both go through the same
+ * `background-image` the gradients do: a solid is written as a one-colour
+ * gradient rather than as a `background-color`, so the cross-fade, the grain
+ * layer and the export need to know nothing about which kind is showing.
  */
 
 export type GradientFamily = "atmosphere" | "aurora" | "spectrum" | "mono";
@@ -496,6 +502,32 @@ export const defaultGradientId = "golden-hour";
 /** Starting pair for the Custom tab, before the user picks anything. */
 export const defaultCustomGradient = { from: "#3b82f6", to: "#8b5cf6" };
 
+/**
+ * What is behind the artwork.
+ *
+ * `none` is a transparent background, which is what a screenshot dropped into
+ * a slide, a doc or a README needs. It is the one kind with no colour to
+ * resolve, so `resolveGradientCss` answers `none` and the layers paint
+ * nothing.
+ */
+export type BackgroundKind = "preset" | "custom" | "solid" | "none";
+
+export const backgroundKinds: { value: BackgroundKind; label: string }[] = [
+  { value: "preset", label: "Presets" },
+  { value: "custom", label: "Custom" },
+  { value: "solid", label: "Solid" },
+  { value: "none", label: "None" },
+];
+
+/** A dark neutral, which is what makes a light screenshot and its shadow read. */
+export const DEFAULT_SOLID_COLOR = "#18181b";
+
+/** The CSS `background-image` value for a flat colour. Written as a
+ * one-colour gradient so every consumer stays on one property. */
+export function solidToCss(color: string): string {
+  return `linear-gradient(0deg, ${color} 0%, ${color} 100%)`;
+}
+
 export function getGradient(id: string): GradientPreset {
   return (
     gradientPresets.find((preset) => preset.id === id) ??
@@ -541,29 +573,50 @@ export function customGradientToCss(
 
 /** Fields of the style state that decide the background. */
 interface GradientSelection {
-  useCustomGradient: boolean;
+  background: BackgroundKind;
   gradientId: string;
   gradientAngle: number;
   customGradientFrom: string;
   customGradientTo: string;
+  solidColor: string;
 }
 
 /**
  * The one place style state turns into a background value. Callers that need
  * to compare two states (to drive the cross-fade) run both through this.
+ *
+ * `none` is the CSS keyword, so a transparent background needs no branch
+ * anywhere downstream: the layers are handed a `background-image` that paints
+ * nothing.
  */
 export function resolveGradientCss(selection: GradientSelection): string {
-  if (selection.useCustomGradient) {
-    return customGradientToCss(
-      selection.customGradientFrom,
-      selection.customGradientTo,
-      selection.gradientAngle
-    );
-  }
+  switch (selection.background) {
+    case "none":
+      return "none";
 
-  const preset = getGradient(selection.gradientId);
-  return gradientToCss(
-    preset,
-    supportsAngle(preset) ? selection.gradientAngle : undefined
-  );
+    case "solid":
+      return solidToCss(selection.solidColor);
+
+    case "custom":
+      return customGradientToCss(
+        selection.customGradientFrom,
+        selection.customGradientTo,
+        selection.gradientAngle
+      );
+
+    case "preset": {
+      const preset = getGradient(selection.gradientId);
+      return gradientToCss(
+        preset,
+        supportsAngle(preset) ? selection.gradientAngle : undefined
+      );
+    }
+  }
+}
+
+/** Whether the angle control does anything for this selection. */
+export function angleApplies(selection: GradientSelection): boolean {
+  if (selection.background === "custom") return true;
+  if (selection.background !== "preset") return false;
+  return supportsAngle(getGradient(selection.gradientId));
 }

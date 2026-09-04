@@ -154,6 +154,37 @@
     background-size: 16px 16px;
     background-position: -1px -1px;
   }
+
+  /*
+   * What a transparent background looks like. It sits behind the frame rather
+   * than inside it, so the frame stays genuinely empty and the checks can
+   * never reach the export.
+   *
+   * Two 45deg gradients offset by half a tile is the checkerboard every
+   * editor draws. The tones are the panel steps rather than the mid-gray the
+   * convention uses, because this is app chrome sitting on the canvas and a
+   * light checkerboard would be the brightest thing on screen.
+   */
+  .transparency-grid {
+    background-color: var(--gray-200);
+    background-image:
+      linear-gradient(
+        45deg,
+        var(--gray-400) 25%,
+        transparent 25% 75%,
+        var(--gray-400) 75%
+      ),
+      linear-gradient(
+        45deg,
+        var(--gray-400) 25%,
+        transparent 25% 75%,
+        var(--gray-400) 75%
+      );
+    background-size: 16px 16px;
+    background-position:
+      0 0,
+      8px 8px;
+  }
 }
 
 @layer components {

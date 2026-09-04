@@ -57,6 +57,7 @@ import {
 import { type MotionRead, readMotion } from "@/lib/read-motion";
 import { rasterize } from "@/lib/raster";
 import {
+  DEFAULT_SOLID_COLOR,
   defaultCustomGradient,
   defaultGradientId,
   resolveGradientCss,
@@ -244,9 +245,10 @@ const DEFAULT_STYLE: StyleOptions = {
   captionDark: false,
   showNoiseOverlay: false,
   noiseIntensity: 55,
-  useCustomGradient: false,
+  background: "preset",
   customGradientFrom: defaultCustomGradient.from,
   customGradientTo: defaultCustomGradient.to,
+  solidColor: DEFAULT_SOLID_COLOR,
 };
 
 export function Clyp() {
@@ -1565,12 +1567,24 @@ export function Clyp() {
                   : undefined
               }
             >
+              {/* A transparent background is shown by what is behind it, and
+                  what is behind it is outside the export ref, so the checks
+                  can never be serialized into a frame. It takes the frame's
+                  own radius so the corners agree. */}
+              {styleOptions.background === "none" && (
+                <div
+                  aria-hidden="true"
+                  className="transparency-grid artwork-ease absolute inset-0 transition-[border-radius]"
+                  style={{ borderRadius: `${styleOptions.outerRadius}px` }}
+                />
+              )}
+
               {/* `w-max` keeps this at the frame's natural size. Without it the
                   frame would stretch to the scaled footprint above, shrinking
                   its own layout width and feeding a wrong size back into both
                   the measurement and the export. */}
               <div
-                className="w-max"
+                className="relative w-max"
                 style={
                   zoomed
                     ? {
@@ -1882,6 +1896,7 @@ export function Clyp() {
         speed={speed}
         hasClipAudio={media?.hasAudio ?? false}
         soundtrackName={soundtrack?.name}
+        transparent={styleOptions.background === "none"}
         progress={progress}
         defaultFilename={filenameFor(
           undefined,

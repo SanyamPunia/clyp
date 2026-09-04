@@ -1,3 +1,4 @@
+import type { BackgroundKind } from "@/lib/gradients";
 import type {
   CaptionPosition,
   Corners,
@@ -81,9 +82,12 @@ export interface StyleOptions {
   showNoiseOverlay: boolean;
   /** Grain strength, 0 to 100. */
   noiseIntensity: number;
-  useCustomGradient: boolean;
+  /** Which kind of background is showing. `none` is transparent. */
+  background: BackgroundKind;
   customGradientFrom: string;
   customGradientTo: string;
+  /** The flat colour, for `background: "solid"`. */
+  solidColor: string;
 }
 
 export interface ExportOptions {

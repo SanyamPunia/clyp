@@ -10,11 +10,14 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
+  angleApplies,
+  backgroundKinds,
   customGradientToCss,
   gradientFamilies,
   gradientPresets,
   gradientToCss,
   getGradient,
+  solidToCss,
   supportsAngle,
 } from "@/lib/gradients";
 import {
@@ -45,8 +48,15 @@ export function StyleControls({
   disabled = false,
 }: StyleControlsProps) {
   const activePreset = getGradient(options.gradientId);
-  const angleApplies = options.useCustomGradient || supportsAngle(activePreset);
+  const hasAngle = angleApplies(options);
   const captioned = options.caption.trim().length > 0;
+  // Grain over nothing is nothing: an overlay blend at any strength leaves a
+  // transparent background transparent, so the control would be dead.
+  const grainApplies = options.background !== "none";
+  const backgroundMeta =
+    options.background === "preset"
+      ? activePreset.label
+      : backgroundKinds.find((kind) => kind.value === options.background)!.label;
 
   return (
     <div
@@ -56,26 +66,22 @@ export function StyleControls({
         disabled && "pointer-events-none opacity-45 select-none"
       )}
     >
-      <Section
-        title="Background"
-        meta={options.useCustomGradient ? "Custom" : activePreset.label}
-      >
+      <Section title="Background" meta={backgroundMeta}>
         <Tabs
-          value={options.useCustomGradient ? "custom" : "presets"}
+          value={options.background}
           onValueChange={(value) =>
-            onChange({ useCustomGradient: value === "custom" })
+            onChange({ background: value as StyleOptions["background"] })
           }
         >
-          <TabsList className="mb-3 grid w-full grid-cols-2">
-            <TabsTrigger value="presets" className="text-xs">
-              Presets
-            </TabsTrigger>
-            <TabsTrigger value="custom" className="text-xs">
-              Custom
-            </TabsTrigger>
+          <TabsList className="mb-3 grid w-full grid-cols-4">
+            {backgroundKinds.map((kind) => (
+              <TabsTrigger key={kind.value} value={kind.value} className="text-xs">
+                {kind.label}
+              </TabsTrigger>
+            ))}
           </TabsList>
 
-          <TabsContent value="presets" className="flex flex-col gap-4">
+          <TabsContent value="preset" className="flex flex-col gap-4">
             {gradientFamilies.map((family) => {
               const presets = gradientPresets.filter(
                 (preset) => preset.family === family.id
@@ -87,7 +93,7 @@ export function StyleControls({
                   <div className="grid grid-cols-4 gap-2 sm:grid-cols-8">
                     {presets.map((preset) => {
                       const selected =
-                        !options.useCustomGradient &&
+                        options.background === "preset" &&
                         options.gradientId === preset.id;
 
                       return (
@@ -99,7 +105,7 @@ export function StyleControls({
                           onClick={() =>
                             onChange({
                               gradientId: preset.id,
-                              useCustomGradient: false,
+                              background: "preset",
                             })
                           }
                           className={cn(
@@ -161,7 +167,7 @@ export function StyleControls({
                 onChange={(color) =>
                   onChange({
                     customGradientFrom: color,
-                    useCustomGradient: true,
+                    background: "custom",
                   })
                 }
               />
@@ -171,15 +177,40 @@ export function StyleControls({
               <ColorPicker
                 color={options.customGradientTo}
                 onChange={(color) =>
-                  onChange({ customGradientTo: color, useCustomGradient: true })
+                  onChange({ customGradientTo: color, background: "custom" })
                 }
               />
             </div>
           </TabsContent>
+
+          <TabsContent value="solid" className="flex flex-col gap-3">
+            <div
+              className="h-24 w-full rounded-md border border-stroke"
+              style={{ backgroundImage: solidToCss(options.solidColor) }}
+              aria-hidden="true"
+            />
+            <div className="flex flex-col gap-1.5">
+              <FieldLabel>Colour</FieldLabel>
+              <ColorPicker
+                color={options.solidColor}
+                onChange={(color) =>
+                  onChange({ solidColor: color, background: "solid" })
+                }
+              />
+            </div>
+          </TabsContent>
+
+          <TabsContent value="none">
+            <div className="transparency-grid h-24 w-full rounded-md border border-stroke" aria-hidden="true" />
+            <p className="mt-3 text-xs text-muted-foreground">
+              The PNG keeps its transparency. MP4 has none, so a clip exports
+              on black.
+            </p>
+          </TabsContent>
         </Tabs>
 
         <div className="flex flex-col gap-4 border-t border-stroke pt-4">
-          {angleApplies ? (
+          {hasAngle ? (
             <SliderRow
               label="Angle"
               value={options.gradientAngle}
@@ -191,7 +222,11 @@ export function StyleControls({
             />
           ) : (
             <p className="text-xs text-muted-foreground">
-              Mesh gradients do not use an angle.
+              {options.background === "solid"
+                ? "A flat colour does not use an angle."
+                : options.background === "none"
+                  ? "There is nothing behind the artwork to angle."
+                  : "Mesh gradients do not use an angle."}
             </p>
           )}
 
@@ -199,6 +234,7 @@ export function StyleControls({
             id="noise-overlay"
             label="Grain"
             checked={options.showNoiseOverlay}
+            disabled={!grainApplies}
             onCheckedChange={(checked) =>
               onChange({ showNoiseOverlay: checked })
             }
@@ -211,7 +247,7 @@ export function StyleControls({
             max={100}
             step={5}
             suffix="%"
-            disabled={!options.showNoiseOverlay}
+            disabled={!grainApplies || !options.showNoiseOverlay}
             onChange={(value) => onChange({ noiseIntensity: value })}
           />
         </div>

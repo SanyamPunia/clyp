@@ -64,6 +64,8 @@ interface ExportModalProps {
   hasClipAudio?: boolean;
   /** Set when a soundtrack is laid over the clip, which mixes with its own. */
   soundtrackName?: string;
+  /** Set when the background is transparent, which an MP4 cannot carry. */
+  transparent?: boolean;
   /** 0 to 1 while a video encodes, null while a PNG renders. */
   progress?: number | null;
   /** What the filename field falls back to, shown as its placeholder. */
@@ -85,6 +87,7 @@ export function ExportModal({
   speed = 1,
   hasClipAudio = false,
   soundtrackName,
+  transparent = false,
   progress = null,
   defaultFilename,
   onCancel,
@@ -370,6 +373,16 @@ export function ExportModal({
                 </div>
               )}
             </div>
+          )}
+
+          {/* Only for a clip. A PNG keeps its transparency, which is what
+              picking a transparent background already said it would do, and a
+              sentence confirming it is a sentence nobody acts on. H.264 has no
+              alpha, so this one is a surprise worth naming. */}
+          {isVideo && transparent && (
+            <p className="text-xs text-muted-foreground">
+              MP4 carries no transparency, so the background exports as black.
+            </p>
           )}
 
           {!isCopy && (
