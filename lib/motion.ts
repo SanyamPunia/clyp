@@ -120,7 +120,10 @@ const TAU = 0.1;
  * keep it there, which stopped the wiggles but made every pan start and stop
  * dead: the window was still, then moving at the action's own speed, then
  * still again. A camera operator does neither. They let the subject roam, wait
- * a beat to see whether it means it, and then ease the camera after it.
+ * a beat to see whether it means it, and then ease the camera after it. And
+ * because the whole track is known before anything is drawn, the operator
+ * here also knows the choreography: the window aims at where the action is
+ * about to be, so it arrives with it rather than after it.
  */
 
 /**
@@ -140,6 +143,13 @@ const DWELL = 0.15;
  * slowly, with no overshoot. A step settles in about four of these.
  */
 const GLIDE = 0.3;
+/**
+ * How far ahead the window aims, in source seconds. A critically damped spring
+ * trails a moving target by twice its time constant, so aiming that far ahead
+ * cancels the trail on a steady mover, and arriving early on a stop is what a
+ * settle looks like.
+ */
+const LOOKAHEAD = 0.5;
 /**
  * How far the action may get from the window's centre before the glide is
  * overruled, as a fraction of the window's half-extent. A flick across the
@@ -406,11 +416,11 @@ const paths = new WeakMap<MotionTrack, Map<number, Float32Array>>();
  * The window's centre over time.
  *
  * Two things move. The target is where the window wants to be: it starts on
- * the first motion and moves only when the action has been outside the zone
- * for the dwell, by exactly enough to bring the zone's edge back to the
- * action. The centre is where the window is: it glides toward the target
- * through a critically damped spring, and is dragged along outright when the
- * action would otherwise leave the frame.
+ * the first motion and moves only when the action, read a little ahead of
+ * now, has been outside the zone for the dwell, by exactly enough to bring
+ * the zone's edge back to it. The centre is where the window is: it glides
+ * toward the target through a critically damped spring, and is dragged along
+ * outright when the present action would otherwise leave the frame.
  *
  * One pass over the track, so it is computed once per track and scale.
  */
@@ -429,6 +439,8 @@ function followPath(samples: Float32Array, scale: number): Float32Array {
   let vy = 0;
   let outsideSince = NaN;
   let last = NaN;
+  // The sample the lookahead has reached. It only ever moves forward.
+  let ahead = 0;
 
   for (let i = 0; i < samples.length; i += 3) {
     const t = samples[i];
@@ -443,17 +455,25 @@ function followPath(samples: Float32Array, scale: number): Float32Array {
         // A gap in the track is a gap, not a huge step for the spring.
         const dt = Math.min(Math.max(t - last, 0), 0.1);
 
+        // Where the action is about to be, which is what the target aims at.
+        // Off the end of the track it is where the action is.
+        while (ahead + 3 < samples.length && samples[ahead] < t + LOOKAHEAD) {
+          ahead += 3;
+        }
+        const fx = Number.isNaN(samples[ahead + 1]) ? ax : samples[ahead + 1];
+        const fy = Number.isNaN(samples[ahead + 2]) ? ay : samples[ahead + 2];
+
         // The target waits out the dwell, then tracks the zone's edge.
-        const dx = ax - tx;
-        const dy = ay - ty;
+        const dx = fx - tx;
+        const dy = fy - ty;
         const outside = Math.abs(dx) > zone || Math.abs(dy) > zone;
         if (!outside) outsideSince = NaN;
         else if (Number.isNaN(outsideSince)) outsideSince = t;
         if (outside && t - outsideSince >= DWELL) {
-          if (dx > zone) tx = ax - zone;
-          else if (dx < -zone) tx = ax + zone;
-          if (dy > zone) ty = ay - zone;
-          else if (dy < -zone) ty = ay + zone;
+          if (dx > zone) tx = fx - zone;
+          else if (dx < -zone) tx = fx + zone;
+          if (dy > zone) ty = fy - zone;
+          else if (dy < -zone) ty = fy + zone;
         }
 
         // The centre glides after the target, critically damped.

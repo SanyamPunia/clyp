@@ -658,6 +658,17 @@ the cursor, the typing, and the menus.
   Verified through the export on a square crossing a 640px clip at a quarter of
   the frame a second, which never pauses and so is the worst case for a glide:
   it stays in frame the whole way.
+- **The window aims at where the action is about to be.** The whole track is
+  known before anything is drawn, so the operator here knows the choreography:
+  the target reads the action `LOOKAHEAD` seconds ahead and the window arrives
+  with the action rather than after it. A critically damped spring trails a
+  moving target by twice its time constant, so the lookahead is set near that
+  and cancels the trail on a steady mover. The hard bound still reads the
+  present action, since that is what has to stay in frame. Measured on the
+  square that never pauses: the pan starts 0.2 s earlier and the square rides
+  2% nearer the centre. The gain is small there because that clip is all bound
+  and no glide, and it is largest where a real recording lives, on a cursor
+  that moves and stops.
 - **A click pins the action.** A click leaves a mark a cursor's travel does
   not: a sudden, compact change, a button's pressed state, a focus ring. A
   frame where at least 0.3% of the grid changed, at least three times the
