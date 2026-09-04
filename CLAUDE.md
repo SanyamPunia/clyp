@@ -40,6 +40,9 @@ lib/          pure modules, no React, and their specs beside them
 types/        shared types
 ```
 
+A hook lives beside the component that uses it, as `components/use-*.ts`.
+`use-edit-history.ts` is the only one so far. `lib/` still holds no React.
+
 `lib/` holds no React. `components/ui/` holds primitives with no product
 knowledge. Everything else is a feature component.
 
@@ -457,7 +460,8 @@ have to agree about where a second is.
   the source at six seconds at 0.99 SSIM against 0.61 at zero.
 - **`clipSeconds` in `clyp.tsx` is the one length everything reads**, so the
   toolbar, the duration readout, the size estimate and the encode cannot
-  describe a length nobody asked for.
+  describe a length nobody asked for. It is `keptSeconds(trim, cuts) / speed`,
+  so every cut comes off it. See Cuts.
 - **The trim is stored under the edits key, never beside the Blob.** It is an
   edit on the draft rather than part of it, and putting it in the media record
   would rewrite the whole Blob on every drag of a handle. See Draft
@@ -548,6 +552,127 @@ have to agree about where a second is.
   the tab order while they are out of sight. The state is the bar's own and is
   not persisted.
 
+## Cuts
+
+`lib/clip-cuts.ts` is the model. A cut is a stretch removed from the middle of
+the clip, on the source's axis like the trim, the speed and the zooms, so
+trimming never moves one and a speed change plays what survives faster rather
+than shifting it. The cuts live in `clyp.tsx` beside the trim and are stored
+with it under the edits key.
+
+**The trim can only take time off the ends, and a screen recording's dead time
+is rarely at the ends.** It is the page load, the fumble, the pause to read
+what just appeared.
+
+**Output time stops being source time shifted.** With a cut in the middle the
+two are a piecewise map, and everything that has to agree about when a frame
+lands goes through `toOutput`: the encode's video loop, both of its audio
+paths, the preview's playhead, the duration readout and the size estimate.
+Nothing recomputes it. `outputAt` is the same arithmetic against segments
+already derived, for the encode loop, which calls it once a frame and must not
+re-sort the cut list tens of thousands of times for one export.
+
+- **Cuts are tidied on every change**: sorted, clipped to the trim, and merged
+  where they overlap or touch. Two cuts that meet are one cut, since the join
+  they produce is the same, and keeping them apart would leave a zero-length
+  segment between them. So nothing downstream copes with an overlap, and
+  `afterCuts` never needs more than one step.
+- **A cut is shortened to leave `MIN_KEPT` rather than refused for it.** Unlike
+  a zoom, which either fits or does not, a cut can always be made smaller, and
+  on a two second clip a Cut button that does nothing is worse than one that
+  removes what it can. It refuses only when a cut worth having would not fit:
+  inside an existing cut, in a gap under `MIN_CUT`, or with less than `MIN_CUT`
+  of removable picture left.
+- **The kept block is drawn once per kept segment**, so a cut in the middle is
+  a real gap with the rail already under the lane showing through it. That is
+  what this lane's language already says: the kept clip is a block and what is
+  cut is a rail. The first build painted a fill over the block and ringed it in
+  brand, which read as two orange lines across a bar, and brand is the
+  playhead's alone here.
+- **A cut's edges are not `LaneEdge`s.** A trim handle is a full-height 12px
+  pill, and a cut's edge in that shape reads as a second pair of trim handles,
+  which is exactly what the first build looked like. `CutEdge` is a hairline
+  mark, shorter than the lane, centred on the edge it moves, with a handle's
+  width of grab area around it.
+- **Playback steps over a cut, and only while playing.** A paused playhead at a
+  cut's own start is showing the last frame that survives, which is the right
+  frame, and a loop that moved it would fight a scrub. A scrub lands on a kept
+  frame through `nearestKept`, taking the nearer edge so the playhead does not
+  run ahead of the pointer. A frame step carries on the way it was going
+  instead, since the nearer edge one frame into a cut is the frame just left
+  and the button would appear dead.
+- **A press on the bare lane deselects the selected cut.** Without it there is
+  no way back to the Cut button, whose slot the selected cut's own controls
+  take, so a second cut cannot be placed at all. Found by driving the real UI,
+  not by reading the code.
+- **Moving a trim handle re-clips the cuts to it**, so a cut dragged outside the
+  range stops removing anything rather than removing time the export no longer
+  covers.
+- **The encode runs one pass per kept segment.** `sink.samples` seeks to the
+  keyframe at or before its in point, so a cut is time the decoder never
+  spends.
+- **The streaming audio path carries a monotonic guard.** An audio sample is
+  about 21ms and a segment boundary falls inside one almost always, so the
+  sample straddling a join would be written twice, the second time at a
+  timestamp the muxer has already passed. AAC needs its samples in order and
+  not overlapping, so the later copy is dropped. What is lost is the tail of
+  one sample at each join.
+- **A mixed clip is read as one range per kept segment** and scheduled into the
+  `OfflineAudioContext` at its own output time, which is what a context is for.
+  All of them come off a single decoder: one `Input` per segment would hold
+  that many decode states on the same forty megabyte Blob at once.
+- **A laid soundtrack is scheduled once and plays through.** Its anchor moves
+  with the frame it is anchored to, through `toOutput`, but the track itself
+  does not jump with the picture. Music with a jump cut in it sounds broken,
+  and a music bed over a cut is what every editor plays straight.
+- A zoom region inside a cut plays nothing, the same as one outside the trim,
+  and the rail on the lane above it says so.
+
+Verified through the export, on a six second clip of one colour a second. One
+cut of the blue second gives a 5.000s file of 150 frames reading red, green,
+yellow, magenta, cyan, with the audio a continuous 440Hz across the join and no
+silent window in it. Two cuts give 4.000s and 120 frames reading red, blue,
+yellow, cyan. With a soundtrack that steps 440Hz to 880Hz at its own midpoint,
+the step lands at the output second its anchor maps to. With no cuts, 6.000s
+and 180 frames, unchanged.
+
+## Undo
+
+`components/use-edit-history.ts` is the history, and it covers the clip's
+edits: the trim, the cuts, the speed, the zoom regions and a soundtrack's
+placement. Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z, plus two buttons beside the
+playhead clock.
+
+**The history watches the state rather than being pushed to.** Every edit
+already lives in `clyp.tsx` as ordinary state, and threading a `pushUndo()`
+through every handler, every drag and every keyboard nudge is both invasive and
+the kind of thing a later handler forgets. So the hook takes the whole edit
+state as one value and notices when it changes.
+
+- **A change is recorded only once it settles**, after `SETTLE_MS`. A drag
+  rewrites the state every frame, and one entry per frame is a history nobody
+  can walk back. The timer restarts on each change, so a drag of any length
+  collapses into the one snapshot taken before it began. A pause mid-drag can
+  split it in two, which costs one extra press and nothing else.
+- **Style options are deliberately out.** They are sliders and chips dragged
+  back as easily as forward, they persist separately, and folding them in would
+  mean a press of undo sometimes moved the picture and sometimes changed a
+  colour.
+- **The soundtrack's file is out too, only its placement is in.** Undo moves
+  where a sound sits, never whether there is one: holding a Blob per entry to
+  bring a removed file back is not worth it, and removing one already confirms.
+- **A new clip and a restored draft both reset it.** Neither is an edit to walk
+  back from, and the defaults a restore replaces are not a state anyone asked
+  for. `loadMedia` and `applyEdits` reach the reset through a ref, since both
+  are declared above the hook that owns it.
+- **Undo pushes the live state onto the redo stack, not the last committed
+  one**, so an edit still inside its settle window is not lost by pressing undo
+  during it.
+- The buttons sit beside the clock rather than in the transport pill: that pill
+  is playback and these are the edits. Measured after adding them, the pill's
+  centre still holds the row's centre exactly from 1920px down to 380px, with
+  no page overflow.
+
 ## Speed
 
 `speed` in `clyp.tsx` is the clip's playback rate, one of `SPEED_OPTIONS` in
@@ -577,7 +702,7 @@ export as 120 frames at 60 fps over 2.000 s.
   arrives above 1x is cut on arrival, since `loadSoundtrack` is handed
   `duration / speed`. It is never drawn past the lane.
 - **`clipSeconds` is the output's length**, so the toolbar, the modal and the
-  size estimate all read `(end - start) / speed`. The trim bar's own readout
+  size estimate all read the kept seconds over the speed. The trim bar's own readout
   stays in source seconds, since that is the axis its handles cut on. A frame
   step moves `FRAME * speed` of source, which is one output frame.
 
@@ -1036,8 +1161,8 @@ Style options are a few hundred bytes and stay in localStorage, merged over
 field undefined.
 
 **The clip's edits are stored under a key of their own, `edits`, in the same
-IndexedDB store.** The trim, the speed, the zoom regions and the soundtrack's
-placement are a few hundred bytes. They were not stored at all at first,
+IndexedDB store.** The trim, the cuts, the speed, the zoom regions and the
+soundtrack's placement are a few hundred bytes. They were not stored at all at first,
 because the only record held the Blob and rewriting forty megabytes on every
 drag of a handle was out of the question. A second key costs nothing to
 rewrite, so the edits follow every change on a 300 ms debounce, which a drag
@@ -1053,7 +1178,11 @@ settles well inside, and the Blob is never touched.
   soundtrack's own restore for the same reason, clamped to the track's length.
 - **Everything is clamped to the restored duration and snapped to the frame
   grid on the way in.** A record that disagrees with its file can never cut
-  past the end. A speed outside `SPEED_OPTIONS` falls back to 1.
+  past the end. A speed outside `SPEED_OPTIONS` falls back to 1, and the cuts
+  are tidied against the restored trim, so a stored overlap cannot survive a
+  reload. A record written before cuts existed reads back with none.
+- **A restore resets the undo history.** Putting a draft back is not an edit to
+  walk back from. See Undo.
 - An image has no edits and clears the key. Removing the clip clears it. The
   fold and the selected zoom are view state and are not stored.
 - **The clip's motion track has a key of its own, `motion`.** It is derived
