@@ -43,6 +43,7 @@ import {
   type ZoomRegion,
   type ZoomSuggestion,
   DEFAULT_ZOOM_LEVEL,
+  ZOOM_LEVELS,
   newZoomId,
   placeZoom,
   suggestZooms,
@@ -579,7 +580,17 @@ export function Clyp() {
     setSpeed(SPEED_OPTIONS.includes(rate) ? rate : 1);
     setZooms(
       edits.zooms
-        .map((z) => ({ ...z, start: grid(z.start), end: grid(z.end) }))
+        .map((z) => ({
+          ...z,
+          start: grid(z.start),
+          end: grid(z.end),
+          // Clamped to a level the picker offers. A stored scale outside the
+          // set would leave every level chip unchecked, and a radiogroup with
+          // nothing checked has no tab stop.
+          scale: ZOOM_LEVELS.includes(z.scale as (typeof ZOOM_LEVELS)[number])
+            ? z.scale
+            : DEFAULT_ZOOM_LEVEL,
+        }))
         .filter((z) => z.end > z.start)
         .sort((a, b) => a.start - b.start),
     );

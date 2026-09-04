@@ -92,6 +92,13 @@ const COARSE_STEP = 1;
 
 const snap = (seconds: number) => Math.round(seconds / FRAME) * FRAME;
 
+/** Which part of a lane instance a gesture is moving. */
+type LanePart = "body" | "head" | "tail";
+
+/** One keyboard step, and the coarse one Shift gives. */
+const STEP = FRAME;
+const COARSE = 1;
+
 /** Elements that do something with a space of their own. */
 const SPACE_IS_THEIRS = new Set([
   "INPUT",
@@ -851,8 +858,41 @@ export function TrimBar({
    * does not fight it: the frame under the edge is what decides where a zoom
    * should start or stop, and it is gone before it can be read otherwise.
    */
+  /**
+   * A zoom moved by `by` seconds, bounded and snapped.
+   *
+   * One arithmetic with two consumers, the same split the export and the
+   * preview make: a drag passes the region it started from and the whole
+   * distance travelled, the keyboard passes the region as it is and one step.
+   * Neither has bounds of its own to get wrong.
+   */
+  const shiftZoom = useCallback(
+    (region: ZoomRegion, part: LanePart, by: number): ZoomRegion => {
+      const { lo, hi } = roomFor(zooms, region.id, duration);
+      const length = region.end - region.start;
+
+      if (part === "body") {
+        const start = snap(clamp(region.start + by, lo, hi - length));
+        return { ...region, start, end: start + length };
+      }
+      if (part === "head") {
+        return {
+          ...region,
+          start: snap(
+            clamp(region.start + by, lo, region.end - MIN_ZOOM_LENGTH),
+          ),
+        };
+      }
+      return {
+        ...region,
+        end: snap(clamp(region.end + by, region.start + MIN_ZOOM_LENGTH, hi)),
+      };
+    },
+    [duration, zooms],
+  );
+
   const dragZoom = useCallback(
-    (region: ZoomRegion, part: "body" | "head" | "tail") =>
+    (region: ZoomRegion, part: LanePart) =>
       (event: React.PointerEvent<HTMLDivElement>) => {
         if (disabled) return;
         event.preventDefault();
@@ -865,8 +905,6 @@ export function TrimBar({
 
         const origin = timeAt(event.clientX);
         const from = region;
-        const { lo, hi } = roomFor(zooms, region.id, duration);
-        const length = from.end - from.start;
         const wasSelected = selectedZoom === region.id;
         let moved = false;
         const show = (time: number) =>
@@ -877,19 +915,9 @@ export function TrimBar({
           if (!moved && Math.abs(by) < FRAME / 2) return;
           moved = true;
 
-          if (part === "body") {
-            const start = snap(clamp(from.start + by, lo, hi - length));
-            onZoomChange({ ...from, start, end: start + length });
-            show(start);
-          } else if (part === "head") {
-            const start = snap(clamp(from.start + by, lo, from.end - MIN_ZOOM_LENGTH));
-            onZoomChange({ ...from, start });
-            show(start);
-          } else {
-            const end = snap(clamp(from.end + by, from.start + MIN_ZOOM_LENGTH, hi));
-            onZoomChange({ ...from, end });
-            show(end - FRAME);
-          }
+          const next = shiftZoom(from, part, by);
+          onZoomChange(next);
+          show(part === "tail" ? next.end - FRAME : next.start);
         };
 
         const release = () => {
@@ -906,15 +934,14 @@ export function TrimBar({
       },
     [
       disabled,
-      duration,
       onPlayback,
       onSeek,
       onZoomChange,
       onZoomSelect,
       selectedZoom,
+      shiftZoom,
       timeAt,
       video,
-      zooms,
     ],
   );
 
@@ -932,8 +959,90 @@ export function TrimBar({
    * side of the edge rather than onto it, since inside the cut is the one
    * place the preview will not show.
    */
+  /**
+   * A soundtrack moved by `by` seconds of the lane, bounded and snapped.
+   *
+   * `slip` is the fourth gesture the wheel and an Alt-drag do: the region
+   * holds still and a different stretch of the file plays through it. Every
+   * one of them keeps the region inside the clip, since a part hanging off
+   * either end cannot be heard.
+   */
+  const shiftSound = useCallback(
+    (from: Soundtrack, part: LanePart | "slip", by: number): Soundtrack => {
+      const length = from.end - from.start;
+      const span = length * speed;
+
+      if (part === "slip") {
+        const step = snap(clamp(by / speed, -from.start, from.duration - from.end));
+        return { ...from, start: from.start + step, end: from.end + step };
+      }
+      if (part === "body") {
+        return {
+          ...from,
+          offset: snap(clamp(from.offset + by, 0, duration - span)),
+        };
+      }
+      if (part === "head") {
+        const room =
+          snap(
+            from.offset +
+              clamp(
+                by,
+                -Math.min(from.start * speed, from.offset),
+                (length - MIN_TRIM) * speed,
+              ),
+          ) - from.offset;
+        return { ...from, offset: from.offset + room, start: from.start + room / speed };
+      }
+      return {
+        ...from,
+        end: snap(
+          clamp(
+            from.end + by / speed,
+            from.start + MIN_TRIM,
+            Math.min(from.duration, from.start + (duration - from.offset) / speed),
+          ),
+        ),
+      };
+    },
+    [duration, speed],
+  );
+
+  /** A cut moved by `by` seconds, bounded and snapped. `shiftZoom`'s twin. */
+  const shiftCut = useCallback(
+    (cut: Cut, part: LanePart, by: number): Cut => {
+      // The prop rather than the mirror ref. This is built during render, and
+      // a ref read there is both what the lint forbids and unnecessary: the
+      // trim cannot change while a cut is being dragged or nudged.
+      const room = roomForCut(trim, cuts, 0, cut.id);
+      const { lo, hi } = room ?? { lo: trim.start, hi: trim.end };
+      const longest = longestCut(trim, cuts, cut.id);
+      const length = cut.end - cut.start;
+
+      if (part === "body") {
+        const start = snap(clamp(cut.start + by, lo, hi - length));
+        return { ...cut, start, end: start + length };
+      }
+      if (part === "head") {
+        return {
+          ...cut,
+          start: snap(
+            clamp(cut.start + by, Math.max(lo, cut.end - longest), cut.end - MIN_CUT),
+          ),
+        };
+      }
+      return {
+        ...cut,
+        end: snap(
+          clamp(cut.end + by, cut.start + MIN_CUT, Math.min(hi, cut.start + longest)),
+        ),
+      };
+    },
+    [cuts, trim],
+  );
+
   const dragCut = useCallback(
-    (cut: Cut, part: "body" | "head" | "tail") =>
+    (cut: Cut, part: LanePart) =>
       (event: React.PointerEvent<HTMLDivElement>) => {
         if (disabled) return;
         event.preventDefault();
@@ -946,13 +1055,6 @@ export function TrimBar({
 
         const origin = timeAt(event.clientX);
         const from = cut;
-        const room = roomForCut(rangeRef.current, cuts, 0, cut.id);
-        const { lo, hi } = room ?? { lo: trim.start, hi: trim.end };
-        const length = from.end - from.start;
-        // What this cut may grow to without taking the clip under MIN_KEPT.
-        // Clamped rather than refused, so the edge slides to the limit and
-        // stops there.
-        const longest = longestCut(rangeRef.current, cuts, cut.id);
         const wasSelected = selectedCut === cut.id;
         let moved = false;
         const show = (time: number) =>
@@ -963,31 +1065,9 @@ export function TrimBar({
           if (!moved && Math.abs(by) < FRAME / 2) return;
           moved = true;
 
-          if (part === "body") {
-            const start = snap(clamp(from.start + by, lo, hi - length));
-            onCutChange({ ...from, start, end: start + length });
-            show(start);
-          } else if (part === "head") {
-            const start = snap(
-              clamp(
-                from.start + by,
-                Math.max(lo, from.end - longest),
-                from.end - MIN_CUT,
-              ),
-            );
-            onCutChange({ ...from, start });
-            show(start);
-          } else {
-            const end = snap(
-              clamp(
-                from.end + by,
-                from.start + MIN_CUT,
-                Math.min(hi, from.start + longest),
-              ),
-            );
-            onCutChange({ ...from, end });
-            show(end);
-          }
+          const next = shiftCut(from, part, by);
+          onCutChange(next);
+          show(part === "tail" ? next.end : next.start);
         };
 
         const release = () => {
@@ -1003,18 +1083,72 @@ export function TrimBar({
         window.addEventListener("pointercancel", release);
       },
     [
-      cuts,
       disabled,
       onCutChange,
       onCutSelect,
       onPlayback,
       onSeek,
       selectedCut,
+      shiftCut,
       timeAt,
-      trim.end,
-      trim.start,
       video,
     ],
+  );
+
+  /**
+   * The keyboard half of every lane instance.
+   *
+   * The same gestures a pointer has, so a reader who cannot drag is not left
+   * with a control that only reports its value. Arrows move by one frame of
+   * the export and Shift by a second, which is what the trim's own handles
+   * already do. Delete removes, and Enter or Space selects and deselects.
+   *
+   * The playhead follows the part being moved, for the same reason a drag
+   * pauses and seeks: the frame under an edge is what decides where it
+   * belongs.
+   */
+  const laneKeys = useCallback(
+    <T,>(options: {
+      part: LanePart;
+      shift: (by: number) => T;
+      apply: (next: T) => void;
+      at: (next: T) => number;
+      onRemove?: () => void;
+      onToggle?: () => void;
+    }) =>
+      (event: React.KeyboardEvent) => {
+        if (disabled) return;
+        const { key, shiftKey } = event;
+
+        if (key === "Enter" || key === " ") {
+          if (!options.onToggle) return;
+          event.preventDefault();
+          options.onToggle();
+          return;
+        }
+        if (key === "Delete" || key === "Backspace") {
+          if (!options.onRemove) return;
+          event.preventDefault();
+          options.onRemove();
+          return;
+        }
+
+        const step = shiftKey ? COARSE : STEP;
+        const by =
+          key === "ArrowLeft" || key === "ArrowDown"
+            ? -step
+            : key === "ArrowRight" || key === "ArrowUp"
+              ? step
+              : 0;
+        if (!by) return;
+
+        event.preventDefault();
+        onPlayback(false);
+        const next = options.shift(by);
+        options.apply(next);
+        onSeek(clamp(options.at(next), trim.start, trim.end - FRAME));
+      },
+    [disabled, onPlayback, onSeek, trim.end, trim.start],
   );
 
   const selectedRegion = zooms.find((z) => z.id === selectedZoom) ?? null;
@@ -1211,12 +1345,14 @@ export function TrimBar({
                       aria-label={`Cut, ${formatPrecise(cut.start, duration)} to ${formatPrecise(cut.end, duration)}`}
                       aria-pressed={selected}
                       onPointerDown={dragCut(cut, "body")}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
-                          onCutSelect(selected ? null : cut.id);
-                        }
-                      }}
+                      onKeyDown={laneKeys({
+                        part: "body",
+                        shift: (by) => shiftCut(cut, "body", by),
+                        apply: onCutChange,
+                        at: (next) => next.start,
+                        onRemove: onCutRemove,
+                        onToggle: () => onCutSelect(selected ? null : cut.id),
+                      })}
                       className={cn(
                         "absolute inset-y-0 cursor-grab active:cursor-grabbing",
                         "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
@@ -1230,17 +1366,37 @@ export function TrimBar({
                         <div className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-stroke" />
                       )}
                     </div>
+                    {/* Reachable by keyboard only while the cut is selected.
+                        Every edge of every instance in the tab order would be
+                        a long walk to the controls past them, and a cut's
+                        edges are about the cut that is being worked on. */}
                     <CutEdge
                       label="Cut start"
+                      value={cut.start}
+                      duration={duration}
                       position={centre(cut.start / duration)}
                       selected={selected}
                       onPointerDown={dragCut(cut, "head")}
+                      onKeyDown={laneKeys({
+                        part: "head",
+                        shift: (by) => shiftCut(cut, "head", by),
+                        apply: onCutChange,
+                        at: (next) => next.start,
+                      })}
                     />
                     <CutEdge
                       label="Cut end"
+                      value={cut.end}
+                      duration={duration}
                       position={centre(cut.end / duration)}
                       selected={selected}
                       onPointerDown={dragCut(cut, "tail")}
+                      onKeyDown={laneKeys({
+                        part: "tail",
+                        shift: (by) => shiftCut(cut, "tail", by),
+                        apply: onCutChange,
+                        at: (next) => next.end,
+                      })}
                     />
                   </div>
                 );
@@ -1315,12 +1471,15 @@ export function TrimBar({
                         aria-label={`Zoom ${formatSpeed(region.scale)}, ${formatPrecise(region.start, duration)} to ${formatPrecise(region.end, duration)}`}
                         aria-pressed={selected}
                         onPointerDown={dragZoom(region, "body")}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter" || event.key === " ") {
-                            event.preventDefault();
-                            onZoomSelect(selected ? null : region.id);
-                          }
-                        }}
+                        onKeyDown={laneKeys({
+                          part: "body",
+                          shift: (by) => shiftZoom(region, "body", by),
+                          apply: onZoomChange,
+                          at: (next) => next.start,
+                          onRemove: onZoomRemove,
+                          onToggle: () =>
+                            onZoomSelect(selected ? null : region.id),
+                        })}
                         className={cn(
                           "absolute inset-y-0 flex cursor-grab items-center justify-center overflow-hidden rounded-md bg-elevated text-[11px] tabular-nums ring-1 transition-colors duration-150 active:cursor-grabbing",
                           "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
@@ -1337,13 +1496,31 @@ export function TrimBar({
                       </div>
                       <LaneEdge
                         label="Zoom start"
+                        value={region.start}
+                        duration={duration}
+                        reachable={selected}
                         position={at(region.start / duration)}
                         onPointerDown={dragZoom(region, "head")}
+                        onKeyDown={laneKeys({
+                          part: "head",
+                          shift: (by) => shiftZoom(region, "head", by),
+                          apply: onZoomChange,
+                          at: (next) => next.start,
+                        })}
                       />
                       <LaneEdge
                         label="Zoom end"
+                        value={region.end}
+                        duration={duration}
+                        reachable={selected}
                         position={at(region.end / duration)}
                         onPointerDown={dragZoom(region, "tail")}
+                        onKeyDown={laneKeys({
+                          part: "tail",
+                          shift: (by) => shiftZoom(region, "tail", by),
+                          apply: onZoomChange,
+                          at: (next) => next.end - FRAME,
+                        })}
                       />
                     </div>
                   );
@@ -1359,9 +1536,40 @@ export function TrimBar({
                   <TooltipTrigger asChild>
                     <div
                       ref={regionRef}
-                      role="group"
+                      role="slider"
+                      tabIndex={0}
                       aria-label={`Soundtrack, ${soundtrack.name}`}
+                      aria-valuemin={0}
+                      aria-valuemax={duration}
+                      aria-valuenow={Number(soundtrack.offset.toFixed(3))}
+                      aria-valuetext={formatPrecise(soundtrack.offset, duration)}
                       onPointerDown={dragSound("body")}
+                      // Alt with an arrow slips the sound through the region,
+                      // which is what Alt with a drag and the wheel both do.
+                      onKeyDown={(event) => {
+                        if (event.key === "Home" || event.key === "End") {
+                          event.preventDefault();
+                          onSoundtrackChange(
+                            shiftSound(
+                              soundtrack,
+                              "body",
+                              event.key === "Home" ? -duration : duration,
+                            ),
+                          );
+                          return;
+                        }
+                        laneKeys({
+                          part: "body",
+                          shift: (by) =>
+                            shiftSound(
+                              soundtrack,
+                              event.altKey ? "slip" : "body",
+                              by,
+                            ),
+                          apply: onSoundtrackChange,
+                          at: (next) => next.offset,
+                        })(event);
+                      }}
                       // Back to the top of the file, keeping the region where it is.
                       // A slip is easy to lose track of and this is the way back.
                       onDoubleClick={() =>
@@ -1398,17 +1606,36 @@ export function TrimBar({
 
                 <LaneEdge
                   label="Soundtrack start"
+                  value={soundtrack.offset}
+                  duration={duration}
                   position={at(soundtrack.offset / duration)}
                   onPointerDown={dragSound("head")}
+                  onKeyDown={laneKeys({
+                    part: "head",
+                    shift: (by) => shiftSound(soundtrack, "head", by),
+                    apply: onSoundtrackChange,
+                    at: (next) => next.offset,
+                  })}
                 />
                 <LaneEdge
                   label="Soundtrack end"
+                  value={
+                    soundtrack.offset +
+                    (soundtrack.end - soundtrack.start) * speed
+                  }
+                  duration={duration}
                   position={at(
                     (soundtrack.offset +
                       (soundtrack.end - soundtrack.start) * speed) /
                       duration,
                   )}
                   onPointerDown={dragSound("tail")}
+                  onKeyDown={laneKeys({
+                    part: "tail",
+                    shift: (by) => shiftSound(soundtrack, "tail", by),
+                    apply: onSoundtrackChange,
+                    at: (next) => next.offset + (next.end - next.start) * speed,
+                  })}
                 />
               </div>
             )}
@@ -1523,23 +1750,23 @@ export function TrimBar({
                 {selectedRegion && (
                   <>
                   <div
-                    role="group"
-                    aria-label="Zoom level"
                     className="flex shrink-0 items-center gap-0.5 rounded-full bg-track p-0.5"
                   >
                     <ZoomInIcon
                       className="mx-1.5 size-3.5 shrink-0 text-muted-foreground"
                       aria-hidden="true"
                     />
-                    {ZOOM_LEVELS.map((level) => (
-                      <Chip
-                        key={level}
-                        active={selectedRegion.scale === level}
-                        onClick={() => onZoomChange({ ...selectedRegion, scale: level })}
-                      >
-                        {formatSpeed(level)}
-                      </Chip>
-                    ))}
+                    <ChipGroup label="Zoom level">
+                      {ZOOM_LEVELS.map((level) => (
+                        <Chip
+                          key={level}
+                          active={selectedRegion.scale === level}
+                          onClick={() => onZoomChange({ ...selectedRegion, scale: level })}
+                        >
+                          {formatSpeed(level)}
+                        </Chip>
+                      ))}
+                    </ChipGroup>
                     {/* Follow the action or hold the aim. A toggle's label names
                         what a press will do, and while the clip's motion is being
                         read it names the progress instead, with the glyph spinning.
@@ -1570,19 +1797,19 @@ export function TrimBar({
                       a quick demo wants the window to keep up. */}
                   {selectedRegion.follow && (
                     <div
-                      role="group"
-                      aria-label="Follow pace"
-                      className="flex shrink-0 items-center gap-0.5 rounded-full bg-track p-0.5"
+                      className="flex shrink-0 items-center rounded-full bg-track p-0.5"
                     >
-                      {FOLLOW_PACES.map((pace) => (
-                        <Chip
-                          key={pace.value}
-                          active={(selectedRegion.pace ?? DEFAULT_PACE) === pace.value}
-                          onClick={() => onZoomChange({ ...selectedRegion, pace: pace.value })}
-                        >
-                          {pace.label}
-                        </Chip>
-                      ))}
+                      <ChipGroup label="Follow pace">
+                        {FOLLOW_PACES.map((pace) => (
+                          <Chip
+                            key={pace.value}
+                            active={(selectedRegion.pace ?? DEFAULT_PACE) === pace.value}
+                            onClick={() => onZoomChange({ ...selectedRegion, pace: pace.value })}
+                          >
+                            {pace.label}
+                          </Chip>
+                        ))}
+                      </ChipGroup>
                     </div>
                   )}
                   </>
@@ -1614,24 +1841,22 @@ export function TrimBar({
                 {/* The same recessed pill as the transport, with text chips rather
                     than glyphs: "2x" is its own label and needs no tooltip. The gauge
                     is what says the numbers are a rate rather than a zoom. */}
-                <div
-                  role="group"
-                  aria-label="Playback speed"
-                  className="flex items-center gap-0.5 rounded-full bg-track p-0.5"
-                >
+                <div className="flex items-center gap-0.5 rounded-full bg-track p-0.5">
                   <GaugeIcon
                     className="mx-1.5 size-3.5 shrink-0 text-muted-foreground"
                     aria-hidden="true"
                   />
-                  {SPEED_OPTIONS.map((rate) => (
-                    <Chip
-                      key={rate}
-                      active={speed === rate}
-                      onClick={() => onSpeedChange(rate)}
-                    >
-                      {formatSpeed(rate)}
-                    </Chip>
-                  ))}
+                  <ChipGroup label="Playback speed">
+                    {SPEED_OPTIONS.map((rate) => (
+                      <Chip
+                        key={rate}
+                        active={speed === rate}
+                        onClick={() => onSpeedChange(rate)}
+                      >
+                        {formatSpeed(rate)}
+                      </Chip>
+                    ))}
+                  </ChipGroup>
                 </div>
 
                 {/* One control per source, because a clip can arrive with sound and
@@ -1738,23 +1963,49 @@ function Wave({
 
 /** An edge of a soundtrack or zoom region. Narrower than a trim handle, since
  * it sits on a shorter lane and there are four grips in one column of pixels. */
+/**
+ * An edge of a lane instance.
+ *
+ * A slider rather than a button, like the trim's own handles: it carries a
+ * value in seconds and answers the arrow keys, so a reader who cannot drag can
+ * still place it. `reachable` puts it in the tab order only while its instance
+ * is selected, since every edge of every instance would be a long walk past
+ * the controls beyond them.
+ */
 function LaneEdge({
   label,
+  value,
+  duration,
   position,
+  reachable = true,
   onPointerDown,
+  onKeyDown,
 }: {
   label: string;
+  value: number;
+  duration: number;
   position: string;
+  reachable?: boolean;
   onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => void;
+  onKeyDown?: (event: React.KeyboardEvent) => void;
 }) {
   return (
     <div
-      role="button"
-      tabIndex={-1}
+      role="slider"
+      tabIndex={reachable ? 0 : -1}
       aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={duration}
+      aria-valuenow={Number(value.toFixed(3))}
+      aria-valuetext={formatPrecise(value, duration)}
       onPointerDown={onPointerDown}
+      onKeyDown={onKeyDown}
       style={{ left: position, width: HANDLE }}
-      className="absolute inset-y-0 cursor-ew-resize touch-none rounded-md bg-stroke-strong transition-colors duration-150 hover:bg-foreground/70"
+      className={cn(
+        "absolute inset-y-0 cursor-ew-resize touch-none rounded-md bg-stroke-strong",
+        "transition-colors duration-150 hover:bg-foreground/70",
+        "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+      )}
     />
   );
 }
@@ -1770,23 +2021,37 @@ function LaneEdge({
  */
 function CutEdge({
   label,
+  value,
+  duration,
   position,
   selected,
   onPointerDown,
+  onKeyDown,
 }: {
   label: string;
+  value: number;
+  duration: number;
   position: string;
   selected: boolean;
   onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => void;
+  onKeyDown?: (event: React.KeyboardEvent) => void;
 }) {
   return (
     <div
-      role="button"
-      tabIndex={-1}
+      role="slider"
+      tabIndex={selected ? 0 : -1}
       aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={duration}
+      aria-valuenow={Number(value.toFixed(3))}
+      aria-valuetext={formatPrecise(value, duration)}
       onPointerDown={onPointerDown}
+      onKeyDown={onKeyDown}
       style={{ left: position, width: HANDLE }}
-      className="group absolute inset-y-0 -translate-x-1/2 cursor-ew-resize touch-none"
+      className={cn(
+        "group absolute inset-y-0 -translate-x-1/2 cursor-ew-resize touch-none",
+        "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+      )}
     >
       <span
         aria-hidden="true"
@@ -1828,6 +2093,58 @@ function ticks(duration: number, width: number): Tick[] {
 }
 
 /** A text option inside a recessed pill, the shape the speed and zoom levels share. */
+/**
+ * A run of chips that is one choice, not several toggles.
+ *
+ * `aria-pressed` on each said "four buttons, one of them down". A radiogroup
+ * says "one of four", which is what a speed or a zoom level is, and it brings
+ * the roving tab stop with it: the group is one stop and the arrows move
+ * inside it, the way every other set of related choices in the panel behaves.
+ */
+function ChipGroup({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  const move = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const keys = ["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"];
+    if (!keys.includes(event.key)) return;
+
+    const items = [
+      ...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]'),
+    ];
+    const from = items.indexOf(document.activeElement as HTMLButtonElement);
+    if (from < 0) return;
+
+    event.preventDefault();
+    const to =
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? items.length - 1
+          : event.key === "ArrowRight" || event.key === "ArrowDown"
+            ? Math.min(from + 1, items.length - 1)
+            : Math.max(from - 1, 0);
+    // A radio moves and chooses in one press, which is the convention and is
+    // what a reader stepping through speeds expects to hear.
+    items[to]?.focus();
+    items[to]?.click();
+  };
+
+  return (
+    <div
+      role="radiogroup"
+      aria-label={label}
+      className="flex items-center gap-0.5"
+      onKeyDown={move}
+    >
+      {children}
+    </div>
+  );
+}
+
 function Chip({
   active,
   onClick,
@@ -1840,7 +2157,9 @@ function Chip({
   return (
     <button
       type="button"
-      aria-pressed={active}
+      role="radio"
+      aria-checked={active}
+      tabIndex={active ? 0 : -1}
       onClick={onClick}
       className={cn(
         "h-7 cursor-pointer rounded-full px-2 text-[13px] tabular-nums",

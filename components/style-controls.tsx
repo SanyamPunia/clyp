@@ -86,15 +86,28 @@ export function StyleControls({
               const presets = gradientPresets.filter(
                 (preset) => preset.family === family.id
               );
+              // Whether the chosen background is one of this family's, which
+              // decides where the family's single tab stop sits.
+              const chosen =
+                options.background === "preset" &&
+                presets.some((preset) => preset.id === options.gradientId);
 
               return (
                 <div key={family.id} className="flex flex-col gap-2">
                   <p className="text-[13px] text-muted-foreground">{family.label}</p>
-                  <div className="grid grid-cols-4 gap-2 sm:grid-cols-8">
-                    {presets.map((preset) => {
+                  <RovingGrid
+                    label={`${family.label} backgrounds`}
+                    className="grid grid-cols-4 gap-2 sm:grid-cols-8"
+                  >
+                    {presets.map((preset, index) => {
                       const selected =
                         options.background === "preset" &&
                         options.gradientId === preset.id;
+                      // One tab stop per family: the chosen swatch, or the
+                      // first when the choice is elsewhere. Sixty-four stops
+                      // between the picker and the angle slider is a long walk
+                      // for a reader who is not looking for a background.
+                      const stop = selected || (!chosen && index === 0);
 
                       return (
                         <button
@@ -108,6 +121,7 @@ export function StyleControls({
                               background: "preset",
                             })
                           }
+                          tabIndex={stop ? 0 : -1}
                           className={cn(
                             "group relative aspect-[4/5] cursor-pointer overflow-hidden rounded-md",
                             "outline-2 outline-offset-2 transition-all duration-150 active:scale-[0.94]",
@@ -142,7 +156,7 @@ export function StyleControls({
                         </button>
                       );
                     })}
-                  </div>
+                  </RovingGrid>
                 </div>
               );
             })}
@@ -707,6 +721,57 @@ function ToggleRow({
         disabled={disabled}
         onCheckedChange={onCheckedChange}
       />
+    </div>
+  );
+}
+
+/**
+ * A grid whose items share one tab stop and are walked with the arrow keys.
+ *
+ * The background picker is sixty-four swatches. As sixty-four tab stops it is
+ * a wall between the panel's first control and its second, and a reader not
+ * looking for a background has to walk all of it. One stop per family and the
+ * arrows inside is what a set of related choices is supposed to do.
+ *
+ * Navigation is linear rather than by row and column. The grid is four columns
+ * at one width and eight at another, so a Down that means "one row" would have
+ * to measure the layout to know what a row is, and would be wrong whenever it
+ * guessed. Next and previous are right at any column count.
+ */
+function RovingGrid({
+  label,
+  className,
+  children,
+}: {
+  label: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  const move = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const keys = ["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"];
+    if (!keys.includes(event.key)) return;
+
+    const items = [
+      ...event.currentTarget.querySelectorAll<HTMLButtonElement>("button"),
+    ].filter((item) => !item.disabled);
+    const from = items.indexOf(document.activeElement as HTMLButtonElement);
+    if (from < 0) return;
+
+    event.preventDefault();
+    const to =
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? items.length - 1
+          : event.key === "ArrowRight" || event.key === "ArrowDown"
+            ? Math.min(from + 1, items.length - 1)
+            : Math.max(from - 1, 0);
+    items[to]?.focus();
+  };
+
+  return (
+    <div role="group" aria-label={label} className={className} onKeyDown={move}>
+      {children}
     </div>
   );
 }

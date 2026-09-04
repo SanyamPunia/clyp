@@ -694,6 +694,82 @@ state as one value and notices when it changes.
   centre still holds the row's centre exactly from 1920px down to 380px, with
   no page overflow.
 
+## Keyboard
+
+Everything a pointer can do on the lanes, a keyboard can do. The bar is a
+timeline, and a timeline that only answers a drag is a control half the
+readers cannot use.
+
+**One arithmetic, two consumers, the same split the export and the preview
+make.** `shiftZoom`, `shiftCut` and `shiftSound` each take the instance, which
+part of it is moving, and a distance in seconds, and return the moved instance
+bounded and snapped. A drag passes the instance it started from and the whole
+distance travelled. The keyboard passes the instance as it is and one step.
+Neither has bounds of its own to get wrong.
+
+- **Arrows move by one frame of the export, Shift by a second**, which is what
+  the trim's own handles already did. `laneKeys` is the one handler behind all
+  of them, so a zoom, a cut and a soundtrack cannot drift apart.
+- **Delete or Backspace removes**, through the same confirm the X opens. Enter
+  and Space select and deselect.
+- **An instance's edges are sliders, not buttons.** They carry a value in
+  seconds and an `aria-valuetext`, so a reader hears where an edge is rather
+  than being told it is a button.
+- **An edge is in the tab order only while its instance is selected.** Every
+  edge of every instance would be a long walk past the controls beyond them,
+  and an edge is about the instance being worked on. Measured on a clip with
+  one zoom: five stops for the whole lane, the two trim handles included.
+- **Alt with an arrow slips a soundtrack**, which is what Alt with a drag and
+  the wheel already do. Home and End take it to either end of the clip.
+- **The playhead follows the part being moved**, for the same reason a drag
+  pauses and seeks: the frame under an edge is what decides where it belongs.
+
+### Tab stops
+
+**A set of related choices is one stop with the arrows inside it, never one
+stop each.**
+
+- **The background picker was sixty-four stops**, a wall between the panel's
+  first control and its second that a reader not looking for a background had
+  to walk. `RovingGrid` gives each family one stop, on the chosen swatch or
+  the first, and the arrows move within it. Navigation is linear rather than
+  by row and column: the grid is four columns at one width and eight at
+  another, so a Down meaning "one row" would have to measure the layout to
+  know what a row is and would be wrong whenever it guessed.
+- **The chip pills are radiogroups.** `aria-pressed` on each chip said "four
+  buttons, one of them down". A speed, a zoom level and a follow pace are one
+  of four, and a radiogroup says so and brings the roving stop with it. Arrows
+  move and choose in one press, which is the convention.
+- A restored zoom's level is clamped to one the picker offers, since a
+  radiogroup with nothing checked would have no tab stop at all.
+
+Measured with a clip loaded: 46 tab stops for the whole page, against 109
+before this.
+
+### Shortcuts
+
+| Keys | What |
+| --- | --- |
+| Space | Play and pause, from anywhere on the page |
+| Cmd/Ctrl S | Download |
+| Cmd/Ctrl Shift C | Copy the picture |
+| Cmd/Ctrl C | Copy the selected zoom or cut |
+| Cmd/Ctrl V | Paste it at the playhead |
+| Cmd/Ctrl Z | Undo, Shift to redo |
+
+**Cmd C never fires over a real copy.** Text the reader has selected is theirs,
+and a field being typed in keeps its own undo stack, which is the browser's and
+is about the text. Both are checked before the lane is.
+
+**The clipboard is the app's own, not the system's.** Cmd C would otherwise
+write JSON over whatever the reader had copied, and reading it back needs a
+permission this does not deserve. It also means a paste cannot arrive holding
+something from another site.
+
+**One selection across the lanes.** A zoom and a cut could both be selected at
+once, which made "the selected thing" ambiguous and had the copy shortcut
+taking the wrong one.
+
 ## Speed
 
 `speed` in `clyp.tsx` is the clip's playback rate, one of `SPEED_OPTIONS` in
@@ -769,6 +845,18 @@ position, so the marker never reached the file.
   region and seeks into it when the playhead is outside, since a marker for a
   zoom nobody can see is a dead control. A second press on the selected one
   without moving, or a press on the bare lane, deselects.
+- **The bottom row's four actions are one recessed pill of glyphs.** Add a
+  soundtrack, add a zoom, cut, and suggest zooms were four labelled buttons,
+  and with a following zoom selected the row also carried a level pill and a
+  pace pill and ran past the panel. Each is a single verb, so each is a
+  tooltip rather than a label. Measured at 1440px: 334px with nothing selected
+  against about 620px before, and the worst case is 862px on one line where it
+  used to wrap.
+- **The actions no longer swap out for the selected instance's controls.** The
+  swap kept the row's width down, but it also meant a second zoom could not be
+  added while the first was selected, and the same for a cut. The old note
+  about the level chips and the speed pill reading as one control still holds:
+  the two are at opposite ends of the row with the pace pill between them.
 - **The selected region's level and remove take the add button's slot** in
   the bottom row, and give it back on deselect. The first build gave them a row
   of their own between the lanes and the axis, with a sentence of hint beside
