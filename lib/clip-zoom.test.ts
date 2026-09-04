@@ -394,3 +394,28 @@ describe("suggestZooms", () => {
     }
   });
 });
+
+describe("placeZoom with a length, which is what a paste needs", () => {
+  it("keeps the copied length where there is room", () => {
+    expect(placeZoom([], 3, 10, 3.5)).toEqual({ start: 3, end: 6.5 });
+  });
+
+  it("takes what is left when a neighbour is closer", () => {
+    expect(placeZoom([region({ start: 5, end: 7 })], 3, 10, 3.5)).toEqual({
+      start: 3,
+      end: 5,
+    });
+  });
+
+  it("still pulls back only to the shortest, never to the length", () => {
+    const placed = placeZoom([], 9.9, 10, 4)!;
+    expect(placed.end - placed.start).toBeCloseTo(MIN_ZOOM_LENGTH, 10);
+  });
+
+  it("defaults to the usual length when none is given", () => {
+    expect(placeZoom([], 1, 10)).toEqual({
+      start: 1,
+      end: 1 + DEFAULT_ZOOM_LENGTH,
+    });
+  });
+});

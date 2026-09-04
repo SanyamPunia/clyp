@@ -581,3 +581,30 @@ describe("longestCut", () => {
     expect(leavesEnough(t, [cut(0, longest + 0.01, "a")])).toBe(false);
   });
 });
+
+describe("placeCut with a length, which is what a paste needs", () => {
+  it("keeps the copied length where there is room", () => {
+    expect(placeCut(trim(0, 10), [], 3, 2.5)).toEqual({ start: 3, end: 5.5 });
+  });
+
+  it("takes what is left when a neighbour is closer", () => {
+    expect(placeCut(trim(0, 10), [cut(4, 6)], 3, 2.5)).toEqual({
+      start: 3,
+      end: 4,
+    });
+  });
+
+  it("still pulls back only to the shortest, never to the length", () => {
+    // A press in the last tenth of a second did not mean "remove a second".
+    const placed = placeCut(trim(0, 10), [], 9.9, 2)!;
+    expect(placed.end - placed.start).toBeCloseTo(MIN_CUT, 10);
+  });
+
+  it("never leaves less than the minimum, whatever length is asked for", () => {
+    const placed = placeCut(trim(0, 3), [], 0, 10);
+    expect(placed).not.toBeNull();
+    expect(keptSeconds(trim(0, 3), [{ id: "x", ...placed! }])).toBeGreaterThanOrEqual(
+      MIN_KEPT - 1e-9,
+    );
+  });
+});

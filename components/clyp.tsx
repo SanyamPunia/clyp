@@ -297,6 +297,17 @@ export function Clyp() {
   const [removeZoomOpen, setRemoveZoomOpen] = useState(false);
   const [removeCutOpen, setRemoveCutOpen] = useState(false);
   /**
+   * A copied lane instance, waiting to be pasted.
+   *
+   * The app's own rather than the system clipboard. Cmd+C here would otherwise
+   * have to write JSON over whatever the reader had copied, and reading it
+   * back needs a permission this feature does not deserve. It also means a
+   * paste cannot arrive holding something from another site.
+   */
+  const [copied, setCopied] = useState<
+    { kind: "zoom"; region: ZoomRegion } | { kind: "cut"; cut: Cut } | null
+  >(null);
+  /**
    * The clip's motion track, read once for the whole clip when a region is
    * first asked to follow, and the read's progress while it runs. Reading it
    * is the one heavy thing in the editor, so it is asked for through a dialog
@@ -656,6 +667,7 @@ export function Clyp() {
       [...previous, region].sort((a, b) => a.start - b.start),
     );
     setSelectedZoom(region.id);
+    setSelectedCut(null);
   }, [duration, zooms]);
 
   const updateZoom = useCallback((next: ZoomRegion) => {
@@ -674,6 +686,9 @@ export function Clyp() {
   const selectZoom = useCallback(
     (id: string | null) => {
       setSelectedZoom(id);
+      // One selection across the lanes. Two at once make "the selected thing"
+      // ambiguous, and the copy shortcut then has to guess which was meant.
+      if (id) setSelectedCut(null);
       const video = videoRef.current;
       const region = zooms.find((r) => r.id === id);
       if (!video || !region) return;
@@ -721,6 +736,7 @@ export function Clyp() {
     const next = tidyCuts([...cuts, cut], trim);
     setCuts(next);
     setSelectedCut(cut.id);
+    setSelectedZoom(null);
     video.currentTime = afterCuts(trim, next, video.currentTime);
   }, [cuts, trim]);
 
@@ -739,6 +755,11 @@ export function Clyp() {
     },
     [trim],
   );
+
+  const selectCut = useCallback((id: string | null) => {
+    setSelectedCut(id);
+    if (id) setSelectedZoom(null);
+  }, []);
 
   const removeCut = useCallback(() => {
     setCuts((previous) => previous.filter((c) => c.id !== selectedCut));
@@ -762,6 +783,80 @@ export function Clyp() {
     },
     [cuts],
   );
+
+  /**
+   * Copies whichever lane instance is selected.
+   *
+   * A zoom is a length, a level, an aim and how it follows, and placing one
+   * takes longer than any other edit here. Copying keeps all of it, so the
+   * second one differs from the first only in where it sits.
+   */
+  const copySelection = useCallback(() => {
+    const region = zooms.find((r) => r.id === selectedZoom);
+    if (region) {
+      setCopied({ kind: "zoom", region });
+      toast.success("Zoom copied");
+      return;
+    }
+    const cut = cuts.find((c) => c.id === selectedCut);
+    if (cut) {
+      setCopied({ kind: "cut", cut });
+      toast.success("Cut copied");
+    }
+  }, [cuts, selectedCut, selectedZoom, zooms]);
+
+  /**
+   * Pastes it at the playhead, keeping its own length.
+   *
+   * The same placement a new one gets, so it lands from the playhead forward
+   * and stops at a neighbour, and the copy is selected so the next edit is
+   * about it.
+   */
+  const pasteCopied = useCallback(() => {
+    const video = videoRef.current;
+    if (!copied || !video || !duration) return;
+    const grid = (seconds: number) => Math.round(seconds * EDIT_FPS) / EDIT_FPS;
+    const at = grid(video.currentTime);
+
+    if (copied.kind === "zoom") {
+      const { region } = copied;
+      const placed = placeZoom(zooms, at, duration, region.end - region.start);
+      if (!placed) {
+        toast.error("There is no room for a zoom at the playhead");
+        return;
+      }
+      const next: ZoomRegion = {
+        ...region,
+        id: newZoomId(),
+        start: grid(placed.start),
+        end: grid(placed.end),
+      };
+      setZooms((previous) =>
+        [...previous, next].sort((a, b) => a.start - b.start),
+      );
+      setSelectedZoom(next.id);
+      setSelectedCut(null);
+      return;
+    }
+
+    if (!trim) return;
+    const { cut } = copied;
+    const placed = placeCut(trim, cuts, at, cut.end - cut.start);
+    if (!placed) {
+      toast.error("There is no room for a cut at the playhead");
+      return;
+    }
+    const next: Cut = {
+      id: newCutId(),
+      start: grid(placed.start),
+      end: grid(placed.end),
+    };
+    const tidy = tidyCuts([...cuts, next], trim);
+    setCuts(tidy);
+    setSelectedCut(next.id);
+    setSelectedZoom(null);
+    video.currentTime = afterCuts(trim, tidy, video.currentTime);
+  }, [copied, cuts, duration, trim, zooms]);
 
   /**
    * Everything undo walks back: the four edits plus a soundtrack's placement.
@@ -944,6 +1039,7 @@ export function Clyp() {
       [...previous, region].sort((a, b) => a.start - b.start),
     );
     setSelectedZoom(region.id);
+    setSelectedCut(null);
   }, []);
 
   const motionWait =
@@ -1228,8 +1324,9 @@ export function Clyp() {
     setExportModalOpen(true);
   }, []);
 
-  // Cmd/Ctrl+S downloads, Cmd/Ctrl+Shift+C copies, Cmd/Ctrl+Z walks the edits
-  // back and Shift+Z walks them forward.
+  // Cmd/Ctrl+S downloads, Cmd/Ctrl+Shift+C copies the picture, Cmd/Ctrl+Z walks
+  // the edits back and Shift+Z walks them forward, and Cmd/Ctrl+C and +V copy
+  // and paste the selected lane instance.
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if (!media) return;
@@ -1256,6 +1353,15 @@ export function Clyp() {
         e.preventDefault();
         if (e.shiftKey) redo();
         else undo();
+      } else if (!typing && !e.shiftKey && e.key.toLowerCase() === "c") {
+        // Never over a real copy. Text the reader has selected is theirs, and
+        // Cmd+Shift+C is the picture, so this is only ever the lane.
+        if (window.getSelection()?.toString()) return;
+        e.preventDefault();
+        copySelection();
+      } else if (!typing && e.key.toLowerCase() === "v") {
+        e.preventDefault();
+        pasteCopied();
       }
     };
 
@@ -1263,7 +1369,15 @@ export function Clyp() {
     return () => window.removeEventListener("keydown", handleKey);
     // The two callbacks rather than the history object, which is a fresh one
     // every render: this binds a window listener, and a drag renders per frame.
-  }, [media, openExportModal, downloadBlocked, undo, redo]);
+  }, [
+    media,
+    openExportModal,
+    downloadBlocked,
+    undo,
+    redo,
+    copySelection,
+    pasteCopied,
+  ]);
 
   const handleExport = useCallback(
     async (options: ExportOptions) => {
@@ -2041,7 +2155,7 @@ export function Clyp() {
               selectedCut={selectedCut}
               onCutAdd={addCut}
               onCutChange={updateCut}
-              onCutSelect={setSelectedCut}
+              onCutSelect={selectCut}
               onCutRemove={() => setRemoveCutOpen(true)}
               onUndo={history.undo}
               onRedo={history.redo}

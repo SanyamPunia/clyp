@@ -296,6 +296,7 @@ export function placeCut(
   trim: Trim,
   cuts: readonly Cut[],
   time: number,
+  length = DEFAULT_CUT_LENGTH,
 ): { start: number; end: number } | null {
   const room = roomForCut(trim, cuts, time);
   if (!room) return null;
@@ -305,9 +306,12 @@ export function placeCut(
   const spare = keptSeconds(trim, cuts) - MIN_KEPT;
   if (spare < MIN_CUT) return null;
 
-  const forward = Math.min(DEFAULT_CUT_LENGTH, room.hi - time, spare);
+  const forward = Math.min(length, room.hi - time, spare);
   if (forward >= MIN_CUT) return { start: time, end: time + forward };
 
+  // The pull-back takes the shortest, never `length`. Reaching here means
+  // there was almost no room forward, and removing a whole second because the
+  // press landed in the last tenth of one is not what "from here" meant.
   if (room.hi - room.lo < MIN_CUT) return null;
   return { start: room.hi - MIN_CUT, end: room.hi };
 }

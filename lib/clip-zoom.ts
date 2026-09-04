@@ -196,23 +196,29 @@ export function roomFor(
 }
 
 /**
- * Where a new region lands for a press at `time`: the default length from
- * there, or what is left before a neighbour or the end. Only when less than
- * the shortest region is left is it pulled back to fit, since a press means
- * "from here" whenever "from here" is possible. Null when the gap cannot hold
- * even the shortest region.
+ * Where a new region lands for a press at `time`: `length` from there, or what
+ * is left before a neighbour or the end. Only when less than the shortest
+ * region is left is it pulled back to fit, since a press means "from here"
+ * whenever "from here" is possible. Null when the gap cannot hold even the
+ * shortest region.
+ *
+ * `length` is what a paste needs: a copied region keeps its own length rather
+ * than being remade at the default.
  */
 export function placeZoom(
   regions: readonly ZoomRegion[],
   time: number,
   duration: number,
+  length = DEFAULT_ZOOM_LENGTH,
 ): { start: number; end: number } | null {
   const room = roomAt(regions, time, duration);
   if (!room) return null;
 
-  const forward = Math.min(DEFAULT_ZOOM_LENGTH, room.hi - time);
+  const forward = Math.min(length, room.hi - time);
   if (forward >= MIN_ZOOM_LENGTH) return { start: time, end: time + forward };
 
+  // The pull-back takes the shortest, never `length`, for the same reason a
+  // cut's does: reaching here means there was almost no room forward.
   if (room.hi - room.lo < MIN_ZOOM_LENGTH) return null;
   return { start: room.hi - MIN_ZOOM_LENGTH, end: room.hi };
 }

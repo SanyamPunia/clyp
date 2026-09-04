@@ -1463,35 +1463,64 @@ export function TrimBar({
 
             {/* Wraps, so on a phone the speed and the mutes drop to a second line
                 rather than pushing past the panel's edge. */}
-            <div className="mt-2.5 flex flex-wrap items-center gap-x-1 gap-y-2">
-              <div className="flex min-w-0 items-center gap-1">
-                {soundtrack ? (
-                  <>
-                    <MusicIcon
-                      className="ml-2 size-3.5 shrink-0 text-muted-foreground"
-                      aria-hidden="true"
-                    />
-                    <span className="min-w-0 truncate text-[13px] text-muted-foreground">
-                      {soundtrack.name}
-                    </span>
-                  </>
-                ) : (
-                  <Button
-                    variant="ghost"
-                    size="sm"
+            <div className="mt-2.5 flex flex-wrap items-center gap-x-2 gap-y-2">
+              <div className="flex min-w-0 items-center gap-2">
+                {/* The four things this bar can add, in one recessed pill, the
+                    same shape the transport and the speed take. They were four
+                    labelled buttons and between them most of this row: at a
+                    selected zoom that follows, the row also carried a level
+                    pill and a pace pill and ran past the panel. Each is a
+                    single verb with a plain glyph, so each is a tooltip rather
+                    than a label.
+
+                    They no longer swap out for the selected instance's own
+                    controls either. That swap kept the row's width down, but it
+                    also meant a second zoom could not be added while the first
+                    was selected, and the same for a cut. */}
+                <div
+                  role="group"
+                  aria-label="Add"
+                  className="flex shrink-0 items-center gap-0.5 rounded-full bg-track p-0.5"
+                >
+                  <Transport
+                    label={
+                      soundtrack
+                        ? "A soundtrack is already laid"
+                        : "Add a soundtrack"
+                    }
                     onClick={() => fileRef.current?.click()}
-                    className="text-muted-foreground hover:text-foreground"
+                    disabled={Boolean(soundtrack)}
                   >
-                    <MusicIcon className="size-3.5" aria-hidden="true" />
-                    Add a soundtrack
-                  </Button>
+                    <MusicIcon className="size-4" aria-hidden="true" />
+                  </Transport>
+                  <Transport label="Add a zoom" onClick={onZoomAdd}>
+                    <ZoomInIcon className="size-4" aria-hidden="true" />
+                  </Transport>
+                  <Transport label="Cut at the playhead" onClick={onCutAdd}>
+                    <ScissorsIcon className="size-4" aria-hidden="true" />
+                  </Transport>
+                  {/* Shows or hides the ghosts. The first press reads the
+                      clip's motion, through the same dialog the follow toggle
+                      opens. */}
+                  <Transport
+                    label={suggesting ? "Hide suggestions" : "Suggest zooms"}
+                    onClick={onSuggestToggle}
+                    pressed={suggesting}
+                  >
+                    <SparklesIcon className="size-4" aria-hidden="true" />
+                  </Transport>
+                </div>
+
+                {soundtrack && (
+                  <span className="min-w-0 truncate text-[13px] text-muted-foreground">
+                    {soundtrack.name}
+                  </span>
                 )}
-                {/* One slot for the zoom: the add while nothing is selected, the
-                    selected region's level and remove while one is. Swapping them in
-                    place keeps the row's shape, and keeps the level chips away from
-                    the speed pill on the right, where two runs of "2x" side by side
-                    would read as one control. Deselecting brings the add back. */}
-                {selectedRegion ? (
+
+                {/* What is selected, and only what is selected. One lane
+                    instance is selected at a time, so this is one group or the
+                    other and never both. */}
+                {selectedRegion && (
                   <>
                   <div
                     role="group"
@@ -1557,21 +1586,9 @@ export function TrimBar({
                     </div>
                   )}
                   </>
-                ) : (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={onZoomAdd}
-                    className="shrink-0 text-muted-foreground hover:text-foreground"
-                  >
-                    <ZoomInIcon className="size-3.5" aria-hidden="true" />
-                    Add a zoom
-                  </Button>
                 )}
-                {/* One slot for the cut, the same swap the zoom's slot makes:
-                    the add while nothing is selected, the selected cut's length
-                    and remove while one is. */}
-                {selectedRange ? (
+
+                {selectedRange && (
                   <div
                     role="group"
                     aria-label="Cut"
@@ -1588,32 +1605,7 @@ export function TrimBar({
                       <XIcon className="size-4" aria-hidden="true" />
                     </Transport>
                   </div>
-                ) : (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={onCutAdd}
-                    className="shrink-0 text-muted-foreground hover:text-foreground"
-                  >
-                    <ScissorsIcon className="size-3.5" aria-hidden="true" />
-                    Cut
-                  </Button>
                 )}
-                {/* Shows or hides the ghosts. The first press reads the clip's
-                    motion, through the same dialog the follow toggle opens. */}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  aria-pressed={suggesting}
-                  onClick={onSuggestToggle}
-                  className={cn(
-                    "shrink-0 text-muted-foreground hover:text-foreground",
-                    suggesting && "bg-track text-foreground",
-                  )}
-                >
-                  <SparklesIcon className="size-3.5" aria-hidden="true" />
-                  {suggesting ? "Hide suggestions" : "Suggest zooms"}
-                </Button>
               </div>
 
               {/* Wraps too, so at 320px the mutes drop under the speed pill rather
