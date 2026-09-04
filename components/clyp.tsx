@@ -65,6 +65,7 @@ import {
   placeCut,
   tidyCuts,
 } from "@/lib/clip-cuts";
+import { useEditHistory } from "@/components/use-edit-history";
 import { rasterize } from "@/lib/raster";
 import {
   DEFAULT_SOLID_COLOR,
@@ -371,6 +372,13 @@ export function Clyp() {
 
   const screenshotRef = useRef<HTMLDivElement>(null);
   const artworkRef = useRef<HTMLDivElement>(null);
+  /**
+   * The history's reset, reached from `loadMedia` and `applyEdits`, which are
+   * both declared above the hook that owns it. A ref rather than a reorder:
+   * the hook reads the edit state, and the edit state is built from handlers
+   * those two callbacks are neighbours of.
+   */
+  const resetHistoryRef = useRef<(() => void) | null>(null);
   /** The clip's box: what holds still, carries the radius, and is measured. */
   const clipBoxRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -526,6 +534,7 @@ export function Clyp() {
       if (previous) URL.revokeObjectURL(previous.src);
       return null;
     });
+    resetHistoryRef.current?.();
   }, []);
 
   /**
@@ -562,6 +571,9 @@ export function Clyp() {
         .filter((z) => z.end > z.start)
         .sort((a, b) => a.start - b.start),
     );
+    // Putting a stored draft back is not an edit to walk back from, and the
+    // defaults it replaces are not a state anyone asked for.
+    resetHistoryRef.current?.();
   }, []);
 
   const addSoundtrack = useCallback(
@@ -739,6 +751,57 @@ export function Clyp() {
     setTrim(next);
     setCuts((previous) => tidyCuts(previous, next));
   }, []);
+
+  /**
+   * Everything undo walks back: the four edits plus a soundtrack's placement.
+   *
+   * The track's own file is not in here. Undo moves where a sound sits, never
+   * whether there is one: bringing a removed file back would mean holding a
+   * Blob per history entry, and removing one already confirms.
+   */
+  const editState = useMemo(
+    () => ({
+      trim,
+      cuts,
+      speed,
+      zooms,
+      placement: soundtrack
+        ? {
+            offset: soundtrack.offset,
+            start: soundtrack.start,
+            end: soundtrack.end,
+          }
+        : null,
+    }),
+    [trim, cuts, speed, zooms, soundtrack],
+  );
+
+  const restoreEdits = useCallback((next: typeof editState) => {
+    setTrim(next.trim);
+    setCuts(next.cuts);
+    setSpeed(next.speed);
+    setZooms(next.zooms);
+    // A selection is a view of the state rather than part of it, and the
+    // region or cut it named may be the one coming back or going away.
+    setSelectedZoom(null);
+    setSelectedCut(null);
+    if (next.placement) {
+      setSoundtrack((previous) =>
+        previous ? { ...previous, ...next.placement } : previous,
+      );
+    }
+  }, []);
+
+  const history = useEditHistory({
+    state: editState,
+    restore: restoreEdits,
+    enabled: restored && media?.kind === "video",
+  });
+  const { undo, redo } = history;
+
+  useEffect(() => {
+    resetHistoryRef.current = history.reset;
+  }, [history.reset]);
 
   /**
    * Reads the whole clip's motion, once. Progress lands on the toggle, the
@@ -1154,12 +1217,21 @@ export function Clyp() {
     setExportModalOpen(true);
   }, []);
 
-  // Cmd/Ctrl+S downloads, Cmd/Ctrl+Shift+C copies.
+  // Cmd/Ctrl+S downloads, Cmd/Ctrl+Shift+C copies, Cmd/Ctrl+Z walks the edits
+  // back and Shift+Z walks them forward.
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if (!media) return;
       const mod = e.metaKey || e.ctrlKey;
       if (!mod) return;
+
+      // A field being typed in keeps its own undo stack, which is the browser's
+      // and is about the text rather than the clip.
+      const target = e.target as HTMLElement | null;
+      const typing =
+        target?.isContentEditable ||
+        target?.tagName === "INPUT" ||
+        target?.tagName === "TEXTAREA";
 
       // The same two gates the buttons carry. Cmd+S has to be swallowed either
       // way, or the browser offers to save the page.
@@ -1169,12 +1241,18 @@ export function Clyp() {
       } else if (e.shiftKey && e.key.toLowerCase() === "c") {
         e.preventDefault();
         openExportModal("copy");
+      } else if (!typing && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
       }
     };
 
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [media, openExportModal, downloadBlocked]);
+    // The two callbacks rather than the history object, which is a fresh one
+    // every render: this binds a window listener, and a drag renders per frame.
+  }, [media, openExportModal, downloadBlocked, undo, redo]);
 
   const handleExport = useCallback(
     async (options: ExportOptions) => {
@@ -1954,6 +2032,10 @@ export function Clyp() {
               onCutChange={updateCut}
               onCutSelect={setSelectedCut}
               onCutRemove={() => setRemoveCutOpen(true)}
+              onUndo={history.undo}
+              onRedo={history.redo}
+              canUndo={history.canUndo}
+              canRedo={history.canRedo}
               motionProgress={motionProgress}
               onZoomAdd={addZoom}
               onZoomFollow={toggleFollow}

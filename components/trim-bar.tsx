@@ -13,12 +13,14 @@ import {
   PauseIcon,
   PlayIcon,
   PlusIcon,
+  Redo2Icon,
   RepeatIcon,
   ScissorsIcon,
   SparklesIcon,
   SquareIcon,
   StepBackIcon,
   StepForwardIcon,
+  Undo2Icon,
   Volume2Icon,
   VolumeXIcon,
   XIcon,
@@ -169,6 +171,11 @@ interface TrimBarProps {
   onCutChange: (cut: Cut) => void;
   onCutSelect: (id: string | null) => void;
   onCutRemove: () => void;
+  /** Walks the clip's edits back and forward. The history is the owner's. */
+  onUndo: () => void;
+  onRedo: () => void;
+  canUndo: boolean;
+  canRedo: boolean;
   /** 0 to 1 while the clip's motion is being read, null otherwise. */
   motionProgress: number | null;
   onZoomAdd: () => void;
@@ -243,6 +250,10 @@ export function TrimBar({
   onCutChange,
   onCutSelect,
   onCutRemove,
+  onUndo,
+  onRedo,
+  canUndo,
+  canRedo,
   motionProgress,
   onZoomAdd,
   onZoomFollow,
@@ -1014,14 +1025,35 @@ export function TrimBar({
           the panel the three cannot share a line, so the clocks take one and
           the pill sits centred under them. */}
       <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 @max-sm:grid-cols-2">
-        {/* Where the playhead is, exactly. The lane says roughly, and roughly
-            is not enough to cut on. */}
-        <span
-          ref={clockRef}
-          className="text-[13px] tabular-nums text-foreground"
-        >
-          {formatPrecise(0, duration)}
-        </span>
+        {/* Undo and redo sit here rather than in the transport pill: that pill
+            is playback, and these are the edits. Beside the clock, which is
+            the other thing in this row that is about where the work is. */}
+        <div className="flex min-w-0 items-center gap-1">
+          {/* Where the playhead is, exactly. The lane says roughly, and roughly
+              is not enough to cut on. */}
+          <span
+            ref={clockRef}
+            className="text-[13px] tabular-nums text-foreground"
+          >
+            {formatPrecise(0, duration)}
+          </span>
+          <div className="flex items-center">
+            <Transport
+              label="Undo (Cmd Z)"
+              onClick={onUndo}
+              disabled={!canUndo}
+            >
+              <Undo2Icon className="size-4" aria-hidden="true" />
+            </Transport>
+            <Transport
+              label="Redo (Cmd Shift Z)"
+              onClick={onRedo}
+              disabled={!canRedo}
+            >
+              <Redo2Icon className="size-4" aria-hidden="true" />
+            </Transport>
+          </div>
+        </div>
 
         {/* The same recessed pill the canvas toolbar gives its zoom cluster, so
             the two groups of icon buttons read as the same kind of thing. */}
