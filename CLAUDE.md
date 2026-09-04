@@ -36,12 +36,19 @@ app/          routes, root layout, providers, the one stylesheet
 components/   feature components (canvas, controls, drop zone, upload card,
               trim bar)
 components/ui shared primitives, shadcn-generated or hand-added
-lib/          pure modules, no React
+lib/          pure modules, no React, and their specs beside them
 types/        shared types
 ```
 
 `lib/` holds no React. `components/ui/` holds primitives with no product
 knowledge. Everything else is a feature component.
+
+**Specs sit beside the module they cover, as `lib/<name>.test.ts`.** Vitest
+runs a Node environment over `lib/**/*.test.ts` only: nothing here renders a
+component, because what has no other guard is the arithmetic. Every number in
+these modules was measured by hand once, and the specs are written against
+those recorded measurements rather than against fresh guesses, so a spec that
+disagrees with this file is a real regression in one of the two.
 
 ## Layout
 
@@ -76,11 +83,36 @@ the title bar and browser bar in `window-navbar.tsx`, the caption's text
 colours in `clyp.tsx`, and the gradient hexes in `lib/gradients.ts`. None of
 them follows the app theme, because the exported PNG has no theme.
 
-## Gradients
+## Background
 
-`lib/gradients.ts` is the single source of truth. A preset stores its stops as
-data. The picker swatch and the exported canvas both derive their CSS from that
-data, so the two cannot drift.
+`background` in `StyleOptions` is a `BackgroundKind`: `preset`, `custom`,
+`solid` or `none`. `lib/gradients.ts` is the single source of truth for all
+four, and `resolveGradientCss(style)` is the one place style state becomes a
+background value. Both exports and the cross-fade read only its result.
+
+**A solid is written as a one-colour gradient and transparency as the CSS
+keyword `none`.** Every kind therefore arrives on `background-image`, so the
+cross-fade, the grain layer, the raster and the video composite need no branch
+for which kind is showing. A `background-color` path would have been a second
+way to paint the same surface.
+
+- **The checkerboard for a transparent background sits behind the frame, not
+  inside it.** It is a `.transparency-grid` layer on the canvas footprint box,
+  which is outside the export ref, so the checks can never be serialized into a
+  PNG. It takes the frame's own `outerRadius` so the corners agree.
+- **Grain is disabled when there is no background.** An overlay blend leaves a
+  transparent surface transparent at any strength, so the control would be dead.
+- **The export modal names what an MP4 does with it, and only for a clip.** The
+  worker's canvas is `alpha: false`, so a transparent frame composites onto
+  opaque black with no change to the encode. A PNG keeping its transparency is
+  what picking it already said, so that needs no sentence.
+- A draft stored before this reads back on the preset tab, since `readStyle`
+  merges over `DEFAULT_STYLE`.
+
+### Gradients
+
+A preset stores its stops as data. The picker swatch and the exported canvas
+both derive their CSS from that data, so the two cannot drift.
 
 - `kind: "linear"` carries `stops` and a default `angle`. The angle control
   re-renders it at any direction.
@@ -88,12 +120,18 @@ data, so the two cannot drift.
   ignores the angle.
 - `gradientToCss(preset, angle?)` produces the `background-image` value. Every
   consumer goes through it.
-- Each family holds exactly eight presets, so the picker lays out as even rows.
-  Adding a ninth to one family breaks that grid.
+- **A family holds a multiple of eight presets, so the picker lays out as even
+  rows.** It is eight columns wide, and a ninth in one family leaves a ragged
+  last row. Each family currently holds sixteen, which is two rows.
+  `lib/gradients.test.ts` fails on any other count.
+- **No two presets share a label.** A swatch shows no text, so the label is its
+  tooltip and its screen-reader name. Where a colour name is wanted in two
+  families, the mesh one carries the suffix: `Ember` and `Ember Mesh`.
 
 Every generated layer must be fully opaque. `GradientBackground` keeps the
 previous gradient painted underneath during a cross-fade, and an incoming layer
 with transparency would let the stale one show through, including in the export.
+The spec checks that every colour is a six-digit hex.
 
 ## Typography
 
@@ -1225,6 +1263,6 @@ on eases too. An overlay blend at opacity 0 is a no-op in the export.
 
 ## Build gate
 
-`pnpm check` runs typecheck, lint, and build. A green run is the gate for any
-push. `next dev` regenerates `AGENTS.md`, so commit it with your work rather
-than reverting it.
+`pnpm check` runs typecheck, lint, test, and build. A green run is the gate for
+any push. `pnpm test` alone runs the specs. `next dev` regenerates `AGENTS.md`,
+so commit it with your work rather than reverting it.
