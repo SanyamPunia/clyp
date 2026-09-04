@@ -669,8 +669,9 @@ the cursor, the typing, and the menus.
   2% nearer the centre. The gain is small there because that clip is all bound
   and no glide, and it is largest where a real recording lives, on a cursor
   that moves and stops.
-- **A click pins the action.** A click leaves a mark a cursor's travel does
-  not: a sudden, compact change, a button's pressed state, a focus ring. A
+- **A click pins the action, and is kept.** A click leaves a mark a cursor's
+  travel does not: a sudden, compact change, a button's pressed state, a focus
+  ring. A
   frame where at least 0.3% of the grid changed, at least three times the
   median of the fifteen frames before, with a root mean square spread under a
   fifth of the grid, is a click, and the action is pinned to its centre for a
@@ -704,6 +705,32 @@ the cursor, the typing, and the menus.
 - The toggle sits in the level slot, pressed while following. Switching off is
   free, switching on is free once the clip has been read, and the first time
   asks.
+
+### Suggested zooms
+
+`suggestZooms` in `lib/clip-zoom.ts` proposes regions from the motion track.
+The clicks the pass found each get a candidate around them, 0.6 s before to
+1.9 s after, weighted twice. Runs where the action stayed within 12% of the
+picture for at least 1.5 s, a form being filled or a menu being read, each get
+one too. Candidates that overlap or come within 0.4 s merge, up to eight
+seconds, and anything over an existing region is dropped, since whoever placed
+that region does not need it suggested. The best six show, in time order.
+
+- **They are ghosts on the zoom lane**: dashed, dim, with a plus, and a press
+  adds one as a following region, selected, snapped to the grid, aimed at the
+  click or the dwell's centre as its fallback. Recomputed as regions change, so
+  accepting one takes it off the lane by itself.
+- **Suggest zooms in the bottom row shows and hides them.** The first press
+  reads the clip's motion through the same dialog the follow toggle opens,
+  with its first clause changed to say what for. A clip with nothing to suggest
+  says so in a toast and leaves the toggle off, whether the read had already
+  happened or has just finished.
+- **The clicks are part of the stored track**, three floats each, beside the
+  samples. A track stored before clicks were read comes back with none and
+  follows as before but suggests from dwells only.
+- Verified on the square that pauses beside a two frame flash: one suggestion
+  covering the click and the pause, accepted into a following region. On the
+  square that never stops, no suggestion and the toast.
 
 ## Soundtrack
 

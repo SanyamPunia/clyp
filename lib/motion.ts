@@ -38,9 +38,14 @@ import {
  * A run of samples, three floats each: the source time in seconds and the
  * smoothed position of the action as fractions of the picture. Time is ascending.
  * A position is NaN before the first motion, where there is nothing to follow.
+ *
+ * `clicks` is the same shape for the clicks the pass found: when, and where.
+ * Empty when it found none, and empty for a track stored before clicks were
+ * read, which then follows but suggests nothing.
  */
 export interface MotionTrack {
   samples: Float32Array;
+  clicks: Float32Array;
 }
 
 export interface MotionRequest {
@@ -51,7 +56,7 @@ export interface MotionRequest {
 
 export type MotionReply =
   | { type: "progress"; fraction: number }
-  | { type: "done"; samples: Float32Array }
+  | { type: "done"; samples: Float32Array; clicks: Float32Array }
   | { type: "error"; message: string };
 
 /**
@@ -208,7 +213,7 @@ const CLICK_GAP = 0.3;
 export async function analyzeMotion(
   { source, from, to }: MotionRequest,
   onProgress?: (fraction: number) => void,
-): Promise<Float32Array> {
+): Promise<MotionTrack> {
   const input = new Input({ formats: ALL_FORMATS, source: new BlobSource(source) });
   const track = await input.getPrimaryVideoTrack();
   if (!track) throw new Error("That file has no video track");
@@ -311,11 +316,13 @@ const RAW = 5;
  * The action's track from the raw frames: an exponential moving average over
  * the centroids, held through the frames that said nothing, and pinned to a
  * click while the cursor lingers on it. The first motion sets the value
- * outright rather than being pulled from an arbitrary start.
+ * outright rather than being pulled from an arbitrary start. The clicks come
+ * out beside it, since a suggestion is built on them.
  */
-function smooth(raw: number[]): Float32Array {
+function smooth(raw: number[]): MotionTrack {
   const frames = raw.length / RAW;
   const out = new Float32Array(frames * 3);
+  const clicks: number[] = [];
   let x = NaN;
   let y = NaN;
   let last = NaN;
@@ -348,6 +355,7 @@ function smooth(raw: number[]): Float32Array {
       clickY = rawY;
       x = rawX;
       y = rawY;
+      clicks.push(t, rawX, rawY);
     }
     recent.push(fraction);
     if (recent.length > CLICK_BASELINE) recent.shift();
@@ -375,7 +383,7 @@ function smooth(raw: number[]): Float32Array {
     out[f * 3 + 1] = x;
     out[f * 3 + 2] = y;
   }
-  return out;
+  return { samples: out, clicks: new Float32Array(clicks) };
 }
 
 function median(values: readonly number[]): number {

@@ -13,10 +13,13 @@ const scope = self as unknown as {
 
 scope.onmessage = async (event) => {
   try {
-    const samples = await analyzeMotion(event.data, (fraction) =>
+    const { samples, clicks } = await analyzeMotion(event.data, (fraction) =>
       scope.postMessage({ type: "progress", fraction }),
     );
-    scope.postMessage({ type: "done", samples }, [samples.buffer]);
+    scope.postMessage({ type: "done", samples, clicks }, [
+      samples.buffer,
+      clicks.buffer,
+    ]);
   } catch (error) {
     scope.postMessage({
       type: "error",

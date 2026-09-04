@@ -220,3 +220,141 @@ export function placeZoom(
 export function newZoomId(): string {
   return crypto.randomUUID();
 }
+
+/**
+ * A stretch worth zooming on, proposed from the motion track.
+ *
+ * Two things stand out in a screen recording. A click is where something was
+ * done, so each gets a candidate around it, weighted twice. A dwell is where
+ * the action stayed put for a while, a form being filled or a menu being read,
+ * so each run of at least `DWELL_MIN` inside a small radius gets one too.
+ * Candidates that overlap or nearly touch merge, up to a length a viewer can
+ * sit through, and anything over an existing region is dropped: whoever placed
+ * that region does not need it suggested.
+ */
+export interface ZoomSuggestion {
+  start: number;
+  end: number;
+  /** The click, or the dwell's centre, as the region's aim if follow is off. */
+  focus: ZoomFocus;
+  score: number;
+}
+
+/** How far before and after a click its candidate reaches, in seconds. */
+const CLICK_LEAD = 0.6;
+const CLICK_TAIL = 1.9;
+/** How still the action has to be, as a fraction of the picture, and for how long. */
+const DWELL_RADIUS = 0.12;
+const DWELL_MIN = 1.5;
+/** Candidates this close merge into one. */
+const MERGE_GAP = 0.4;
+/** A merged candidate stops growing here. */
+const MAX_SUGGESTION = 8;
+const MAX_SUGGESTIONS = 6;
+
+export function suggestZooms(
+  motion: MotionTrack,
+  duration: number,
+  existing: readonly ZoomRegion[],
+): ZoomSuggestion[] {
+  const candidates: ZoomSuggestion[] = [];
+
+  const c = motion.clicks;
+  for (let i = 0; i < c.length; i += 3) {
+    candidates.push({
+      start: c[i] - CLICK_LEAD,
+      end: c[i] + CLICK_TAIL,
+      focus: { x: c[i + 1], y: c[i + 2] },
+      score: 2,
+    });
+  }
+
+  // Dwells: runs of samples that stay within the radius of the run's mean.
+  const s = motion.samples;
+  let runStart = -1;
+  let sx = 0;
+  let sy = 0;
+  let n = 0;
+  const flush = (endIndex: number) => {
+    if (runStart < 0) return;
+    const from = s[runStart];
+    const to = s[endIndex];
+    if (to - from >= DWELL_MIN) {
+      candidates.push({
+        start: from - 0.3,
+        end: to + 0.3,
+        focus: { x: sx / n, y: sy / n },
+        score: 1 + Math.min((to - from) / 3, 1),
+      });
+    }
+    runStart = -1;
+    sx = sy = n = 0;
+  };
+  for (let i = 0; i < s.length; i += 3) {
+    const x = s[i + 1];
+    const y = s[i + 2];
+    if (Number.isNaN(x)) {
+      flush(Math.max(i - 3, 0));
+      continue;
+    }
+    if (runStart < 0) {
+      runStart = i;
+      sx = x;
+      sy = y;
+      n = 1;
+      continue;
+    }
+    if (Math.hypot(x - sx / n, y - sy / n) <= DWELL_RADIUS) {
+      sx += x;
+      sy += y;
+      n++;
+    } else {
+      flush(i - 3);
+      runStart = i;
+      sx = x;
+      sy = y;
+      n = 1;
+    }
+  }
+  flush(Math.max(s.length - 3, 0));
+
+  // Clamp, then merge what overlaps or nearly touches.
+  const clamped = candidates
+    .map((k) => ({
+      ...k,
+      start: Math.max(k.start, 0),
+      end: Math.min(k.end, duration),
+    }))
+    .filter((k) => k.end - k.start >= MIN_ZOOM_LENGTH)
+    .sort((a, b) => a.start - b.start);
+
+  const merged: ZoomSuggestion[] = [];
+  for (const k of clamped) {
+    const last = merged[merged.length - 1];
+    if (
+      last &&
+      k.start - last.end <= MERGE_GAP &&
+      Math.max(last.end, k.end) - last.start <= MAX_SUGGESTION
+    ) {
+      last.end = Math.max(last.end, k.end);
+      if (k.score > last.score) last.focus = k.focus;
+      last.score += k.score;
+    } else if (last && k.start < last.end) {
+      // Too long to merge: the later one starts where the earlier ends.
+      const trimmed = { ...k, start: last.end };
+      if (trimmed.end - trimmed.start >= MIN_ZOOM_LENGTH) merged.push(trimmed);
+    } else {
+      merged.push({ ...k });
+    }
+  }
+
+  // Nothing over a region that is already there.
+  const free = merged.filter(
+    (k) => !existing.some((r) => k.start < r.end && k.end > r.start),
+  );
+
+  return free
+    .sort((a, b) => b.score - a.score)
+    .slice(0, MAX_SUGGESTIONS)
+    .sort((a, b) => a.start - b.start);
+}

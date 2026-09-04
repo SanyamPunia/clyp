@@ -140,6 +140,8 @@ export async function deleteEdits(): Promise<void> {
 export interface StoredMotion {
   of: StoredEdits["of"];
   samples: Float32Array;
+  /** Absent in a record written before clicks were read. */
+  clicks?: Float32Array;
 }
 
 export async function readMotion(): Promise<StoredMotion | null> {

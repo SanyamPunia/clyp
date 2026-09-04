@@ -15,6 +15,7 @@ import {
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -40,9 +41,11 @@ import { WindowNavbar } from "@/components/window-navbar";
 import { ZoomFocusMarker } from "@/components/zoom-focus";
 import {
   type ZoomRegion,
+  type ZoomSuggestion,
   DEFAULT_ZOOM_LEVEL,
   newZoomId,
   placeZoom,
+  suggestZooms,
   zoomAt,
 } from "@/lib/clip-zoom";
 import {
@@ -279,8 +282,16 @@ export function Clyp() {
    */
   const [motion, setMotion] = useState<MotionTrack | null>(null);
   const [motionProgress, setMotionProgress] = useState<number | null>(null);
-  /** The region waiting on the dialog's answer. */
-  const [followAsk, setFollowAsk] = useState<ZoomRegion | null>(null);
+  /**
+   * What the motion dialog was opened for: a region asking to follow, or the
+   * suggestions. Both need the clip read first, and the read is asked for the
+   * same way whichever wants it.
+   */
+  const [motionAsk, setMotionAsk] = useState<
+    { kind: "follow"; region: ZoomRegion } | { kind: "suggest" } | null
+  >(null);
+  /** Whether suggested regions are shown on the lane. */
+  const [suggesting, setSuggesting] = useState(false);
   const [soundtrack, setSoundtrack] = useState<Soundtrack | null>(null);
   /**
    * The preview's own volume, not the export's, and one per source.
@@ -478,7 +489,8 @@ export function Clyp() {
     motionReadRef.current = null;
     setMotion(null);
     setMotionProgress(null);
-    setFollowAsk(null);
+    setMotionAsk(null);
+    setSuggesting(false);
     // Audible again for a new clip, whatever the last one was left at.
     setMuted(false);
     setMusicMuted(false);
@@ -630,7 +642,8 @@ export function Clyp() {
    * result is kept for the session and stored with the draft, and nothing
    * afterwards, not a drag, not a second region, starts it again.
    */
-  const startMotionRead = useCallback(() => {
+  const startMotionRead = useCallback(
+    (then?: (track: MotionTrack) => void) => {
     if (media?.kind !== "video" || !media.blob || !media.duration) return;
     if (motionReadRef.current) return;
 
@@ -653,8 +666,10 @@ export function Clyp() {
               duration: media.duration ?? 0,
             },
             samples: track.samples,
+            clicks: track.clicks,
           });
         }
+        then?.(track);
       })
       .catch((error: Error) => {
         // A cancel is a clip change, which has already said what it needs to.
@@ -664,7 +679,9 @@ export function Clyp() {
         if (motionReadRef.current === read) motionReadRef.current = null;
         setMotionProgress(null);
       });
-  }, [dimensions, media]);
+    },
+    [dimensions, media],
+  );
 
   /**
    * The follow toggle. Switching off is free. Switching on is free too once
@@ -679,17 +696,78 @@ export function Clyp() {
       } else if (motion || motionReadRef.current) {
         updateZoom({ ...region, follow: true });
       } else {
-        setFollowAsk(region);
+        setMotionAsk({ kind: "follow", region });
       }
     },
     [motion, updateZoom],
   );
 
-  const confirmFollow = useCallback(() => {
-    if (followAsk) updateZoom({ ...followAsk, follow: true });
-    setFollowAsk(null);
-    startMotionRead();
-  }, [followAsk, startMotionRead, updateZoom]);
+  /**
+   * Suggested regions, from the clip's clicks and dwells, over what is free.
+   * Shown only while asked for, and a press on one adds it. Recomputed as
+   * regions change, so accepting one takes it off the lane by itself.
+   */
+  const suggestions = useMemo<ZoomSuggestion[]>(
+    () =>
+      suggesting && motion && duration
+        ? suggestZooms(motion, duration, zooms)
+        : [],
+    [suggesting, motion, duration, zooms],
+  );
+
+  const nothingToSuggest = useCallback(() => {
+    toast("Nothing stood out to zoom on in this clip");
+    setSuggesting(false);
+  }, []);
+
+  const toggleSuggest = useCallback(() => {
+    if (suggesting) {
+      setSuggesting(false);
+    } else if (motion) {
+      if (duration && suggestZooms(motion, duration, zooms).length === 0) {
+        nothingToSuggest();
+      } else {
+        setSuggesting(true);
+      }
+    } else {
+      setMotionAsk({ kind: "suggest" });
+    }
+  }, [duration, motion, nothingToSuggest, suggesting, zooms]);
+
+  const confirmMotion = useCallback(() => {
+    const ask = motionAsk;
+    setMotionAsk(null);
+    if (!ask) return;
+
+    if (ask.kind === "follow") {
+      updateZoom({ ...ask.region, follow: true });
+      startMotionRead();
+    } else {
+      setSuggesting(true);
+      startMotionRead((track) => {
+        if (duration && suggestZooms(track, duration, zoomsRef.current).length === 0) {
+          nothingToSuggest();
+        }
+      });
+    }
+  }, [duration, motionAsk, nothingToSuggest, startMotionRead, updateZoom]);
+
+  /** A suggestion becomes a following region, selected, snapped to the grid. */
+  const acceptSuggestion = useCallback((suggestion: ZoomSuggestion) => {
+    const grid = (seconds: number) => Math.round(seconds * EDIT_FPS) / EDIT_FPS;
+    const region: ZoomRegion = {
+      id: newZoomId(),
+      start: grid(suggestion.start),
+      end: grid(suggestion.end),
+      scale: DEFAULT_ZOOM_LEVEL,
+      focus: suggestion.focus,
+      follow: true,
+    };
+    setZooms((previous) =>
+      [...previous, region].sort((a, b) => a.start - b.start),
+    );
+    setSelectedZoom(region.id);
+  }, []);
 
   const motionWait =
     dimensions && media?.duration
@@ -834,7 +912,10 @@ export function Clyp() {
                     stored.of.height === loaded.height &&
                     Math.abs(stored.of.duration - length) < 0.01
                   ) {
-                    setMotion({ samples: stored.samples });
+                    setMotion({
+                      samples: stored.samples,
+                      clicks: stored.clicks ?? new Float32Array(0),
+                    });
                   }
                 });
 
@@ -1741,6 +1822,10 @@ export function Clyp() {
               motionProgress={motionProgress}
               onZoomAdd={addZoom}
               onZoomFollow={toggleFollow}
+              suggestions={suggestions}
+              suggesting={suggesting}
+              onSuggestToggle={toggleSuggest}
+              onSuggestionAccept={acceptSuggestion}
               onZoomChange={updateZoom}
               onZoomSelect={selectZoom}
               onZoomRemove={() => setRemoveZoomOpen(true)}
@@ -1829,15 +1914,15 @@ export function Clyp() {
           heavy job in the editor, so it never starts on a press that did not
           say so. The dialog names what happens, where, and for how long. */}
       <ConfirmDialog
-        open={followAsk !== null}
+        open={motionAsk !== null}
         onOpenChange={(open) => {
-          if (!open) setFollowAsk(null);
+          if (!open) setMotionAsk(null);
         }}
         title="Read the clip's motion?"
-        description={`To follow the action, clyp looks at where the picture changes from one frame to the next, once for the whole clip. That happens on this device and nothing leaves it. It takes ${motionWait}, and you can keep editing while it runs.`}
+        description={`${motionAsk?.kind === "suggest" ? "To suggest zooms" : "To follow the action"}, clyp looks at where the picture changes from one frame to the next, once for the whole clip. That happens on this device and nothing leaves it. It takes ${motionWait}, and you can keep editing while it runs.`}
         confirmLabel="Read the motion"
         confirmVariant="default"
-        onConfirm={confirmFollow}
+        onConfirm={confirmMotion}
       />
 
       {/* A region is four numbers and a point that took a minute to place, the

@@ -12,7 +12,9 @@ import {
   MusicIcon,
   PauseIcon,
   PlayIcon,
+  PlusIcon,
   RepeatIcon,
+  SparklesIcon,
   SquareIcon,
   StepBackIcon,
   StepForwardIcon,
@@ -30,6 +32,7 @@ import {
 } from "@/components/ui/tooltip";
 import {
   type ZoomRegion,
+  type ZoomSuggestion,
   MIN_ZOOM_LENGTH,
   ZOOM_LEVELS,
   roomFor,
@@ -149,6 +152,11 @@ interface TrimBarProps {
   onZoomAdd: () => void;
   /** Follow the action or aim by hand. The owner asks before a first read. */
   onZoomFollow: (zoom: ZoomRegion) => void;
+  /** Proposed regions, drawn as ghosts on the lane while `suggesting`. */
+  suggestions: ZoomSuggestion[];
+  suggesting: boolean;
+  onSuggestToggle: () => void;
+  onSuggestionAccept: (suggestion: ZoomSuggestion) => void;
   onZoomChange: (zoom: ZoomRegion) => void;
   onZoomSelect: (id: string | null) => void;
   onZoomRemove: () => void;
@@ -210,6 +218,10 @@ export function TrimBar({
   motionProgress,
   onZoomAdd,
   onZoomFollow,
+  suggestions,
+  suggesting,
+  onSuggestToggle,
+  onSuggestionAccept,
   onZoomChange,
   onZoomSelect,
   onZoomRemove,
@@ -999,12 +1011,38 @@ export function TrimBar({
             </div>
 
             {/* Zoom regions, under the picture's lane and on its axis. A press on
-                the bare lane puts the marker away. */}
-            {zooms.length > 0 && (
+                the bare lane puts the marker away. Suggested regions sit on the same
+                lane as ghosts, dashed and dim, since a suggestion is a region that
+                has not been agreed to yet. A press agrees. */}
+            {(zooms.length > 0 || suggestions.length > 0) && (
               <div
                 className="relative mt-1 h-7"
                 onPointerDown={() => onZoomSelect(null)}
               >
+                {suggestions.map((suggestion) => (
+                  <Tooltip key={`${suggestion.start}:${suggestion.end}`}>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        aria-label={`Suggested zoom, ${formatPrecise(suggestion.start, duration)} to ${formatPrecise(suggestion.end, duration)}. Press to add it.`}
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={() => onSuggestionAccept(suggestion)}
+                        className={cn(
+                          "absolute inset-y-0 flex cursor-pointer items-center justify-center rounded-md border border-dashed border-stroke-strong text-muted-foreground",
+                          "transition-all duration-150 hover:border-foreground/60 hover:bg-elevated hover:text-foreground active:scale-[0.98]",
+                          "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+                        )}
+                        style={{
+                          left: `calc(${at(suggestion.start / duration)} + ${INSET}px)`,
+                          width: at((suggestion.end - suggestion.start) / duration),
+                        }}
+                      >
+                        <PlusIcon className="size-3.5" aria-hidden="true" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>Suggested zoom. Press to add it.</TooltipContent>
+                  </Tooltip>
+                ))}
                 {zooms.map((region) => {
                   const selected = region.id === selectedZoom;
                   return (
@@ -1268,6 +1306,21 @@ export function TrimBar({
                     Add a zoom
                   </Button>
                 )}
+                {/* Shows or hides the ghosts. The first press reads the clip's
+                    motion, through the same dialog the follow toggle opens. */}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-pressed={suggesting}
+                  onClick={onSuggestToggle}
+                  className={cn(
+                    "shrink-0 text-muted-foreground hover:text-foreground",
+                    suggesting && "bg-track text-foreground",
+                  )}
+                >
+                  <SparklesIcon className="size-3.5" aria-hidden="true" />
+                  {suggesting ? "Hide suggestions" : "Suggest zooms"}
+                </Button>
               </div>
 
               {/* Wraps too, so at 320px the mutes drop under the speed pill rather

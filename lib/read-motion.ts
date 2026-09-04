@@ -33,7 +33,9 @@ export function readMotion(
         return;
       }
       worker.terminate();
-      if (reply.type === "done") resolve({ samples: reply.samples });
+      if (reply.type === "done") {
+        resolve({ samples: reply.samples, clicks: reply.clicks });
+      }
       else reject(new Error(reply.message));
     };
     worker.onerror = (event) => {
