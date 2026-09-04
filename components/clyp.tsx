@@ -80,7 +80,6 @@ import {
   deleteEdits,
   deleteMedia,
   deleteMotion,
-  deleteStyle,
   readEdits,
   readMedia,
   readMotion as readStoredMotion,
@@ -1296,8 +1295,8 @@ export function Clyp() {
     setZoom(1);
     setZoomMode("fit");
     setClearOpen(false);
-    deleteStyle();
-    setStyleOptions(DEFAULT_STYLE);
+    // The style stays, as the dialog says. It is the frame, not the picture,
+    // and the next drop wants the same frame.
   }, [removeSoundtrack]);
 
   return (

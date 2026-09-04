@@ -181,11 +181,3 @@ export function writeStyle(style: StyleOptions): void {
     // Nothing to do. The editor works, the next reload just starts fresh.
   }
 }
-
-export function deleteStyle(): void {
-  try {
-    localStorage.removeItem(STYLE_KEY);
-  } catch {
-    // See writeStyle.
-  }
-}
