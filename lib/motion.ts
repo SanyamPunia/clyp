@@ -149,6 +149,37 @@ const GLIDE = 0.3;
  */
 const KEEP = 0.7;
 
+/*
+ * Clicks, read from the picture.
+ *
+ * A click leaves a mark a cursor's travel does not: a sudden, compact change,
+ * a button's pressed state, a focus ring, a row lighting up. Detected, it is
+ * the one moment the action's position is known exactly, so the action is
+ * pinned there for a while rather than left to a centroid that the cursor
+ * drifting off the button would pull away. Verified on a square that pauses
+ * beside a two frame flash: the action snaps to the flash and holds until the
+ * square moves on.
+ */
+
+/** A frame counts as a click when this much of the grid changed at once. About
+ * 43 pixels of a 160 by 90 grid, well above a caret or a keystroke. */
+const CLICK_MIN = 0.003;
+/** And that much is at least this many times the frames just before it. A
+ * video playing in a tab raises the baseline and never trips this. */
+const CLICK_BOOST = 3;
+/** Over how many frames the baseline is taken. */
+const CLICK_BASELINE = 15;
+/** And the change is compact: its root mean square spread from its own centre
+ * is under this fraction of the grid's longer side. A scroll is not. */
+const CLICK_SPREAD = 0.2;
+/** How long the action stays pinned to a click, in source seconds. */
+const CLICK_HOLD = 1;
+/** Unless the centroid moves this far from it first, which is the cursor
+ * leaving, as fractions of the picture. */
+const CLICK_RELEASE = 0.2;
+/** Two clicks closer than this are one. */
+const CLICK_GAP = 0.3;
+
 /**
  * Reads the track for one stretch of a file. Worker-side: it draws to an
  * `OffscreenCanvas`, which every browser with WebCodecs has.
@@ -182,8 +213,9 @@ export async function analyzeMotion(
     sample.close();
 
     if (previous) {
-      const hit = centroid(previous, gray, width, height);
-      raw.push(at, hit ? hit.x : NaN, hit ? hit.y : NaN);
+      const c = change(previous, gray, width, height);
+      const held = c.fraction < STILL || c.fraction > SWEEP;
+      raw.push(at, held ? NaN : c.x, held ? NaN : c.y, c.fraction, c.spread);
     }
     previous = gray;
 
@@ -204,44 +236,110 @@ function grayscale(rgba: Uint8ClampedArray): Uint8Array {
   return out;
 }
 
-/** The centre of what changed, or null for a frame that says nothing. */
-function centroid(
+interface Change {
+  /** The centre of what changed, as fractions of the picture. */
+  x: number;
+  y: number;
+  /** How much of the grid changed. */
+  fraction: number;
+  /** The root mean square spread of the change from its centre, as a fraction
+   * of the grid's longer side. Small for a button, large for a scroll. */
+  spread: number;
+}
+
+/** What changed between two frames, and how much, and how compactly. */
+function change(
   a: Uint8Array,
   b: Uint8Array,
   width: number,
   height: number,
-): { x: number; y: number } | null {
+): Change {
   let count = 0;
   let sx = 0;
   let sy = 0;
+  let sxx = 0;
+  let syy = 0;
   for (let i = 0; i < a.length; i++) {
     if (Math.abs(a[i] - b[i]) > CHANGE) {
+      const x = i % width;
+      const y = (i - x) / width;
       count++;
-      sx += i % width;
-      sy += Math.floor(i / width);
+      sx += x;
+      sy += y;
+      sxx += x * x;
+      syy += y * y;
     }
   }
-  const fraction = count / a.length;
-  if (fraction < STILL || fraction > SWEEP) return null;
-  return { x: (sx / count + 0.5) / width, y: (sy / count + 0.5) / height };
+  if (count === 0) return { x: NaN, y: NaN, fraction: 0, spread: 0 };
+
+  const mx = sx / count;
+  const my = sy / count;
+  const variance = Math.max(sxx / count - mx * mx + (syy / count - my * my), 0);
+  return {
+    x: (mx + 0.5) / width,
+    y: (my + 0.5) / height,
+    fraction: count / a.length,
+    spread: Math.sqrt(variance) / Math.max(width, height),
+  };
 }
 
+/** The raw record is five numbers a frame: time, centre, fraction, spread. */
+const RAW = 5;
+
 /**
- * An exponential moving average over the raw centroids, held through the
- * frames that said nothing. The first motion sets the value outright rather
- * than being pulled from an arbitrary start.
+ * The action's track from the raw frames: an exponential moving average over
+ * the centroids, held through the frames that said nothing, and pinned to a
+ * click while the cursor lingers on it. The first motion sets the value
+ * outright rather than being pulled from an arbitrary start.
  */
 function smooth(raw: number[]): Float32Array {
-  const out = new Float32Array(raw.length);
+  const frames = raw.length / RAW;
+  const out = new Float32Array(frames * 3);
   let x = NaN;
   let y = NaN;
   let last = NaN;
+  let clickAt = -Infinity;
+  let clickX = NaN;
+  let clickY = NaN;
+  const recent: number[] = [];
 
-  for (let i = 0; i < raw.length; i += 3) {
+  for (let f = 0; f < frames; f++) {
+    const i = f * RAW;
     const t = raw[i];
     const cx = raw[i + 1];
     const cy = raw[i + 2];
-    if (!Number.isNaN(cx)) {
+    const fraction = raw[i + 3];
+    const spread = raw[i + 4];
+
+    // A click: a sudden, compact change against what came just before.
+    const baseline = Math.max(median(recent), 0.0005);
+    const rawX = raw[i + 1];
+    const rawY = raw[i + 2];
+    if (
+      fraction >= CLICK_MIN &&
+      fraction >= CLICK_BOOST * baseline &&
+      spread <= CLICK_SPREAD &&
+      !Number.isNaN(rawX) &&
+      t - clickAt >= CLICK_GAP
+    ) {
+      clickAt = t;
+      clickX = rawX;
+      clickY = rawY;
+      x = rawX;
+      y = rawY;
+    }
+    recent.push(fraction);
+    if (recent.length > CLICK_BASELINE) recent.shift();
+
+    const pinned =
+      t - clickAt <= CLICK_HOLD &&
+      (Number.isNaN(cx) || Math.hypot(cx - clickX, cy - clickY) <= CLICK_RELEASE);
+
+    if (pinned) {
+      x = clickX;
+      y = clickY;
+      last = t;
+    } else if (!Number.isNaN(cx)) {
       if (Number.isNaN(x)) {
         x = cx;
         y = cy;
@@ -252,11 +350,17 @@ function smooth(raw: number[]): Float32Array {
       }
       last = t;
     }
-    out[i] = t;
-    out[i + 1] = x;
-    out[i + 2] = y;
+    out[f * 3] = t;
+    out[f * 3 + 1] = x;
+    out[f * 3 + 2] = y;
   }
   return out;
+}
+
+function median(values: readonly number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[sorted.length >> 1];
 }
 
 /**

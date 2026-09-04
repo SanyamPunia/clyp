@@ -657,26 +657,17 @@ the cursor, the typing, and the menus.
   leads the point being kept in frame.
   Verified through the export on a square crossing a 640px clip at a quarter of
   the frame a second, which never pauses and so is the worst case for a glide:
-  it stays in frame the whole way, riding the bound near 85% to 90% of the box.
-- **`centredOn` turns the window's centre into a focus, clamped to the
-  picture.** A focus is the point that holds still while the picture grows, so
-  a focus at the centre would not centre it. The window's left edge is
-  `focus.x * (1 - 1 / scale)`, so the focus that centres a point is the point
-  pulled in by half a window and rescaled, and at the picture's edges the clamp
-  holds the window against the edge.
-- **During the ramp the focus can sit at a corner.** A window that is 97% of
-  the picture cannot centre a point near its edge, so `centredOn` clamps and
-  the picture grows from the nearest corner until the window is small enough
-  to centre it. It is continuous in the scale, so nothing jumps.
-- **The marker becomes a readout while a region follows.** It shows where the
-  action is, projected through the zoom since it sits beside the video rather
-  than inside its transform, written every frame by the same loop that sets the
-  transform, takes no input and lets pointer events through. `region.focus` is
-  the fallback for a stretch with no motion, and the aim again if follow is
-  switched off.
-- The toggle sits in the level slot, pressed while following. Switching off is
-  free, switching on is free once the clip has been read, and the first time
-  asks.
+  it stays in frame the whole way.
+- **A click pins the action.** A click leaves a mark a cursor's travel does
+  not: a sudden, compact change, a button's pressed state, a focus ring. A
+  frame where at least 0.3% of the grid changed, at least three times the
+  median of the fifteen frames before, with a root mean square spread under a
+  fifth of the grid, is a click, and the action is pinned to its centre for a
+  second or until the centroid moves a fifth of the picture away, which is the
+  cursor leaving. The spread is what keeps a scroll out, and the boost is what
+  keeps a video playing in a tab out, since that raises the baseline. Verified
+  on a square that pauses beside a two frame flash: the action snaps to the
+  flash and holds until the square moves on.
 
 ## Soundtrack
 
