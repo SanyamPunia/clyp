@@ -45,16 +45,29 @@ export function GradientBackground({
     ? (noiseIntensity / 100) * MAX_NOISE_OPACITY
     : 0;
 
+  /**
+   * A transparent background is the one incoming layer that is not opaque.
+   *
+   * The cross-fade works by leaving the outgoing gradient painted underneath,
+   * which is safe for every other kind because an opaque layer covers it once
+   * it settles. Under a transparent one it would show through for good rather
+   * than for 400ms, in the canvas and in the export alike, so it is not
+   * painted at all. There is nothing to fade into anyway.
+   */
+  const transparent = css === "none";
+
   return (
     <div className="relative">
       {/* Outgoing gradient holds the frame while the new one fades in. Every
           generated layer is opaque, so this never shows through once the
           incoming layer settles, including in the export. */}
-      <div
-        aria-hidden="true"
-        className="absolute inset-0 z-0"
-        style={{ backgroundImage: previousCss }}
-      />
+      {!transparent && (
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 z-0"
+          style={{ backgroundImage: previousCss }}
+        />
+      )}
 
       <div
         aria-hidden="true"

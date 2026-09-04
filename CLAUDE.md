@@ -99,6 +99,14 @@ cross-fade, the grain layer, the raster and the video composite need no branch
 for which kind is showing. A `background-color` path would have been a second
 way to paint the same surface.
 
+- **A transparent background is the one layer the cross-fade cannot keep the
+  previous gradient under.** `GradientBackground` leaves the outgoing gradient
+  painted underneath while the incoming one fades in, which is safe only
+  because every generated layer is opaque. Under a transparent one the old
+  gradient showed through for good rather than for 400ms, in the canvas and in
+  the export alike: the panel said None and the canvas still showed Golden
+  Hour. The outgoing layer is not painted at all when the incoming one is
+  `none`, and there is nothing to fade into anyway.
 - **The checkerboard for a transparent background sits behind the frame, not
   inside it.** It is a `.transparency-grid` layer on the canvas footprint box,
   which is outside the export ref, so the checks can never be serialized into a
@@ -111,6 +119,11 @@ way to paint the same surface.
   what picking it already said, so that needs no sentence.
 - A draft stored before this reads back on the preset tab, since `readStyle`
   merges over `DEFAULT_STYLE`.
+
+Verified at the file level. A PNG exported on `none` reads alpha 0 through the
+padding and 255 over the picture, so only the artwork is opaque. The same
+export on `solid` reads 255 through the padding and 0 only outside the frame's
+own radius.
 
 ### Gradients
 
