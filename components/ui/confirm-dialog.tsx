@@ -18,6 +18,11 @@ interface ConfirmDialogProps {
   description: string;
   confirmLabel: string;
   onConfirm: () => void;
+  /**
+   * Destructive by default, since most confirms here lose work. `default` is
+   * for a step that costs time rather than work, like a long read.
+   */
+  confirmVariant?: "destructive" | "default";
 }
 
 /**
@@ -31,6 +36,7 @@ export function ConfirmDialog({
   description,
   confirmLabel,
   onConfirm,
+  confirmVariant = "destructive",
 }: ConfirmDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -45,7 +51,7 @@ export function ConfirmDialog({
           <Button variant="secondary" size="lg" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button variant="destructive" size="lg" onClick={onConfirm}>
+          <Button variant={confirmVariant} size="lg" onClick={onConfirm}>
             {confirmLabel}
           </Button>
         </DialogFooter>

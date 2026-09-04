@@ -32,12 +32,8 @@ import {
   canEncodeAudio,
 } from "mediabunny";
 
-import {
-  type MotionTracks,
-  type ZoomRegion,
-  sourceRect,
-  zoomAt,
-} from "@/lib/clip-zoom";
+import { type ZoomRegion, sourceRect, zoomAt } from "@/lib/clip-zoom";
+import type { MotionTrack } from "@/lib/motion";
 import type { Trim } from "@/types/screenshot";
 
 export interface Box {
@@ -75,8 +71,8 @@ export interface RenderRequest {
   speed: number;
   /** Stretches of the clip that close in on a point of the picture. */
   zooms: ZoomRegion[];
-  /** The motion tracks for the regions that follow, by region id. */
-  tracks: MotionTracks;
+  /** The clip's motion track, for the regions that follow. */
+  motion: MotionTrack | null;
   /** Stream the clip's own sound across. Only true at 1x with nothing laid. */
   audio: boolean;
   /** A finished mix to write instead. Present whenever a track is laid. */
@@ -125,7 +121,7 @@ export async function renderVideo({
   trim,
   speed,
   zooms,
-  tracks,
+  motion,
   audio,
   mixed,
   fps,
@@ -221,7 +217,7 @@ export async function renderVideo({
       // A zoom is the same draw from a smaller source rectangle. The chrome
       // stays baked, and the rectangle comes from the same arithmetic the
       // preview's transform does, on the source's own clock.
-      const zoom = zoomAt(zooms, sample.timestamp, speed, tracks);
+      const zoom = zoomAt(zooms, sample.timestamp, speed, motion);
       if (zoom) {
         const rect = sourceRect(zoom, sample.displayWidth, sample.displayHeight);
         sample.draw(

@@ -13,12 +13,11 @@
  * worker's encode loop, which draws a source rectangle of each decoded frame.
  * The two cannot disagree, because neither has any arithmetic of its own.
  *
- * A region can follow the action instead of holding its aim. The motion track
- * for its span is read from the picture by `lib/motion.ts`, and `zoomAt` turns
- * the action's position into a focus that keeps it centred, clamped so the
- * window never leaves the picture. The regions carry only the flag. The
- * tracks are handed in beside them, keyed by region id, since they are derived
- * from the file rather than edits on it.
+ * A region can follow the action instead of holding its aim. The clip's motion
+ * track is read once from the picture by `lib/motion.ts`, and `zoomAt` turns
+ * the window's centre on that track into a focus, clamped so the window never
+ * leaves the picture. The regions carry only the flag. The track is handed in
+ * beside them, since it is derived from the file rather than an edit on it.
  */
 
 import { type MotionTrack, motionAt } from "@/lib/motion";
@@ -43,9 +42,6 @@ export interface ZoomRegion {
    */
   follow?: boolean;
 }
-
-/** The motion tracks, by region id, for the regions that follow. */
-export type MotionTracks = Record<string, MotionTrack>;
 
 /** What the picture is doing at one instant. */
 export interface ZoomState {
@@ -87,7 +83,7 @@ export function zoomAt(
   regions: readonly ZoomRegion[],
   time: number,
   speed = 1,
-  tracks: MotionTracks = {},
+  motion: MotionTrack | null = null,
 ): ZoomState | null {
   const region = regions.find((r) => time >= r.start && time < r.end);
   if (!region) return null;
@@ -99,8 +95,7 @@ export function zoomAt(
       : 1;
   const scale = 1 + (region.scale - 1) * easeInOut(progress);
 
-  const track = region.follow ? tracks[region.id] : undefined;
-  const action = track ? motionAt(track, time) : null;
+  const action = region.follow && motion ? motionAt(motion, time) : null;
 
   return {
     scale,

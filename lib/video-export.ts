@@ -15,7 +15,8 @@
  */
 
 import { mixAudio } from "@/lib/audio-mix";
-import type { MotionTracks, ZoomRegion } from "@/lib/clip-zoom";
+import type { ZoomRegion } from "@/lib/clip-zoom";
+import type { MotionTrack } from "@/lib/motion";
 import { rasterize } from "@/lib/raster";
 import {
   type Box,
@@ -47,8 +48,8 @@ export interface VideoExportRequest {
   speed?: number;
   /** Stretches of the clip that close in on a point of the picture. */
   zooms?: ZoomRegion[];
-  /** The motion tracks for the regions that follow, by region id. */
-  tracks?: MotionTracks;
+  /** The clip's motion track, for the regions that follow. */
+  motion?: MotionTrack | null;
   /** Carry the clip's own sound across. Ignored when it has none, or past 1x. */
   audio?: boolean;
   /** A track laid over the clip. */
@@ -150,7 +151,7 @@ export async function exportVideo({
   trim,
   speed = 1,
   zooms = [],
-  tracks = {},
+  motion = null,
   audio = true,
   soundtrack,
   music = true,
@@ -192,7 +193,7 @@ export async function exportVideo({
       trim,
       speed,
       zooms,
-      tracks,
+      motion,
       audio: clipSound && !mixed,
       mixed: mixed ? planar(mixed) : null,
       fps,

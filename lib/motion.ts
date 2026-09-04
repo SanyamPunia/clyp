@@ -6,12 +6,19 @@
  * recording that is almost always where the cursor went. Each frame is shrunk
  * to a few thousand pixels, differenced against the one before, and the
  * centroid of what changed is one sample of the track. Smoothed, that is what a
- * following zoom glides toward.
+ * following zoom looks toward.
  *
  * Two kinds of frame say nothing and are held rather than followed. One where
  * almost nothing changed has no motion to point at. One where most of the frame
  * changed is a scroll or a transition, and the centroid of everything is the
  * middle of the picture, which is not where anything is.
+ *
+ * **The whole clip is read once, when asked, and never again.** The read
+ * decodes every frame, so it is the one heavy thing in the editor: measured at
+ * 320 frames a second for 720p, which is about a minute for a ten minute clip.
+ * It is asked for through a dialog that says so, it reports progress, and the
+ * result is stored with the draft, so a region can be added, dragged or
+ * switched to follow without any work starting in the background.
  *
  * `analyzeMotion` runs in a worker off a decode of its own, spawned from
  * `lib/read-motion.ts`. The spawner lives apart from this module on purpose:
@@ -43,8 +50,40 @@ export interface MotionRequest {
 }
 
 export type MotionReply =
+  | { type: "progress"; fraction: number }
   | { type: "done"; samples: Float32Array }
   | { type: "error"; message: string };
+
+/**
+ * Frames a second the read gets through at 720p, measured: a 40 s 1280x720
+ * clip, 1200 frames, in 3.75 s. Decode is the cost and it scales with pixels,
+ * so other sizes are scaled from this.
+ */
+const READ_RATE_720P = 320;
+const PIXELS_720P = 1280 * 720;
+/** How often the worker reports, in frames. */
+const PROGRESS_EVERY = 15;
+
+/** How long reading a clip will take, in seconds. Assumes 30 fps, which a
+ * `<video>` element cannot be asked about. */
+export function estimateMotionSeconds(
+  width: number,
+  height: number,
+  duration: number,
+): number {
+  const rate = Math.min(
+    Math.max((READ_RATE_720P * PIXELS_720P) / Math.max(width * height, 1), 60),
+    2000,
+  );
+  return (duration * 30) / rate;
+}
+
+/** "a few seconds", "about 40 seconds", "about 2 minutes". */
+export function describeWait(seconds: number): string {
+  if (seconds < 8) return "a few seconds";
+  if (seconds < 90) return `about ${Math.round(seconds / 5) * 5} seconds`;
+  return `about ${Math.round(seconds / 60)} minute${Math.round(seconds / 60) === 1 ? "" : "s"}`;
+}
 
 /**
  * The longest edge of the frame the difference is taken on.
@@ -65,25 +104,19 @@ const STILL = 0.0003;
 const SWEEP = 0.35;
 /**
  * The smoothing's time constant, in source seconds. Long enough that a
- * cursor's jitter and a blinking caret do not shake the picture, short enough
+ * cursor's jitter and a blinking caret do not shake the position, short enough
  * that a pointer crossing the screen is followed rather than trailed.
  */
 const TAU = 0.3;
-/**
- * How far before a region the analysis starts, so the smoothing has settled by
- * the time the region does.
- */
-export const MOTION_LEAD = 0.5;
 
 /**
  * Reads the track for one stretch of a file. Worker-side: it draws to an
  * `OffscreenCanvas`, which every browser with WebCodecs has.
  */
-export async function analyzeMotion({
-  source,
-  from,
-  to,
-}: MotionRequest): Promise<Float32Array> {
+export async function analyzeMotion(
+  { source, from, to }: MotionRequest,
+  onProgress?: (fraction: number) => void,
+): Promise<Float32Array> {
   const input = new Input({ formats: ALL_FORMATS, source: new BlobSource(source) });
   const track = await input.getPrimaryVideoTrack();
   if (!track) throw new Error("That file has no video track");
@@ -99,17 +132,24 @@ export async function analyzeMotion({
   const sink = new VideoSampleSink(track);
   const raw: number[] = [];
   let previous: Uint8Array | null = null;
+  let count = 0;
+  const span = Math.max(to - from, 1e-6);
 
   for await (const sample of sink.samples(Math.max(from, 0), to)) {
     sample.draw(ctx, 0, 0, width, height);
     const gray = grayscale(ctx.getImageData(0, 0, width, height).data);
+    const at = sample.timestamp;
     sample.close();
 
     if (previous) {
       const hit = centroid(previous, gray, width, height);
-      raw.push(sample.timestamp, hit ? hit.x : NaN, hit ? hit.y : NaN);
+      raw.push(at, hit ? hit.x : NaN, hit ? hit.y : NaN);
     }
     previous = gray;
+
+    if (++count % PROGRESS_EVERY === 0) {
+      onProgress?.(Math.min((at - from) / span, 1));
+    }
   }
 
   return smooth(raw);
@@ -187,7 +227,13 @@ export function motionAt(
   track: MotionTrack,
   time: number,
 ): { x: number; y: number } | null {
-  const s = track.samples;
+  return sampleAt(track.samples, time);
+}
+
+function sampleAt(
+  s: Float32Array,
+  time: number,
+): { x: number; y: number } | null {
   const n = s.length / 3;
   if (n === 0) return null;
 

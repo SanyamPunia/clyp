@@ -601,12 +601,26 @@ position, so the marker never reached the file.
 
 ### Following the action
 
-A region can follow instead of holding its aim. `lib/motion.ts` reads where
-the action is from the picture itself, since a dropped file carries no pointer
-track: each frame is shrunk to a 160px grid, differenced against the one
-before, and the centroid of what changed is one sample. For a screen recording
-that is almost always where the cursor went.
+A region can follow instead of holding its aim. In one line: the app never
+sees the cursor. `lib/motion.ts` shrinks each frame to a 160px grid, finds the
+pixels that changed since the frame before, takes their centre, and smooths
+it. Anything that changes on screen pulls it, which for a screen recording is
+the cursor, the typing, and the menus.
 
+- **The whole clip is read once, when asked, and never again.** The read
+  decodes every frame, which makes it the one heavy job in the editor:
+  measured at 320 frames a second for 720p, so a ten minute clip is about a
+  minute and 1080p roughly twice that. The first press of the follow toggle
+  opens a dialog that says what happens, that it stays on the device, and how
+  long it will take, from `estimateMotionSeconds` scaled off that measurement.
+  Progress shows on the toggle's label and spinner. The result is kept for the
+  session and stored under the `motion` key, so a reload never asks again, and
+  nothing afterwards starts it: not a drag, not a second region. The first
+  build read a span per region, again on every drag of its edge, and did not
+  cancel a read a drag had superseded, so nudging a long region three times
+  had three decodes running at once. Only a clip change cancels now, through
+  `MotionRead.cancel`, and it does so because the answer would be about the
+  wrong picture.
 - **The grid is 160px, not 64.** A 24px cursor on a 1440px capture is under 3px
   at 160 and under a pixel at 64, where it vanished into the floor below.
   Measured on a 24px square crossing a 640px frame: 0.08% to 0.17% of the grid
@@ -616,47 +630,25 @@ that is almost always where the cursor went.
   changed, about four pixels, is a still frame with nothing to point at. Over
   35% is a scroll or a transition, and the centroid of everything is the middle
   of the picture, which is where nothing is. Both keep the last position.
-- **The track is smoothed with a 0.3 s exponential average**, so a cursor's
-  jitter and a blinking caret do not shake the picture while a pointer crossing
-  the screen is still followed. Verified on a square moving a quarter of the
-  frame a second: the smoothed position trails it by about 0.3 s, which reads
-  as a camera catching up rather than a lag.
-- **It runs in a worker, off a decode of its own**, through `motion.worker.ts`,
-  for the region's span plus `MOTION_LEAD` before it so the average has settled
-  by the region's start. The spawner is `lib/read-motion.ts`, a module of its
-  own: the worker's entry imports `lib/motion.ts`, and when that file also
-  referenced the worker's URL the production build never came back. The dev
-  bundler tolerated the cycle, which is why it was not caught until the check.
-  The video worker's spawner sits in `video-export.ts` for the same reason. It is read a moment after the span settles, keyed on
-  the span, so a drag reads again and a reply for a span that has since moved
-  is dropped. The tracks live beside the regions in `clyp.tsx`, keyed by id,
-  and are not stored: they are derived from the file, and a restore reads them
-  again. Switching follow off keeps the track, so switching it back on is
-  instant.
-- **`centredOn` keeps the action at the centre of the window, clamped to the
+- **`centredOn` turns the action's position into a focus, clamped to the
   picture.** A focus is the point that holds still while the picture grows, so
-  a focus at the action would keep it where it was, not centred. The window's
-  left edge is `focus.x * (1 - 1 / scale)`, so the focus that centres a point
-  is the point pulled in by half a window and rescaled, and at the picture's
-  edges the clamp holds the window against the edge. Verified through the
-  export on a 24px square crossing a 640px clip at a quarter of the frame a
-  second: at 2.0 s, with the square at 64%, 20% of the frame, it lands at 65%,
-  40% of the box, where a fixed centre aim would have put it at 78% and above
-  the window's top edge, out of the picture. At 4.6 s, at the right edge, the
-  window is clamped against the edge and the square sits at 79%, 62%. The
-  horizontal lag is the 0.3 s smoothing on a fast mover.
+  a focus at the centre would not centre it. The window's left edge is
+  `focus.x * (1 - 1 / scale)`, so the focus that centres a point is the point
+  pulled in by half a window and rescaled, and at the picture's edges the clamp
+  holds the window against the edge.
 - **During the ramp the focus can sit at a corner.** A window that is 97% of
   the picture cannot centre a point near its edge, so `centredOn` clamps and
   the picture grows from the nearest corner until the window is small enough
   to centre it. It is continuous in the scale, so nothing jumps.
 - **The marker becomes a readout while a region follows.** It shows where the
-  zoom is looking, written every frame by the same loop that sets the
+  action is, projected through the zoom since it sits beside the video rather
+  than inside its transform, written every frame by the same loop that sets the
   transform, takes no input and lets pointer events through. `region.focus` is
   the fallback for a stretch with no motion, and the aim again if follow is
   switched off.
-- The toggle sits in the level slot, pressed while following, with the glyph
-  spinning while the motion is being read. That is the only wait in the
-  editor.
+- The toggle sits in the level slot, pressed while following. Switching off is
+  free, switching on is free once the clip has been read, and the first time
+  asks.
 
 ## Soundtrack
 
@@ -944,6 +936,11 @@ settles well inside, and the Blob is never touched.
   past the end. A speed outside `SPEED_OPTIONS` falls back to 1.
 - An image has no edits and clears the key. Removing the clip clears it. The
   fold and the selected zoom are view state and are not stored.
+- **The clip's motion track has a key of its own, `motion`.** It is derived
+  from the file rather than an edit on it, but reading it is the one heavy job
+  in the editor and it was asked for once, so it comes back rather than being
+  asked for again. Three floats a frame, under half a megabyte for the longest
+  clip allowed, matched to the clip the same way the edits are.
 
 Reading happens on the client only, inside a promise rather than the effect
 body. Seeding state from storage during render would break hydration, because

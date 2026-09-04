@@ -20,6 +20,7 @@ const DB_VERSION = 1;
 const STORE = "draft";
 const MEDIA_KEY = "image";
 const EDITS_KEY = "edits";
+const MOTION_KEY = "motion";
 const STYLE_KEY = "clyp:style";
 
 function openDatabase(): Promise<IDBDatabase> {
@@ -125,6 +126,32 @@ export async function writeEdits(edits: StoredEdits): Promise<void> {
 
 export async function deleteEdits(): Promise<void> {
   await withStore("readwrite", (store) => store.delete(EDITS_KEY));
+}
+
+/**
+ * The clip's motion track, under a key of its own.
+ *
+ * Derived from the file rather than an edit on it, but reading it is the one
+ * heavy thing in the editor, about a minute for a ten minute clip, and it is
+ * asked for explicitly. Storing it means a reload never asks again. It is
+ * three floats a frame, under half a megabyte for the longest clip allowed, and
+ * it names the clip the same way the edits do.
+ */
+export interface StoredMotion {
+  of: StoredEdits["of"];
+  samples: Float32Array;
+}
+
+export async function readMotion(): Promise<StoredMotion | null> {
+  return withStore<StoredMotion>("readonly", (store) => store.get(MOTION_KEY));
+}
+
+export async function writeMotion(motion: StoredMotion): Promise<void> {
+  await withStore("readwrite", (store) => store.put(motion, MOTION_KEY));
+}
+
+export async function deleteMotion(): Promise<void> {
+  await withStore("readwrite", (store) => store.delete(MOTION_KEY));
 }
 
 /**

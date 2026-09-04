@@ -143,9 +143,11 @@ interface TrimBarProps {
    */
   zooms: ZoomRegion[];
   selectedZoom: string | null;
-  /** The selected region's motion is still being read. */
-  zoomAnalyzing: boolean;
+  /** 0 to 1 while the clip's motion is being read, null otherwise. */
+  motionProgress: number | null;
   onZoomAdd: () => void;
+  /** Follow the action or aim by hand. The owner asks before a first read. */
+  onZoomFollow: (zoom: ZoomRegion) => void;
   onZoomChange: (zoom: ZoomRegion) => void;
   onZoomSelect: (id: string | null) => void;
   onZoomRemove: () => void;
@@ -204,8 +206,9 @@ export function TrimBar({
   onSpeedChange,
   zooms,
   selectedZoom,
-  zoomAnalyzing,
+  motionProgress,
   onZoomAdd,
+  onZoomFollow,
   onZoomChange,
   onZoomSelect,
   onZoomRemove,
@@ -1170,18 +1173,21 @@ export function TrimBar({
                       </Chip>
                     ))}
                     {/* Follow the action or hold the aim. A toggle's label names
-                        what a press will do. While the motion is being read the
-                        glyph spins, which is the only wait in the editor. */}
+                        what a press will do, and while the clip's motion is being
+                        read it names the progress instead, with the glyph spinning.
+                        That read is the only wait in the editor. */}
                     <Transport
                       label={
-                        selectedRegion.follow ? "Aim by hand instead" : "Follow the action"
+                        motionProgress !== null
+                          ? `Reading the motion, ${Math.round(motionProgress * 100)}%`
+                          : selectedRegion.follow
+                            ? "Aim by hand instead"
+                            : "Follow the action"
                       }
-                      onClick={() =>
-                        onZoomChange({ ...selectedRegion, follow: !selectedRegion.follow })
-                      }
+                      onClick={() => onZoomFollow(selectedRegion)}
                       pressed={Boolean(selectedRegion.follow)}
                     >
-                      {zoomAnalyzing ? (
+                      {motionProgress !== null ? (
                         <Loader2Icon className="size-4 animate-spin" aria-hidden="true" />
                       ) : (
                         <MousePointer2Icon className="size-4" aria-hidden="true" />

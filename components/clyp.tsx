@@ -39,15 +39,19 @@ import {
 import { WindowNavbar } from "@/components/window-navbar";
 import { ZoomFocusMarker } from "@/components/zoom-focus";
 import {
-  type MotionTracks,
   type ZoomRegion,
   DEFAULT_ZOOM_LEVEL,
   newZoomId,
   placeZoom,
   zoomAt,
 } from "@/lib/clip-zoom";
-import { MOTION_LEAD, motionAt } from "@/lib/motion";
-import { readMotion } from "@/lib/read-motion";
+import {
+  type MotionTrack,
+  describeWait,
+  estimateMotionSeconds,
+  motionAt,
+} from "@/lib/motion";
+import { type MotionRead, readMotion } from "@/lib/read-motion";
 import { rasterize } from "@/lib/raster";
 import {
   defaultCustomGradient,
@@ -75,12 +79,15 @@ import {
   type StoredEdits,
   deleteEdits,
   deleteMedia,
+  deleteMotion,
   deleteStyle,
   readEdits,
   readMedia,
+  readMotion as readStoredMotion,
   readStyle,
   writeEdits,
   writeMedia,
+  writeMotion,
   writeStyle,
 } from "@/lib/storage";
 import {
@@ -266,14 +273,15 @@ export function Clyp() {
   const [selectedZoom, setSelectedZoom] = useState<string | null>(null);
   const [removeZoomOpen, setRemoveZoomOpen] = useState(false);
   /**
-   * The motion tracks for the regions that follow, by region id, and the ids
-   * still being read. Derived from the file rather than edits on it, so they
-   * are not stored: a restore reads them again.
+   * The clip's motion track, read once for the whole clip when a region is
+   * first asked to follow, and the read's progress while it runs. Reading it
+   * is the one heavy thing in the editor, so it is asked for through a dialog
+   * and never started by a drag. Stored with the draft, so a reload has it.
    */
-  const [tracks, setTracks] = useState<MotionTracks>({});
-  const [analyzing, setAnalyzing] = useState<ReadonlySet<string>>(
-    () => new Set(),
-  );
+  const [motion, setMotion] = useState<MotionTrack | null>(null);
+  const [motionProgress, setMotionProgress] = useState<number | null>(null);
+  /** The region waiting on the dialog's answer. */
+  const [followAsk, setFollowAsk] = useState<ZoomRegion | null>(null);
   const [soundtrack, setSoundtrack] = useState<Soundtrack | null>(null);
   /**
    * The preview's own volume, not the export's, and one per source.
@@ -339,10 +347,10 @@ export function Clyp() {
   // For the zoom's frame loop, which is bound once per clip and would
   // otherwise close over the regions it mounted with. Written in an effect.
   const zoomsRef = useRef(zooms);
-  const tracksRef = useRef(tracks);
+  const motionRef = useRef(motion);
   const selectedZoomRef = useRef(selectedZoom);
-  /** Which span each following region's track was read for, by id. */
-  const readSpansRef = useRef(new Map<string, string>());
+  /** The read in flight, so a clip change can stop it. */
+  const motionReadRef = useRef<MotionRead | null>(null);
   /** The marker while it follows, positioned by the loop rather than React. */
   const liveMarkerRef = useRef<HTMLDivElement>(null);
   /** True while the focus marker is being dragged. */
@@ -442,9 +450,9 @@ export function Clyp() {
 
   useEffect(() => {
     zoomsRef.current = zooms;
-    tracksRef.current = tracks;
+    motionRef.current = motion;
     selectedZoomRef.current = selectedZoom;
-  }, [zooms, tracks, selectedZoom]);
+  }, [zooms, motion, selectedZoom]);
 
   /**
    * Takes over from the loader in `lib/media.ts`, which has already read and
@@ -463,8 +471,13 @@ export function Clyp() {
     setSpeed(1);
     setZooms([]);
     setSelectedZoom(null);
-    setTracks({});
-    readSpansRef.current.clear();
+    // A read for the clip that has just been replaced is stopped, since its
+    // answer would be about the wrong picture.
+    motionReadRef.current?.cancel();
+    motionReadRef.current = null;
+    setMotion(null);
+    setMotionProgress(null);
+    setFollowAsk(null);
     // Audible again for a new clip, whatever the last one was left at.
     setMuted(false);
     setMusicMuted(false);
@@ -607,66 +620,82 @@ export function Clyp() {
 
   const removeZoom = useCallback(() => {
     setZooms((previous) => previous.filter((r) => r.id !== selectedZoom));
-    setTracks((previous) => {
-      if (!selectedZoom || !(selectedZoom in previous)) return previous;
-      const next = { ...previous };
-      delete next[selectedZoom];
-      return next;
-    });
-    if (selectedZoom) readSpansRef.current.delete(selectedZoom);
     setSelectedZoom(null);
     setRemoveZoomOpen(false);
   }, [selectedZoom]);
 
   /**
-   * Reads the motion for every region that follows, a moment after its span
-   * settles.
-   *
-   * Keyed on the region's span, so a drag rewrites the key and the track is
-   * read again for the new stretch, and a reply for a span that has since
-   * moved on is dropped. The read starts a little before the region so the
-   * smoothing has settled by the time the region does. A track is kept when
-   * follow is switched off, since switching it back on is then instant.
+   * Reads the whole clip's motion, once. Progress lands on the toggle, the
+   * result is kept for the session and stored with the draft, and nothing
+   * afterwards, not a drag, not a second region, starts it again.
    */
-  const clipBlob = media?.kind === "video" ? media.blob : undefined;
+  const startMotionRead = useCallback(() => {
+    if (media?.kind !== "video" || !media.blob || !media.duration) return;
+    if (motionReadRef.current) return;
 
-  useEffect(() => {
-    if (!clipBlob) return;
-
-    const stale = zooms.filter(
-      (z) =>
-        z.follow && readSpansRef.current.get(z.id) !== `${z.start}:${z.end}`,
+    const read = readMotion(
+      { source: media.blob, from: 0, to: media.duration },
+      setMotionProgress,
     );
-    if (stale.length === 0) return;
+    motionReadRef.current = read;
+    setMotionProgress(0);
 
-    const timer = window.setTimeout(() => {
-      for (const region of stale) {
-        const span = `${region.start}:${region.end}`;
-        readSpansRef.current.set(region.id, span);
-        setAnalyzing((previous) => new Set(previous).add(region.id));
+    read.track
+      .then((track) => {
+        setMotion(track);
+        if (dimensions) {
+          writeMotion({
+            of: {
+              name: media.name,
+              width: dimensions.w,
+              height: dimensions.h,
+              duration: media.duration ?? 0,
+            },
+            samples: track.samples,
+          });
+        }
+      })
+      .catch((error: Error) => {
+        // A cancel is a clip change, which has already said what it needs to.
+        if (error.name !== "AbortError") toast.error(error.message);
+      })
+      .finally(() => {
+        if (motionReadRef.current === read) motionReadRef.current = null;
+        setMotionProgress(null);
+      });
+  }, [dimensions, media]);
 
-        readMotion({
-          source: clipBlob,
-          from: region.start - MOTION_LEAD,
-          to: region.end,
-        })
-          .then((track) => {
-            // Superseded by a later drag, or the region is gone.
-            if (readSpansRef.current.get(region.id) !== span) return;
-            setTracks((previous) => ({ ...previous, [region.id]: track }));
-          })
-          .catch((error: Error) => toast.error(error.message))
-          .finally(() =>
-            setAnalyzing((previous) => {
-              const next = new Set(previous);
-              next.delete(region.id);
-              return next;
-            }),
-          );
+  /**
+   * The follow toggle. Switching off is free. Switching on is free too once
+   * the clip's motion has been read, and otherwise asks first, since the read
+   * decodes every frame and a heavy job should never start on a press that
+   * did not say so.
+   */
+  const toggleFollow = useCallback(
+    (region: ZoomRegion) => {
+      if (region.follow) {
+        updateZoom({ ...region, follow: false });
+      } else if (motion || motionReadRef.current) {
+        updateZoom({ ...region, follow: true });
+      } else {
+        setFollowAsk(region);
       }
-    }, EDITS_DEBOUNCE);
-    return () => window.clearTimeout(timer);
-  }, [clipBlob, zooms]);
+    },
+    [motion, updateZoom],
+  );
+
+  const confirmFollow = useCallback(() => {
+    if (followAsk) updateZoom({ ...followAsk, follow: true });
+    setFollowAsk(null);
+    startMotionRead();
+  }, [followAsk, startMotionRead, updateZoom]);
+
+  const motionWait =
+    dimensions && media?.duration
+      ? describeWait(
+          estimateMotionSeconds(dimensions.w, dimensions.h, media.duration),
+        )
+      : "a moment";
 
   // Only for a target shape, which is the only thing that reads it.
   useEffect(() => {
@@ -792,6 +821,22 @@ export function Clyp() {
               if (kept) applyEdits(kept, length);
               done();
 
+              // The motion track is derived from the file, but reading it is
+              // the one heavy job here and it was asked for once, so it comes
+              // back rather than being asked for again. Same match as the edits.
+              readStoredMotion()
+                .catch(() => null)
+                .then((stored) => {
+                  if (
+                    stored &&
+                    stored.of.width === loaded.width &&
+                    stored.of.height === loaded.height &&
+                    Math.abs(stored.of.duration - length) < 0.01
+                  ) {
+                    setMotion({ samples: stored.samples });
+                  }
+                });
+
               if (!audio) return;
               // Back through the same loader an upload uses, which re-measures
               // it and mints a fresh object URL. Where it sat is put back from
@@ -869,6 +914,7 @@ export function Clyp() {
 
     if (!media || media.kind !== "video" || !trim || !dimensions) {
       deleteEdits();
+      deleteMotion();
       return;
     }
 
@@ -969,7 +1015,7 @@ export function Clyp() {
             trim,
             speed,
             zooms,
-            tracks,
+            motion,
             audio: options.audio,
             soundtrack: soundtrack ?? undefined,
             music: options.music,
@@ -1015,7 +1061,7 @@ export function Clyp() {
         setProgress(null);
       }
     },
-    [exportAction, exportsVideo, media, soundtrack, speed, tracks, trim, zooms],
+    [exportAction, exportsVideo, media, motion, soundtrack, speed, trim, zooms],
   );
 
   const handleCancelExport = useCallback(() => {
@@ -1073,7 +1119,7 @@ export function Clyp() {
 
       const state = aimingRef.current
         ? null
-        : zoomAt(zoomsRef.current, video.currentTime, speed, tracksRef.current);
+        : zoomAt(zoomsRef.current, video.currentTime, speed, motionRef.current);
       const transform = state && state.scale > 1.0001 ? `scale(${state.scale})` : "";
       const origin = state ? `${state.focus.x * 100}% ${state.focus.y * 100}%` : "";
       if (video.style.transform !== transform) video.style.transform = transform;
@@ -1091,7 +1137,7 @@ export function Clyp() {
       const marker = liveMarkerRef.current;
       const region = zoomsRef.current.find((r) => r.id === selectedZoomRef.current);
       if (marker && region?.follow) {
-        const track = tracksRef.current[region.id];
+        const track = motionRef.current;
         const at = (track && motionAt(track, video.currentTime)) ?? region.focus;
         const shown = state
           ? {
@@ -1680,10 +1726,9 @@ export function Clyp() {
               onSpeedChange={handleSpeedChange}
               zooms={zooms}
               selectedZoom={selectedZoom}
-              zoomAnalyzing={
-                selectedZoom !== null && analyzing.has(selectedZoom)
-              }
+              motionProgress={motionProgress}
               onZoomAdd={addZoom}
+              onZoomFollow={toggleFollow}
               onZoomChange={updateZoom}
               onZoomSelect={selectZoom}
               onZoomRemove={() => setRemoveZoomOpen(true)}
@@ -1766,6 +1811,21 @@ export function Clyp() {
           removeSoundtrack();
           setRemoveTrackOpen(false);
         }}
+      />
+
+      {/* Reading the motion decodes every frame of the clip, which is the one
+          heavy job in the editor, so it never starts on a press that did not
+          say so. The dialog names what happens, where, and for how long. */}
+      <ConfirmDialog
+        open={followAsk !== null}
+        onOpenChange={(open) => {
+          if (!open) setFollowAsk(null);
+        }}
+        title="Read the clip's motion?"
+        description={`To follow the action, clyp looks at where the picture changes from one frame to the next, once for the whole clip. That happens on this device and nothing leaves it. It takes ${motionWait}, and you can keep editing while it runs.`}
+        confirmLabel="Read the motion"
+        confirmVariant="default"
+        onConfirm={confirmFollow}
       />
 
       {/* A region is four numbers and a point that took a minute to place, the
