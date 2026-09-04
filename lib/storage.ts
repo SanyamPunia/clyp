@@ -12,6 +12,7 @@
  * neither is a reason to break the editor.
  */
 
+import type { Cut } from "@/lib/clip-cuts";
 import type { ZoomRegion } from "@/lib/clip-zoom";
 import type { MediaKind, StyleOptions, Trim } from "@/types/screenshot";
 
@@ -110,6 +111,8 @@ export async function deleteMedia(): Promise<void> {
 export interface StoredEdits {
   of: { name?: string; width: number; height: number; duration: number };
   trim: Trim;
+  /** Stretches removed from the middle. Absent in a record written before cuts. */
+  cuts?: Cut[];
   speed: number;
   zooms: ZoomRegion[];
   /** The laid track's placement. Absent when there is no track. */

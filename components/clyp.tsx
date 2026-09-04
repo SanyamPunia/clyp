@@ -55,6 +55,16 @@ import {
   motionAt,
 } from "@/lib/motion";
 import { type MotionRead, readMotion } from "@/lib/read-motion";
+import {
+  type Cut,
+  MIN_CUT,
+  MIN_KEPT,
+  afterCuts,
+  keptSeconds,
+  newCutId,
+  placeCut,
+  tidyCuts,
+} from "@/lib/clip-cuts";
 import { rasterize } from "@/lib/raster";
 import {
   DEFAULT_SOLID_COLOR,
@@ -261,6 +271,13 @@ export function Clyp() {
   // beside the Blob, which must not be rewritten on every drag of a handle.
   const [trim, setTrim] = useState<Trim | null>(null);
   /**
+   * Stretches removed from the middle of the clip, on the source's axis like
+   * the trim and the zooms. Sorted and merged on the way in, so nothing
+   * downstream has to cope with an overlap.
+   */
+  const [cuts, setCuts] = useState<Cut[]>([]);
+  const [selectedCut, setSelectedCut] = useState<string | null>(null);
+  /**
    * The clip's playback rate, an edit like the trim and stored with it. The
    * preview plays at it and the export writes at it, so the two agree, and it
    * is the one place the clip's own sound gives way: past 1x there is no
@@ -276,6 +293,7 @@ export function Clyp() {
   const [zooms, setZooms] = useState<ZoomRegion[]>([]);
   const [selectedZoom, setSelectedZoom] = useState<string | null>(null);
   const [removeZoomOpen, setRemoveZoomOpen] = useState(false);
+  const [removeCutOpen, setRemoveCutOpen] = useState(false);
   /**
    * The clip's motion track, read once for the whole clip when a region is
    * first asked to follow, and the read's progress while it runs. Reading it
@@ -432,7 +450,11 @@ export function Clyp() {
   // read this one value, so none of them can describe a length nobody asked
   // for. The trim bar's own readout stays in the source's seconds, since that
   // is the axis its handles cut on.
-  const clipSeconds = trim ? (trim.end - trim.start) / speed : media?.duration;
+  // The one length everything reads: the toolbar, the duration readout, the
+  // size estimate and the encode. Every cut comes off it.
+  const clipSeconds = trim
+    ? keptSeconds(trim, cuts) / speed
+    : media?.duration;
 
   /**
    * The frame's box when a shape is asked for.
@@ -483,6 +505,8 @@ export function Clyp() {
       loaded.media.duration ? { start: 0, end: loaded.media.duration } : null,
     );
     setSpeed(1);
+    setCuts([]);
+    setSelectedCut(null);
     setZooms([]);
     setSelectedZoom(null);
     // A read for the clip that has just been replaced is stopped, since its
@@ -515,6 +539,20 @@ export function Clyp() {
     const start = grid(edits.trim.start);
     const end = Math.max(grid(edits.trim.end), start);
     if (end > start) setTrim({ start, end });
+
+    // Tidied against the restored trim, so a record that somehow disagrees
+    // with the file cannot leave an overlap or a cut outside the clip.
+    setCuts(
+      tidyCuts(
+        (edits.cuts ?? []).map((c) => ({
+          ...c,
+          start: grid(c.start),
+          end: grid(c.end),
+        })),
+        { start, end },
+      ),
+    );
+    setSelectedCut(null);
 
     const rate = edits.speed as (typeof SPEED_OPTIONS)[number];
     setSpeed(SPEED_OPTIONS.includes(rate) ? rate : 1);
@@ -638,6 +676,69 @@ export function Clyp() {
     setSelectedZoom(null);
     setRemoveZoomOpen(false);
   }, [selectedZoom]);
+
+  /**
+   * A new cut lands at the playhead, the same rule a zoom follows: the default
+   * length from there, or what the gap holds, and shortened rather than
+   * refused when the clip is nearly all cut already.
+   *
+   * The playhead is moved to the far side of it, since where it was is now a
+   * frame the preview will not show.
+   */
+  const addCut = useCallback(() => {
+    const video = videoRef.current;
+    if (!video || !trim) return;
+
+    const grid = (seconds: number) => Math.round(seconds * EDIT_FPS) / EDIT_FPS;
+    const placed = placeCut(trim, cuts, grid(video.currentTime));
+    if (!placed) {
+      toast.error(
+        keptSeconds(trim, cuts) - MIN_KEPT < MIN_CUT
+          ? "There is not enough of the clip left to cut"
+          : "There is no room for a cut at the playhead",
+      );
+      return;
+    }
+
+    const cut: Cut = {
+      id: newCutId(),
+      start: grid(placed.start),
+      end: grid(placed.end),
+    };
+    const next = tidyCuts([...cuts, cut], trim);
+    setCuts(next);
+    setSelectedCut(cut.id);
+    video.currentTime = afterCuts(trim, next, video.currentTime);
+  }, [cuts, trim]);
+
+  const updateCut = useCallback(
+    (next: Cut) => {
+      if (!trim) return;
+      setCuts((previous) =>
+        tidyCuts(
+          previous.map((c) => (c.id === next.id ? next : c)),
+          trim,
+        ),
+      );
+    },
+    [trim],
+  );
+
+  const removeCut = useCallback(() => {
+    setCuts((previous) => previous.filter((c) => c.id !== selectedCut));
+    setSelectedCut(null);
+    setRemoveCutOpen(false);
+  }, [selectedCut]);
+
+  /**
+   * Moving a trim handle re-clips the cuts to it, so a cut dragged outside the
+   * range stops removing anything rather than removing time the export no
+   * longer covers.
+   */
+  const handleTrimChange = useCallback((next: Trim) => {
+    setTrim(next);
+    setCuts((previous) => tidyCuts(previous, next));
+  }, []);
 
   /**
    * Reads the whole clip's motion, once. Progress lands on the toggle, the
@@ -1010,6 +1111,7 @@ export function Clyp() {
         duration: media.duration ?? 0,
       },
       trim,
+      cuts,
       speed,
       zooms,
       soundtrack: soundtrack
@@ -1022,7 +1124,7 @@ export function Clyp() {
     };
     const timer = window.setTimeout(() => writeEdits(record), EDITS_DEBOUNCE);
     return () => window.clearTimeout(timer);
-  }, [restored, media, dimensions, trim, speed, zooms, soundtrack]);
+  }, [restored, media, dimensions, trim, cuts, speed, zooms, soundtrack]);
 
   // Paste anywhere on the page drops an image onto the canvas.
   useEffect(() => {
@@ -1097,6 +1199,7 @@ export function Clyp() {
             source: media.blob,
             scale: options.quality,
             trim,
+            cuts,
             speed,
             zooms,
             motion,
@@ -1145,7 +1248,17 @@ export function Clyp() {
         setProgress(null);
       }
     },
-    [exportAction, exportsVideo, media, motion, soundtrack, speed, trim, zooms],
+    [
+      exportAction,
+      exportsVideo,
+      media,
+      motion,
+      soundtrack,
+      speed,
+      trim,
+      cuts,
+      zooms,
+    ],
   );
 
   const handleCancelExport = useCallback(() => {
@@ -1371,6 +1484,8 @@ export function Clyp() {
     });
     setDimensions(null);
     setTrim(null);
+    setCuts([]);
+    setSelectedCut(null);
     setSpeed(1);
     setZooms([]);
     setSelectedZoom(null);
@@ -1825,7 +1940,7 @@ export function Clyp() {
               video={videoRef}
               duration={media.duration}
               trim={trim}
-              onChange={setTrim}
+              onChange={handleTrimChange}
               onSeek={handleSeek}
               onPlayback={handlePlayback}
               onToggle={togglePlayback}
@@ -1833,6 +1948,12 @@ export function Clyp() {
               onSpeedChange={handleSpeedChange}
               zooms={zooms}
               selectedZoom={selectedZoom}
+              cuts={cuts}
+              selectedCut={selectedCut}
+              onCutAdd={addCut}
+              onCutChange={updateCut}
+              onCutSelect={setSelectedCut}
+              onCutRemove={() => setRemoveCutOpen(true)}
               motionProgress={motionProgress}
               onZoomAdd={addZoom}
               onZoomFollow={toggleFollow}
@@ -1949,6 +2070,18 @@ export function Clyp() {
         description="The picture plays plain through that stretch again. Its length, level and aim are not kept."
         confirmLabel="Remove"
         onConfirm={removeZoom}
+      />
+
+      {/* A cut confirms the same way a zoom does. Both are a stretch someone
+          placed by dragging two edges against the frames under them, and the X
+          for one sits a few pixels from the controls beside it. */}
+      <ConfirmDialog
+        open={removeCutOpen}
+        onOpenChange={setRemoveCutOpen}
+        title="Remove this cut?"
+        description="That stretch of the clip plays again, and the clip gets longer by its length."
+        confirmLabel="Remove"
+        onConfirm={removeCut}
       />
 
       <ConfirmDialog

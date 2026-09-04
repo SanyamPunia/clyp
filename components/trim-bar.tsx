@@ -14,6 +14,7 @@ import {
   PlayIcon,
   PlusIcon,
   RepeatIcon,
+  ScissorsIcon,
   SparklesIcon,
   SquareIcon,
   StepBackIcon,
@@ -30,6 +31,16 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  type Cut,
+  MIN_CUT,
+  afterCuts,
+  cutAt,
+  keptSeconds,
+  keptSegments,
+  nearestKept,
+  roomForCut,
+} from "@/lib/clip-cuts";
 import {
   type ZoomRegion,
   type ZoomSuggestion,
@@ -147,6 +158,17 @@ interface TrimBarProps {
    */
   zooms: ZoomRegion[];
   selectedZoom: string | null;
+  /**
+   * Stretches removed from the middle, on the same axis as the trim. Drawn as
+   * rails inside the kept block, since that is already what this lane uses to
+   * say a stretch does not survive.
+   */
+  cuts: Cut[];
+  selectedCut: string | null;
+  onCutAdd: () => void;
+  onCutChange: (cut: Cut) => void;
+  onCutSelect: (id: string | null) => void;
+  onCutRemove: () => void;
   /** 0 to 1 while the clip's motion is being read, null otherwise. */
   motionProgress: number | null;
   onZoomAdd: () => void;
@@ -215,6 +237,12 @@ export function TrimBar({
   onSpeedChange,
   zooms,
   selectedZoom,
+  cuts,
+  selectedCut,
+  onCutAdd,
+  onCutChange,
+  onCutSelect,
+  onCutRemove,
   motionProgress,
   onZoomAdd,
   onZoomFollow,
@@ -255,6 +283,9 @@ export function TrimBar({
   // would otherwise close over the values this component mounted with. Written
   // in an effect rather than during render, which is not a ref's to do.
   const rangeRef = useRef(trim);
+  // The frame loop steps over cuts, and it is bound once, so it reads them
+  // from here rather than closing over the list it mounted with.
+  const cutsRef = useRef(cuts);
   const seekRef = useRef(onSeek);
   const loopRef = useRef(looping);
   const playbackRef = useRef(onPlayback);
@@ -268,12 +299,13 @@ export function TrimBar({
 
   useEffect(() => {
     rangeRef.current = trim;
+    cutsRef.current = cuts;
     seekRef.current = onSeek;
     loopRef.current = looping;
     playbackRef.current = onPlayback;
     soundRef.current = soundtrack;
     changeSoundRef.current = onSoundtrackChange;
-  }, [trim, onSeek, looping, onPlayback, soundtrack, onSoundtrackChange]);
+  }, [trim, cuts, onSeek, looping, onPlayback, soundtrack, onSoundtrackChange]);
 
   useEffect(() => {
     const lane = laneRef.current;
@@ -335,6 +367,18 @@ export function TrimBar({
         return;
       }
 
+      // A cut has no frames, so playback steps over it rather than through it.
+      // Only while playing: a paused playhead parked at a cut's own start is
+      // showing the last frame that survives, which is the right frame, and a
+      // loop that moved it would fight a scrub.
+      if (!element.seeking && !element.paused) {
+        const jump = afterCuts(rangeRef.current, cutsRef.current, time);
+        if (jump > time) {
+          seekRef.current(jump);
+          return;
+        }
+      }
+
       const fraction = Math.min(Math.max(time / duration, 0), 1);
       playhead.style.transform = `translateX(${fraction * spanRef.current}px)`;
 
@@ -376,9 +420,17 @@ export function TrimBar({
     if (!element) return;
 
     onPlayback(false);
-    onSeek(
-      clamp(element.currentTime + by * speed, trim.start, trim.end - FRAME),
+    const target = clamp(
+      element.currentTime + by * speed,
+      trim.start,
+      trim.end - FRAME,
     );
+    // A step that lands in a cut carries on the way it was going. The nearer
+    // edge is wrong here: one frame into a cut it is the frame just left, so
+    // the button would appear dead.
+    const cut = cutAt(cuts, target);
+    const to = !cut ? target : by > 0 ? cut.end : cut.start - FRAME;
+    onSeek(clamp(to, trim.start, trim.end - FRAME));
   };
 
   const stop = () => {
@@ -510,6 +562,13 @@ export function TrimBar({
     (event: React.PointerEvent<HTMLDivElement>) => {
       if (disabled) return;
 
+      // A press on the bare lane puts the selected cut away, the same as a
+      // press on the bare zoom lane. Without it there is no way back to the
+      // Cut button, which the selected cut's own controls take the slot of,
+      // so a second cut could not be placed. A press on a cut stops
+      // propagating, so this only ever fires away from one.
+      onCutSelect(null);
+
       // Paused for the drag. Playback fights a scrub for the same clock, and
       // what comes out is the video stuttering rather than being moved.
       const resume = video.current ? !video.current.paused : false;
@@ -517,7 +576,15 @@ export function TrimBar({
 
       const to = (clientX: number) => {
         const { start, end } = rangeRef.current;
-        onSeek(clamp(timeAt(clientX), start, end - FRAME));
+        // Snapped out of any cut it lands in, so the frame under the hand is
+        // always one that will be in the export. The nearer edge, so the
+        // playhead does not run ahead of the pointer.
+        const kept = nearestKept(
+          rangeRef.current,
+          cutsRef.current,
+          timeAt(clientX),
+        );
+        onSeek(clamp(kept, start, end - FRAME));
       };
       to(event.clientX);
 
@@ -533,7 +600,7 @@ export function TrimBar({
       window.addEventListener("pointerup", release);
       window.addEventListener("pointercancel", release);
     },
-    [disabled, onPlayback, onSeek, timeAt, video],
+    [disabled, onCutSelect, onPlayback, onSeek, timeAt, video],
   );
 
   /**
@@ -839,11 +906,100 @@ export function TrimBar({
     ],
   );
 
+  /**
+   * A cut's body and its two edges, the zoom region's geometry again.
+   *
+   * The body slides it and the edges resize it, snapped to the frame grid and
+   * bounded by its neighbours and the trim, so two cuts can never overlap. A
+   * press selects it, and a press that does not move on the one already
+   * selected deselects it.
+   *
+   * Paused for the drag, and the playhead follows the edge being moved: the
+   * frame under an edge is what decides where a cut should begin or end, and
+   * it is gone before it can be read otherwise. The playhead goes to the far
+   * side of the edge rather than onto it, since inside the cut is the one
+   * place the preview will not show.
+   */
+  const dragCut = useCallback(
+    (cut: Cut, part: "body" | "head" | "tail") =>
+      (event: React.PointerEvent<HTMLDivElement>) => {
+        if (disabled) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onCutSelect(cut.id);
+        event.currentTarget.setPointerCapture(event.pointerId);
+
+        const resume = video.current ? !video.current.paused : false;
+        onPlayback(false);
+
+        const origin = timeAt(event.clientX);
+        const from = cut;
+        const room = roomForCut(rangeRef.current, cuts, 0, cut.id);
+        const { lo, hi } = room ?? { lo: trim.start, hi: trim.end };
+        const length = from.end - from.start;
+        const wasSelected = selectedCut === cut.id;
+        let moved = false;
+        const show = (time: number) =>
+          onSeek(clamp(time, rangeRef.current.start, rangeRef.current.end - FRAME));
+
+        const move = (ev: PointerEvent) => {
+          const by = timeAt(ev.clientX) - origin;
+          if (!moved && Math.abs(by) < FRAME / 2) return;
+          moved = true;
+
+          if (part === "body") {
+            const start = snap(clamp(from.start + by, lo, hi - length));
+            onCutChange({ ...from, start, end: start + length });
+            show(start);
+          } else if (part === "head") {
+            const start = snap(clamp(from.start + by, lo, from.end - MIN_CUT));
+            onCutChange({ ...from, start });
+            show(start);
+          } else {
+            const end = snap(clamp(from.end + by, from.start + MIN_CUT, hi));
+            onCutChange({ ...from, end });
+            show(end);
+          }
+        };
+
+        const release = () => {
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", release);
+          window.removeEventListener("pointercancel", release);
+          if (!moved && wasSelected) onCutSelect(null);
+          if (resume) onPlayback(true);
+        };
+
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", release);
+        window.addEventListener("pointercancel", release);
+      },
+    [
+      cuts,
+      disabled,
+      onCutChange,
+      onCutSelect,
+      onPlayback,
+      onSeek,
+      selectedCut,
+      timeAt,
+      trim.end,
+      trim.start,
+      video,
+    ],
+  );
+
   const selectedRegion = zooms.find((z) => z.id === selectedZoom) ?? null;
+  const selectedRange = cuts.find((c) => c.id === selectedCut) ?? null;
 
   const first = trim.start / duration;
   const last = trim.end / duration;
-  const trimmed = trim.start > 0 || trim.end < duration;
+  // What the file will run, in source seconds: the trim less every cut. The
+  // readout stays on the source's clock rather than the output's, since that
+  // is the axis the handles cut on, so the speed is not applied here.
+  const kept = keptSeconds(trim, cuts);
+  const segments = keptSegments(trim, cuts);
+  const trimmed = trim.start > 0 || trim.end < duration || cuts.length > 0;
 
   return (
     <div
@@ -921,7 +1077,7 @@ export function TrimBar({
         <span className="flex items-center justify-self-end gap-1.5 text-right text-[13px] text-muted-foreground">
           <span>
             <span className="tabular-nums text-foreground">
-              {formatPrecise(trim.end - trim.start, duration)}
+              {formatPrecise(kept, duration)}
             </span>
             {trimmed && (
               <span className="tabular-nums"> of {formatPrecise(duration)}</span>
@@ -975,14 +1131,71 @@ export function TrimBar({
                   the height is what says which part survives. */}
               <div className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-track" />
 
-              {/* What is kept. */}
-              <div
-                className="absolute inset-y-0 rounded-md bg-track-active"
-                style={{
-                  left: `calc(${at(first)} + ${INSET}px)`,
-                  width: at(last - first),
-                }}
-              />
+              {/* What is kept, one block per stretch that survives. Drawn
+                  per segment rather than as one span from the in point to the
+                  out point, so a cut in the middle is a real gap with the rail
+                  showing through it. Nothing has to paint over the block, and
+                  no colour has to be matched to the surface behind the lane. */}
+              {segments.map((segment) => (
+                <div
+                  key={segment.start}
+                  className="absolute inset-y-0 rounded-md bg-track-active"
+                  style={{
+                    left: `calc(${at(segment.start / duration)} + ${INSET}px)`,
+                    width: at((segment.end - segment.start) / duration),
+                  }}
+                />
+              ))}
+
+              {/* The gap the blocks above leave is the cut. Nothing here
+                  paints a fill: what is left to draw is a hit area for the
+                  body, since 6px of rail is nothing to grab, and a mark on
+                  each edge to resize by. Selecting brightens the rail through
+                  it rather than ringing it: brand is spent on the playhead. */}
+              {cuts.map((cut) => {
+                const selected = cut.id === selectedCut;
+                return (
+                  <div key={cut.id}>
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Cut, ${formatPrecise(cut.start, duration)} to ${formatPrecise(cut.end, duration)}`}
+                      aria-pressed={selected}
+                      onPointerDown={dragCut(cut, "body")}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          onCutSelect(selected ? null : cut.id);
+                        }
+                      }}
+                      className={cn(
+                        "absolute inset-y-0 cursor-grab active:cursor-grabbing",
+                        "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+                      )}
+                      style={{
+                        left: `calc(${at(cut.start / duration)} + ${INSET}px)`,
+                        width: at((cut.end - cut.start) / duration),
+                      }}
+                    >
+                      {selected && (
+                        <div className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-stroke" />
+                      )}
+                    </div>
+                    <CutEdge
+                      label="Cut start"
+                      position={centre(cut.start / duration)}
+                      selected={selected}
+                      onPointerDown={dragCut(cut, "head")}
+                    />
+                    <CutEdge
+                      label="Cut end"
+                      position={centre(cut.end / duration)}
+                      selected={selected}
+                      onPointerDown={dragCut(cut, "tail")}
+                    />
+                  </div>
+                );
+              })}
 
               {/* Brand is spent once on this surface, and this is it: the playhead
                   has to be told apart from the two handles at a glance. */}
@@ -1306,6 +1519,37 @@ export function TrimBar({
                     Add a zoom
                   </Button>
                 )}
+                {/* One slot for the cut, the same swap the zoom's slot makes:
+                    the add while nothing is selected, the selected cut's length
+                    and remove while one is. */}
+                {selectedRange ? (
+                  <div
+                    role="group"
+                    aria-label="Cut"
+                    className="flex shrink-0 items-center gap-0.5 rounded-full bg-track p-0.5"
+                  >
+                    <ScissorsIcon
+                      className="mx-1.5 size-3.5 shrink-0 text-muted-foreground"
+                      aria-hidden="true"
+                    />
+                    <span className="px-1 text-[11px] tabular-nums text-muted-foreground">
+                      {formatPrecise(selectedRange.end - selectedRange.start, duration)}
+                    </span>
+                    <Transport label="Remove the cut" onClick={onCutRemove}>
+                      <XIcon className="size-4" aria-hidden="true" />
+                    </Transport>
+                  </div>
+                ) : (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={onCutAdd}
+                    className="shrink-0 text-muted-foreground hover:text-foreground"
+                  >
+                    <ScissorsIcon className="size-3.5" aria-hidden="true" />
+                    Cut
+                  </Button>
+                )}
                 {/* Shows or hides the ghosts. The first press reads the clip's
                     motion, through the same dialog the follow toggle opens. */}
                 <Button
@@ -1471,6 +1715,47 @@ function LaneEdge({
       style={{ left: position, width: HANDLE }}
       className="absolute inset-y-0 cursor-ew-resize touch-none rounded-md bg-stroke-strong transition-colors duration-150 hover:bg-foreground/70"
     />
+  );
+}
+
+/**
+ * A cut's edge.
+ *
+ * Deliberately not a `LaneEdge`: a trim handle is a full-height 12px pill and
+ * a cut's edge sitting inside the lane in that shape reads as a second pair of
+ * trim handles, which is what the first build looked like. This is a hairline
+ * mark, shorter than the lane, centred on the edge it moves, with a grab area
+ * as wide as a handle around it.
+ */
+function CutEdge({
+  label,
+  position,
+  selected,
+  onPointerDown,
+}: {
+  label: string;
+  position: string;
+  selected: boolean;
+  onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => void;
+}) {
+  return (
+    <div
+      role="button"
+      tabIndex={-1}
+      aria-label={label}
+      onPointerDown={onPointerDown}
+      style={{ left: position, width: HANDLE }}
+      className="group absolute inset-y-0 -translate-x-1/2 cursor-ew-resize touch-none"
+    >
+      <span
+        aria-hidden="true"
+        className={cn(
+          "absolute inset-y-2 left-1/2 w-0.5 -translate-x-1/2 rounded-full transition-colors duration-150",
+          "group-hover:bg-foreground/70",
+          selected ? "bg-foreground/70" : "bg-stroke-strong",
+        )}
+      />
+    </div>
   );
 }
 
