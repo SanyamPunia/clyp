@@ -15,6 +15,7 @@
  */
 
 import { mixAudio } from "@/lib/audio-mix";
+import type { Cut } from "@/lib/clip-cuts";
 import type { ZoomRegion } from "@/lib/clip-zoom";
 import type { MotionTrack } from "@/lib/motion";
 import { rasterize } from "@/lib/raster";
@@ -44,6 +45,8 @@ export interface VideoExportRequest {
   scale: number;
   /** The clip's in and out points. */
   trim: Trim;
+  /** Stretches removed from the middle of it. */
+  cuts?: Cut[];
   /** The playback rate. */
   speed?: number;
   /** Stretches of the clip that close in on a point of the picture. */
@@ -149,6 +152,7 @@ export async function exportVideo({
   source,
   scale,
   trim,
+  cuts = [],
   speed = 1,
   zooms = [],
   motion = null,
@@ -179,6 +183,7 @@ export async function exportVideo({
         clip: clipSound ? source : undefined,
         soundtrack: laid,
         trim,
+        cuts,
         speed,
       })
     : null;
@@ -191,6 +196,7 @@ export async function exportVideo({
       radii,
       source,
       trim,
+      cuts,
       speed,
       zooms,
       motion,

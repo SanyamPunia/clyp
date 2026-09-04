@@ -33,6 +33,7 @@ import {
 } from "mediabunny";
 
 import { type ZoomRegion, sourceRect, zoomAt } from "@/lib/clip-zoom";
+import { type Cut, keptSeconds, keptSegments, outputAt } from "@/lib/clip-cuts";
 import type { MotionTrack } from "@/lib/motion";
 import type { Trim } from "@/types/screenshot";
 
@@ -67,6 +68,8 @@ export interface RenderRequest {
   source: Blob;
   /** The clip's in and out points. */
   trim: Trim;
+  /** Stretches removed from the middle. The loop decodes around them. */
+  cuts: Cut[];
   /** The playback rate. 2 writes the clip in half its own time. */
   speed: number;
   /** Stretches of the clip that close in on a point of the picture. */
@@ -119,6 +122,7 @@ export async function renderVideo({
   radii,
   source,
   trim,
+  cuts,
   speed,
   zooms,
   motion,
@@ -143,11 +147,13 @@ export async function renderVideo({
   const track = await input.getPrimaryVideoTrack();
   if (!track) throw new Error("That file has no video track");
 
-  const from = trim.start;
-  const to = trim.end;
+  // What survives the trim and the cuts, in order, each carrying where it
+  // lands on the output's clock. Derived once: `outputAt` maps every frame
+  // against these rather than re-deriving them per frame.
+  const segments = keptSegments(trim, cuts);
   // The output's own length. Everything written is on this clock, which runs
   // `speed` times faster than the source's.
-  const length = Math.max(to - from, 0) / speed;
+  const length = keptSeconds(trim, cuts) / speed;
 
   const output = new Output({
     format: new Mp4OutputFormat({ fastStart: "in-memory" }),
@@ -196,61 +202,72 @@ export async function renderVideo({
     let lastSlot = -1;
     let carried = 0;
 
+    // One decode per kept segment rather than one across the whole trim with
+    // the cut frames thrown away. `sink.samples` seeks to the keyframe at or
+    // before its in point, so a cut is time the decoder never spends.
+    //
     // A sample's timestamp is absolute, so a trim that starts at four seconds
     // would write an MP4 whose first frame is at four seconds: four seconds of
-    // nothing at the front. Everything downstream works on the offset time,
-    // divided by the speed, which is what makes 2x a file half as long.
-    for await (const sample of sink.samples(from, to)) {
-      const at = Math.max(sample.timestamp - from, 0) / speed;
-      const slot = Math.floor(at / minFrameGap + 1e-6);
-      if (slot === lastSlot) {
-        carried += sample.duration || 0;
+    // nothing at the front. A cut is the same problem in the middle. Both are
+    // answered by `outputAt`, which is the one map the preview and every
+    // readout also go through, divided by the speed.
+    for (const segment of segments) {
+      for await (const sample of sink.samples(segment.start, segment.end)) {
+        const at = outputAt(segments, sample.timestamp) / speed;
+        const slot = Math.floor(at / minFrameGap + 1e-6);
+        if (slot === lastSlot) {
+          carried += sample.duration || 0;
+          sample.close();
+          continue;
+        }
+
+        ctx.drawImage(chrome, 0, 0);
+        ctx.save();
+        ctx.beginPath();
+        ctx.roundRect(box.x, box.y, box.width, box.height, radii);
+        ctx.clip();
+        // A zoom is the same draw from a smaller source rectangle. The chrome
+        // stays baked, and the rectangle comes from the same arithmetic the
+        // preview's transform does, on the source's own clock.
+        const zoom = zoomAt(zooms, sample.timestamp, speed, motion);
+        if (zoom) {
+          const rect = sourceRect(
+            zoom,
+            sample.displayWidth,
+            sample.displayHeight,
+          );
+          sample.draw(
+            ctx,
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
+            box.x,
+            box.y,
+            box.width,
+            box.height,
+          );
+        } else {
+          sample.draw(ctx, box.x, box.y, box.width, box.height);
+        }
+        ctx.restore();
+
+        const span = ((sample.duration || 0) + carried) / speed;
+        carried = 0;
+        lastSlot = slot;
+
+        // Awaited, which is what applies the encoder's own backpressure.
+        // Without it a short clip queues every frame at once and the tab runs
+        // out of memory before the first one is written.
+        await frames.add(at, span);
+        // Reported after the frame is written and off its end rather than its
+        // start, so the first report is above zero. Zero is what the caller
+        // shows while the chrome is still rasterizing, which has no fraction
+        // of its own to report.
+        onProgress?.(length ? Math.min((at + span) / length, 1) : 0);
+
         sample.close();
-        continue;
       }
-
-      ctx.drawImage(chrome, 0, 0);
-      ctx.save();
-      ctx.beginPath();
-      ctx.roundRect(box.x, box.y, box.width, box.height, radii);
-      ctx.clip();
-      // A zoom is the same draw from a smaller source rectangle. The chrome
-      // stays baked, and the rectangle comes from the same arithmetic the
-      // preview's transform does, on the source's own clock.
-      const zoom = zoomAt(zooms, sample.timestamp, speed, motion);
-      if (zoom) {
-        const rect = sourceRect(zoom, sample.displayWidth, sample.displayHeight);
-        sample.draw(
-          ctx,
-          rect.x,
-          rect.y,
-          rect.width,
-          rect.height,
-          box.x,
-          box.y,
-          box.width,
-          box.height,
-        );
-      } else {
-        sample.draw(ctx, box.x, box.y, box.width, box.height);
-      }
-      ctx.restore();
-
-      const span = ((sample.duration || 0) + carried) / speed;
-      carried = 0;
-      lastSlot = slot;
-
-      // Awaited, which is what applies the encoder's own backpressure. Without
-      // it a short clip queues every frame at once and the tab runs out of
-      // memory before the first one is written.
-      await frames.add(at, span);
-      // Reported after the frame is written and off its end rather than its
-      // start, so the first report is above zero. Zero is what the caller
-      // shows while the chrome is still rasterizing, which has no fraction of
-      // its own to report.
-      onProgress?.(length ? Math.min((at + span) / length, 1) : 0);
-
-      sample.close();
     }
 
     // After the video rather than beside it. Both tracks write in order and
@@ -262,38 +279,55 @@ export async function renderVideo({
     } else if (sound && audioTrack) {
       const audioSink = new AudioSampleSink(audioTrack);
       let filled = false;
+      // The output time the next sample must start at or after. A sample is
+      // about 21ms of audio and a segment boundary falls inside one about
+      // always, so the sample straddling a join would otherwise be written
+      // twice: once at the end of one segment and again at the start of the
+      // next, at a timestamp the muxer has already passed. AAC needs its
+      // samples in order and not overlapping, so the later copy is dropped.
+      // What is lost is the tail of one sample at each join, which is well
+      // under a frame of picture.
+      let next = 0;
 
-      for await (const sample of audioSink.samples(from, to)) {
-        // Written from the first real sample, since that is the first point the
-        // source's own rate and channel count are known.
-        if (!filled) {
-          filled = true;
-          const gap = Math.max(sample.timestamp - from, 0);
-          for (let at = 0; at < gap; at += SILENCE_CHUNK) {
-            const quiet = silence(sample, at, Math.min(SILENCE_CHUNK, gap - at));
-            await sound.add(quiet);
-            quiet.close();
+      for (const segment of segments) {
+        for await (const sample of audioSink.samples(segment.start, segment.end)) {
+          // Written from the first real sample, since that is the first point
+          // the source's own rate and channel count are known.
+          if (!filled) {
+            filled = true;
+            const gap = Math.max(sample.timestamp - segment.start, 0);
+            for (let at = 0; at < gap; at += SILENCE_CHUNK) {
+              const quiet = silence(
+                sample,
+                at,
+                Math.min(SILENCE_CHUNK, gap - at),
+              );
+              await sound.add(quiet);
+              quiet.close();
+            }
           }
-        }
 
-        // The same absolute-timestamp problem the video has, and the same
-        // answer. No speed here: the clip's own sound is only carried at 1x.
-        const at = sample.timestamp - from;
+          // The same absolute-timestamp problem the video has, and the same
+          // answer. No speed here: the clip's own sound is only carried at 1x.
+          const at = outputAt(segments, sample.timestamp);
 
-        // Outside the clip entirely. Before it is dropped rather than faded
-        // in, since a partial sample would land at a negative timestamp.
-        if (at + (sample.duration || 0) <= 0) {
+          // Outside the clip entirely, or already covered by what a previous
+          // segment wrote. Dropped rather than faded, since a partial sample
+          // would land at a timestamp that is already behind.
+          if (at + (sample.duration || 0) <= 0 || at < next) {
+            sample.close();
+            continue;
+          }
+          if (at >= length) {
+            sample.close();
+            break;
+          }
+
+          next = at + (sample.duration || 0);
+          sample.setTimestamp(Math.max(at, 0));
+          await sound.add(sample);
           sample.close();
-          continue;
         }
-        if (at >= length) {
-          sample.close();
-          break;
-        }
-
-        sample.setTimestamp(Math.max(at, 0));
-        await sound.add(sample);
-        sample.close();
       }
     }
 
