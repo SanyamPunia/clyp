@@ -636,20 +636,28 @@ the cursor, the typing, and the menus.
   changed, about four pixels, is a still frame with nothing to point at. Over
   35% is a scroll or a transition, and the centroid of everything is the middle
   of the picture, which is where nothing is. Both keep the last position.
-- **The action roams a comfort zone, and the window moves only when it reaches
-  the zone's edge.** The first build glued the window to the action and every
-  wiggle of the mouse moved the picture. `followPath` walks the smoothed track
-  once per scale and moves the window's centre only by what it takes to keep
-  the action inside the middle half of the window (`ZONE`), so a wiggle moves
-  nothing and a steady mover rides the zone's edge, the way a camera operator
-  lets a subject lead. The path is pure in the track, memoised on it by scale,
-  and both the preview and the export read it through `windowAt`, so they
-  agree. The smoothing is 0.2 s, since the zone now does the anti-jitter work
-  and every tenth of a second of smoothing is a tenth the picture trails.
-  Verified through the export on a square crossing a 640px clip at a quarter
-  of the frame a second: moving right it sits at 85% of the box, moving down at
-  83%, fully in frame both times, where the glued version had it at 65% and
-  a fixed aim would have lost it above the window's top edge.
+- **The window follows the action the way an operator follows a subject:
+  roam, wait a beat, then ease after it.** The first build glued the window to
+  the action and every wiggle of the mouse moved the picture. The second let
+  the action roam a comfort zone and moved the window by exactly enough to keep
+  it at the zone's edge, which stopped the wiggles but made every pan start and
+  stop dead. `followPath` now runs two things over the smoothed track. The
+  target moves only when the action has been outside the middle 60% of the
+  window (`ZONE`) for 0.15 s (`DWELL`), so a flick to a button and back moves
+  nothing. The window's centre glides toward the target through a critically
+  damped spring with a 0.3 s time constant (`GLIDE`): it starts slowly, moves,
+  and settles with no overshoot, a step landing in about 1.2 s. Underneath, the
+  centre is dragged along outright whenever the action would get further than
+  70% of the window's half-extent from it (`KEEP`), since a flick across the
+  screen outruns any glide and the one thing worse than a sudden pan is the
+  subject leaving the frame. The path is pure in the track, memoised on it by
+  scale, and both the preview and the export read it through `windowAt`, so
+  they agree. The smoothing on the action itself is 0.1 s now, since the glide
+  does the calming and every tenth of a second there is a tenth the action
+  leads the point being kept in frame.
+  Verified through the export on a square crossing a 640px clip at a quarter of
+  the frame a second, which never pauses and so is the worst case for a glide:
+  it stays in frame the whole way, riding the bound near 85% to 90% of the box.
 - **`centredOn` turns the window's centre into a focus, clamped to the
   picture.** A focus is the point that holds still while the picture grows, so
   a focus at the centre would not centre it. The window's left edge is

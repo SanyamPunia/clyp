@@ -103,23 +103,51 @@ const STILL = 0.0003;
 /** Above it, everything did, which is a scroll rather than a cursor. */
 const SWEEP = 0.35;
 /**
- * The smoothing's time constant, in source seconds. Short, because the comfort
- * zone below is what absorbs a wiggle now: this only has to take the frame to
- * frame noise out of the centroid, and every tenth of a second here is a tenth
- * of a second the picture trails a pointer crossing the screen.
+ * The smoothing's time constant, in source seconds. Short: the glide below is
+ * what makes the picture move smoothly now, so this only has to take the frame
+ * to frame noise out of the centroid, and every tenth of a second here is a
+ * tenth of a second the action leads the point the window is keeping in frame.
  */
-const TAU = 0.2;
-/**
- * How much of the window the action may roam before the window moves, as a
- * fraction of the window's size.
+const TAU = 0.1;
+
+/*
+ * How the window follows the action. Four numbers, and the picture is only as
+ * calm as they make it.
  *
  * The first build glued the window to the action, and every wiggle of the
- * mouse moved the picture. A camera operator lets the subject roam a comfort
- * zone and pans only when it nears the edge, which is what this is: the action
- * can cross the middle half of the window freely, and the window follows only
- * when the action reaches the zone's edge, by exactly enough to keep it there.
+ * mouse moved the picture. The second let the action roam a comfort zone and
+ * moved the window only when it reached the zone's edge, by exactly enough to
+ * keep it there, which stopped the wiggles but made every pan start and stop
+ * dead: the window was still, then moving at the action's own speed, then
+ * still again. A camera operator does neither. They let the subject roam, wait
+ * a beat to see whether it means it, and then ease the camera after it.
  */
-const ZONE = 0.5;
+
+/**
+ * How much of the window the action may roam before the window is asked to
+ * move, as a fraction of the window's size. The middle 60%.
+ */
+const ZONE = 0.6;
+/**
+ * How long the action must stay outside the zone before the window reacts, in
+ * source seconds. A brief overshoot, a flick to a button and back, moves
+ * nothing.
+ */
+const DWELL = 0.15;
+/**
+ * The glide's time constant, in source seconds. The window follows its target
+ * through a critically damped spring: it starts slowly, moves, and settles
+ * slowly, with no overshoot. A step settles in about four of these.
+ */
+const GLIDE = 0.3;
+/**
+ * How far the action may get from the window's centre before the glide is
+ * overruled, as a fraction of the window's half-extent. A flick across the
+ * screen outruns any glide, and the one thing worse than a sudden pan is the
+ * subject leaving the frame, so the window is dragged along by the hand at
+ * that point and the glide takes over again once the action slows.
+ */
+const KEEP = 0.7;
 
 /**
  * Reads the track for one stretch of a file. Worker-side: it draws to an
@@ -271,32 +299,84 @@ export function windowAt(
 const paths = new WeakMap<MotionTrack, Map<number, Float32Array>>();
 
 /**
- * The window's centre over time. It starts on the first motion and after that
- * moves only when the action leaves the zone, by exactly enough to bring the
- * zone's edge back to the action, so a steady mover rides the zone's edge and
- * a wiggle inside it moves nothing.
+ * The window's centre over time.
+ *
+ * Two things move. The target is where the window wants to be: it starts on
+ * the first motion and moves only when the action has been outside the zone
+ * for the dwell, by exactly enough to bring the zone's edge back to the
+ * action. The centre is where the window is: it glides toward the target
+ * through a critically damped spring, and is dragged along outright when the
+ * action would otherwise leave the frame.
+ *
+ * One pass over the track, so it is computed once per track and scale.
  */
 function followPath(samples: Float32Array, scale: number): Float32Array {
   const out = new Float32Array(samples.length);
-  const half = (ZONE / scale) / 2;
+  const half = 1 / scale / 2;
+  const zone = half * ZONE;
+  const keep = half * KEEP;
+  const w = 1 / GLIDE;
+
+  let tx = NaN;
+  let ty = NaN;
   let cx = NaN;
   let cy = NaN;
+  let vx = 0;
+  let vy = 0;
+  let outsideSince = NaN;
+  let last = NaN;
 
   for (let i = 0; i < samples.length; i += 3) {
+    const t = samples[i];
     const ax = samples[i + 1];
     const ay = samples[i + 2];
+
     if (!Number.isNaN(ax)) {
       if (Number.isNaN(cx)) {
-        cx = ax;
-        cy = ay;
+        tx = cx = ax;
+        ty = cy = ay;
       } else {
-        if (ax > cx + half) cx = ax - half;
-        else if (ax < cx - half) cx = ax + half;
-        if (ay > cy + half) cy = ay - half;
-        else if (ay < cy - half) cy = ay + half;
+        // A gap in the track is a gap, not a huge step for the spring.
+        const dt = Math.min(Math.max(t - last, 0), 0.1);
+
+        // The target waits out the dwell, then tracks the zone's edge.
+        const dx = ax - tx;
+        const dy = ay - ty;
+        const outside = Math.abs(dx) > zone || Math.abs(dy) > zone;
+        if (!outside) outsideSince = NaN;
+        else if (Number.isNaN(outsideSince)) outsideSince = t;
+        if (outside && t - outsideSince >= DWELL) {
+          if (dx > zone) tx = ax - zone;
+          else if (dx < -zone) tx = ax + zone;
+          if (dy > zone) ty = ay - zone;
+          else if (dy < -zone) ty = ay + zone;
+        }
+
+        // The centre glides after the target, critically damped.
+        vx += (w * w * (tx - cx) - 2 * w * vx) * dt;
+        vy += (w * w * (ty - cy) - 2 * w * vy) * dt;
+        cx += vx * dt;
+        cy += vy * dt;
+
+        // Never let the action leave the frame.
+        if (ax - cx > keep) {
+          cx = ax - keep;
+          vx = 0;
+        } else if (cx - ax > keep) {
+          cx = ax + keep;
+          vx = 0;
+        }
+        if (ay - cy > keep) {
+          cy = ay - keep;
+          vy = 0;
+        } else if (cy - ay > keep) {
+          cy = ay + keep;
+          vy = 0;
+        }
       }
+      last = t;
     }
-    out[i] = samples[i];
+    out[i] = t;
     out[i + 1] = cx;
     out[i + 2] = cy;
   }
