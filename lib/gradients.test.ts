@@ -52,6 +52,15 @@ describe("the registry", () => {
     }
   });
 
+  it("never repeats a label, since the label is the swatch's only name", () => {
+    // A swatch shows no text: the label is its tooltip and its screen-reader
+    // name, so two presets sharing one are indistinguishable. Where a colour
+    // name is wanted twice, the mesh one carries the suffix.
+    const labels = gradientPresets.map((p) => p.label);
+    const repeated = labels.filter((l, i) => labels.indexOf(l) !== i);
+    expect(repeated).toEqual([]);
+  });
+
   it("has the default", () => {
     expect(getGradient(defaultGradientId).id).toBe(defaultGradientId);
   });
