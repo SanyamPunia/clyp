@@ -40,6 +40,7 @@ import {
   cutAt,
   keptSeconds,
   keptSegments,
+  longestCut,
   nearestKept,
   roomForCut,
 } from "@/lib/clip-cuts";
@@ -948,6 +949,10 @@ export function TrimBar({
         const room = roomForCut(rangeRef.current, cuts, 0, cut.id);
         const { lo, hi } = room ?? { lo: trim.start, hi: trim.end };
         const length = from.end - from.start;
+        // What this cut may grow to without taking the clip under MIN_KEPT.
+        // Clamped rather than refused, so the edge slides to the limit and
+        // stops there.
+        const longest = longestCut(rangeRef.current, cuts, cut.id);
         const wasSelected = selectedCut === cut.id;
         let moved = false;
         const show = (time: number) =>
@@ -963,11 +968,23 @@ export function TrimBar({
             onCutChange({ ...from, start, end: start + length });
             show(start);
           } else if (part === "head") {
-            const start = snap(clamp(from.start + by, lo, from.end - MIN_CUT));
+            const start = snap(
+              clamp(
+                from.start + by,
+                Math.max(lo, from.end - longest),
+                from.end - MIN_CUT,
+              ),
+            );
             onCutChange({ ...from, start });
             show(start);
           } else {
-            const end = snap(clamp(from.end + by, from.start + MIN_CUT, hi));
+            const end = snap(
+              clamp(
+                from.end + by,
+                from.start + MIN_CUT,
+                Math.min(hi, from.start + longest),
+              ),
+            );
             onCutChange({ ...from, end });
             show(end);
           }

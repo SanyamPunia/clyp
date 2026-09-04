@@ -193,6 +193,34 @@ export function afterCuts(
 }
 
 /**
+ * The longest one cut may be without leaving less picture than `MIN_KEPT`.
+ *
+ * A drag clamps its edges with this rather than being refused by
+ * `leavesEnough`, so the edge slides to the limit and stops there instead of
+ * sticking wherever the last accepted pointer sample put it.
+ */
+export function longestCut(
+  trim: Trim,
+  cuts: readonly Cut[],
+  id: string,
+): number {
+  const others = cuts.filter((cut) => cut.id !== id);
+  return Math.max(keptSeconds(trim, others) - MIN_KEPT, 0);
+}
+
+/**
+ * Whether a set of cuts leaves enough of the clip to be worth exporting.
+ *
+ * `placeCut` will not propose one that does not, but a drag can reach the same
+ * place: one cut's two edges, pulled to the in and out points, span the whole
+ * trim. So every edit that changes a cut or a trim asks this before taking it,
+ * and the edge stops rather than the clip going to nothing.
+ */
+export function leavesEnough(trim: Trim, cuts: readonly Cut[]): boolean {
+  return keptSeconds(trim, cuts) >= MIN_KEPT - 1e-9;
+}
+
+/**
  * The nearest time that survives, which is `time` itself unless it is inside a
  * cut, in which case it is whichever edge of that cut is closer.
  *

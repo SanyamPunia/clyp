@@ -9,6 +9,8 @@ import {
   cutAt,
   keptSeconds,
   keptSegments,
+  leavesEnough,
+  longestCut,
   nearestKept,
   outputAt,
   placeCut,
@@ -523,5 +525,59 @@ describe("the export's frame timeline", () => {
     expect(plain[0].at).toBeCloseTo(0, 6);
     const last = plain[plain.length - 1];
     expect(last.at + last.span).toBeCloseTo(6, 6);
+  });
+});
+
+describe("leavesEnough", () => {
+  it("is true for a clip with no cuts", () => {
+    expect(leavesEnough(trim(0, 10), [])).toBe(true);
+  });
+
+  it("is false when the cuts take everything", () => {
+    // One cut's two edges, pulled to the in and out points. placeCut will not
+    // propose this, but a drag can reach it.
+    expect(leavesEnough(trim(0, 10), [cut(0, 10)])).toBe(false);
+  });
+
+  it("is false when what is left is under the minimum", () => {
+    expect(leavesEnough(trim(0, 10), [cut(0, 9.9)])).toBe(false);
+    expect(leavesEnough(trim(0, 10), [cut(0, 4), cut(4.1, 10)])).toBe(false);
+  });
+
+  it("is true at exactly the minimum", () => {
+    expect(leavesEnough(trim(0, 10), [cut(0, 10 - MIN_KEPT)])).toBe(true);
+  });
+
+  it("holds for a trim brought in over a cut", () => {
+    // Trimming can leave less picture than the cut itself is allowed to.
+    const cuts = [cut(0, 5)];
+    expect(leavesEnough(trim(0, 10), cuts)).toBe(true);
+    expect(leavesEnough(trim(0, 5.1), cuts)).toBe(false);
+  });
+});
+
+describe("longestCut", () => {
+  it("is the clip less the minimum, for the only cut", () => {
+    expect(longestCut(trim(0, 10), [cut(2, 3, "a")], "a")).toBeCloseTo(
+      10 - MIN_KEPT,
+      10,
+    );
+  });
+
+  it("counts what the other cuts already take", () => {
+    const cuts = [cut(0, 4, "a"), cut(6, 7, "b")];
+    // Without "b" the clip keeps 6s, so "b" may be 6 - MIN_KEPT.
+    expect(longestCut(trim(0, 10), cuts, "b")).toBeCloseTo(6 - MIN_KEPT, 10);
+  });
+
+  it("is zero rather than negative when nothing may be removed", () => {
+    expect(longestCut(trim(0, 0.1), [], "a")).toBe(0);
+  });
+
+  it("is exactly the length that leaves the minimum", () => {
+    const t = trim(0, 10);
+    const longest = longestCut(t, [], "a");
+    expect(leavesEnough(t, [cut(0, longest, "a")])).toBe(true);
+    expect(leavesEnough(t, [cut(0, longest + 0.01, "a")])).toBe(false);
   });
 });

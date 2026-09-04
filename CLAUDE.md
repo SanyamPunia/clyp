@@ -583,6 +583,14 @@ re-sort the cut list tens of thousands of times for one export.
   removes what it can. It refuses only when a cut worth having would not fit:
   inside an existing cut, in a gap under `MIN_CUT`, or with less than `MIN_CUT`
   of removable picture left.
+- **A drag clamps at the limit rather than being refused at it.** `placeCut`
+  will not propose a cut that leaves less than `MIN_KEPT`, but one cut's two
+  edges dragged to the in and out points reach the same place, so `longestCut`
+  bounds each edge and `leavesEnough` backs it up in `updateCut` and
+  `handleTrimChange` for every other route in. Refusing alone left the edge
+  wherever the last accepted pointer sample put it, which on a coarse drag was
+  most of a second short. Measured: the tail now slides to 5.800s of a six
+  second clip and stops, leaving exactly the 0.200s minimum.
 - **The kept block is drawn once per kept segment**, so a cut in the middle is
   a real gap with the rail already under the lane showing through it. That is
   what this lane's language already says: the kept clip is a block and what is

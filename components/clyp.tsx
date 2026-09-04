@@ -60,6 +60,7 @@ import {
   MIN_CUT,
   MIN_KEPT,
   afterCuts,
+  leavesEnough,
   keptSeconds,
   newCutId,
   placeCut,
@@ -726,12 +727,15 @@ export function Clyp() {
   const updateCut = useCallback(
     (next: Cut) => {
       if (!trim) return;
-      setCuts((previous) =>
-        tidyCuts(
+      setCuts((previous) => {
+        const tidy = tidyCuts(
           previous.map((c) => (c.id === next.id ? next : c)),
           trim,
-        ),
-      );
+        );
+        // One cut's two edges, pulled to the in and out points, span the whole
+        // trim and leave nothing to export. The edge stops here instead.
+        return leavesEnough(trim, tidy) ? tidy : previous;
+      });
     },
     [trim],
   );
@@ -747,10 +751,17 @@ export function Clyp() {
    * range stops removing anything rather than removing time the export no
    * longer covers.
    */
-  const handleTrimChange = useCallback((next: Trim) => {
-    setTrim(next);
-    setCuts((previous) => tidyCuts(previous, next));
-  }, []);
+  const handleTrimChange = useCallback(
+    (next: Trim) => {
+      const tidy = tidyCuts(cuts, next);
+      // A handle brought in over a cut can leave less picture than the cut
+      // itself is allowed to, so it stops for the same reason.
+      if (!leavesEnough(next, tidy)) return;
+      setTrim(next);
+      setCuts(tidy);
+    },
+    [cuts],
+  );
 
   /**
    * Everything undo walks back: the four edits plus a soundtrack's placement.
