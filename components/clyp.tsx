@@ -355,6 +355,8 @@ export function Clyp() {
   const liveMarkerRef = useRef<HTMLDivElement>(null);
   /** True while the focus marker is being dragged. */
   const aimingRef = useRef(false);
+  /** Whether the preview was playing when the marker was picked up. */
+  const resumeAfterAimRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
 
@@ -1622,8 +1624,19 @@ export function Clyp() {
                                     onChange={(focus) =>
                                       updateZoom({ ...selectedRegion, focus })
                                     }
+                                    // Paused while aimed, like a handle drag: a
+                                    // point is placed on a picture that holds
+                                    // still, and resumed on release.
                                     onDragChange={(dragging) => {
                                       aimingRef.current = dragging;
+                                      const video = videoRef.current;
+                                      if (!video) return;
+                                      if (dragging) {
+                                        resumeAfterAimRef.current = !video.paused;
+                                        video.pause();
+                                      } else if (resumeAfterAimRef.current) {
+                                        void video.play().catch(() => {});
+                                      }
                                     }}
                                   />
                                 )}

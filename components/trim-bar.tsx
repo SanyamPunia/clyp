@@ -641,6 +641,12 @@ export function TrimBar({
         event.preventDefault();
         event.stopPropagation();
 
+        // Paused for the drag, like everything else dragged on these lanes,
+        // so the sound is placed against a still picture and the two are not
+        // both moving at once.
+        const resume = video.current ? !video.current.paused : false;
+        onPlayback(false);
+
         const origin = timeAt(event.clientX);
         const from = soundtrack;
         // The mode is fixed at the press rather than read per sample, so
@@ -720,13 +726,23 @@ export function TrimBar({
           window.removeEventListener("pointermove", move);
           window.removeEventListener("pointerup", release);
           window.removeEventListener("pointercancel", release);
+          if (resume) onPlayback(true);
         };
 
         window.addEventListener("pointermove", move);
         window.addEventListener("pointerup", release);
         window.addEventListener("pointercancel", release);
       },
-    [disabled, duration, onSoundtrackChange, soundtrack, speed, timeAt],
+    [
+      disabled,
+      duration,
+      onPlayback,
+      onSoundtrackChange,
+      soundtrack,
+      speed,
+      timeAt,
+      video,
+    ],
   );
 
   /**
@@ -737,6 +753,11 @@ export function TrimBar({
    * selects the region before anything moves. A press that does not move on
    * the region already selected deselects it, which is the one way to put the
    * marker away without picking another.
+   *
+   * Paused for the drag and resumed on release, like a trim handle, and the
+   * playhead follows the edge being moved, clamped into the trim so the loop
+   * does not fight it: the frame under the edge is what decides where a zoom
+   * should start or stop, and it is gone before it can be read otherwise.
    */
   const dragZoom = useCallback(
     (region: ZoomRegion, part: "body" | "head" | "tail") =>
@@ -747,12 +768,17 @@ export function TrimBar({
         onZoomSelect(region.id);
         event.currentTarget.setPointerCapture(event.pointerId);
 
+        const resume = video.current ? !video.current.paused : false;
+        onPlayback(false);
+
         const origin = timeAt(event.clientX);
         const from = region;
         const { lo, hi } = roomFor(zooms, region.id, duration);
         const length = from.end - from.start;
         const wasSelected = selectedZoom === region.id;
         let moved = false;
+        const show = (time: number) =>
+          onSeek(clamp(time, rangeRef.current.start, rangeRef.current.end - FRAME));
 
         const move = (ev: PointerEvent) => {
           const by = timeAt(ev.clientX) - origin;
@@ -762,16 +788,15 @@ export function TrimBar({
           if (part === "body") {
             const start = snap(clamp(from.start + by, lo, hi - length));
             onZoomChange({ ...from, start, end: start + length });
+            show(start);
           } else if (part === "head") {
-            onZoomChange({
-              ...from,
-              start: snap(clamp(from.start + by, lo, from.end - MIN_ZOOM_LENGTH)),
-            });
+            const start = snap(clamp(from.start + by, lo, from.end - MIN_ZOOM_LENGTH));
+            onZoomChange({ ...from, start });
+            show(start);
           } else {
-            onZoomChange({
-              ...from,
-              end: snap(clamp(from.end + by, from.start + MIN_ZOOM_LENGTH, hi)),
-            });
+            const end = snap(clamp(from.end + by, from.start + MIN_ZOOM_LENGTH, hi));
+            onZoomChange({ ...from, end });
+            show(end - FRAME);
           }
         };
 
@@ -780,13 +805,25 @@ export function TrimBar({
           window.removeEventListener("pointerup", release);
           window.removeEventListener("pointercancel", release);
           if (!moved && wasSelected) onZoomSelect(null);
+          if (resume) onPlayback(true);
         };
 
         window.addEventListener("pointermove", move);
         window.addEventListener("pointerup", release);
         window.addEventListener("pointercancel", release);
       },
-    [disabled, duration, onZoomChange, onZoomSelect, selectedZoom, timeAt, zooms],
+    [
+      disabled,
+      duration,
+      onPlayback,
+      onSeek,
+      onZoomChange,
+      onZoomSelect,
+      selectedZoom,
+      timeAt,
+      video,
+      zooms,
+    ],
   );
 
   const selectedRegion = zooms.find((z) => z.id === selectedZoom) ?? null;

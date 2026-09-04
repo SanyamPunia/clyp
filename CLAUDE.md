@@ -403,9 +403,15 @@ have to agree about where a second is.
 - **The loop's mirror refs are written in an effect, never during render.**
   `react-hooks/refs` rejects the render-time write, and the frame loop is bound
   once, so without the mirror it closes over the trim the bar mounted with.
-- **Dragging a handle pauses the preview and resumes on release** if it was
-  playing. Reading the frame under the handle is the whole point of dragging
-  one, and it is gone before you can read it otherwise.
+- **Dragging anything on these lanes pauses the preview and resumes on
+  release** if it was playing: a trim handle, a zoom region or its edges, a
+  soundtrack region or its edges, and the zoom's aim marker on the picture.
+  Reading the frame under a handle is the whole point of dragging one, and it
+  is gone before you can read it otherwise. A zoom edge also moves the
+  playhead to itself, clamped into the trim so the loop does not fight it,
+  since the frame under the edge is what decides where a zoom should start or
+  stop. A soundtrack drag only pauses, since sound is placed against the
+  picture rather than a frame.
 - **A sample's timestamp is absolute, so the export offsets it.** A trim
   starting at six seconds would otherwise write an MP4 whose first frame is at
   six seconds, which is six seconds of nothing at the front. Verified: trimming
