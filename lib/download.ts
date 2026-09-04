@@ -49,7 +49,10 @@ function machineNamed(name: string): boolean {
   return [
     /^screen[\s_-]?(recording|shot)\b/i,
     /^cleanshot\b/i,
-    /^(img|vid|mov|dsc|pxl)[\s_-]?\d+$/i,
+    // Camera-roll numbering, which is not always one run of digits: a Pixel
+    // writes `PXL_20260901_182806`, a date and a time either side of a
+    // separator.
+    /^(img|vid|mov|dsc|pxl)[\s_-]?\d[\d\s_-]*$/i,
     /^(movie|video|recording|capture|untitled)[\s_-]?\d*$/i,
     // A bare date, a timestamp, or anything opening with an ISO date.
     /^[\d\s._:-]+$/,
