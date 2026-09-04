@@ -20,7 +20,7 @@
  * beside them, since it is derived from the file rather than an edit on it.
  */
 
-import { type MotionTrack, motionAt } from "@/lib/motion";
+import { type MotionTrack, windowAt } from "@/lib/motion";
 
 export interface ZoomFocus {
   x: number;
@@ -95,11 +95,15 @@ export function zoomAt(
       : 1;
   const scale = 1 + (region.scale - 1) * easeInOut(progress);
 
-  const action = region.follow && motion ? motionAt(motion, time) : null;
+  // The window's centre rather than the action itself: the action roams a
+  // comfort zone inside the window and the window moves only when it reaches
+  // the zone's edge, so a wiggle of the mouse moves nothing.
+  const centre =
+    region.follow && motion ? windowAt(motion, region.scale, time) : null;
 
   return {
     scale,
-    focus: action ? centredOn(action, scale) : region.focus,
+    focus: centre ? centredOn(centre, scale) : region.focus,
   };
 }
 

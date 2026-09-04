@@ -630,7 +630,21 @@ the cursor, the typing, and the menus.
   changed, about four pixels, is a still frame with nothing to point at. Over
   35% is a scroll or a transition, and the centroid of everything is the middle
   of the picture, which is where nothing is. Both keep the last position.
-- **`centredOn` turns the action's position into a focus, clamped to the
+- **The action roams a comfort zone, and the window moves only when it reaches
+  the zone's edge.** The first build glued the window to the action and every
+  wiggle of the mouse moved the picture. `followPath` walks the smoothed track
+  once per scale and moves the window's centre only by what it takes to keep
+  the action inside the middle half of the window (`ZONE`), so a wiggle moves
+  nothing and a steady mover rides the zone's edge, the way a camera operator
+  lets a subject lead. The path is pure in the track, memoised on it by scale,
+  and both the preview and the export read it through `windowAt`, so they
+  agree. The smoothing is 0.2 s, since the zone now does the anti-jitter work
+  and every tenth of a second of smoothing is a tenth the picture trails.
+  Verified through the export on a square crossing a 640px clip at a quarter
+  of the frame a second: moving right it sits at 85% of the box, moving down at
+  83%, fully in frame both times, where the glued version had it at 65% and
+  a fixed aim would have lost it above the window's top edge.
+- **`centredOn` turns the window's centre into a focus, clamped to the
   picture.** A focus is the point that holds still while the picture grows, so
   a focus at the centre would not centre it. The window's left edge is
   `focus.x * (1 - 1 / scale)`, so the focus that centres a point is the point

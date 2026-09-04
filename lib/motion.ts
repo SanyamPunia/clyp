@@ -103,11 +103,23 @@ const STILL = 0.0003;
 /** Above it, everything did, which is a scroll rather than a cursor. */
 const SWEEP = 0.35;
 /**
- * The smoothing's time constant, in source seconds. Long enough that a
- * cursor's jitter and a blinking caret do not shake the position, short enough
- * that a pointer crossing the screen is followed rather than trailed.
+ * The smoothing's time constant, in source seconds. Short, because the comfort
+ * zone below is what absorbs a wiggle now: this only has to take the frame to
+ * frame noise out of the centroid, and every tenth of a second here is a tenth
+ * of a second the picture trails a pointer crossing the screen.
  */
-const TAU = 0.3;
+const TAU = 0.2;
+/**
+ * How much of the window the action may roam before the window moves, as a
+ * fraction of the window's size.
+ *
+ * The first build glued the window to the action, and every wiggle of the
+ * mouse moved the picture. A camera operator lets the subject roam a comfort
+ * zone and pans only when it nears the edge, which is what this is: the action
+ * can cross the middle half of the window freely, and the window follows only
+ * when the action reaches the zone's edge, by exactly enough to keep it there.
+ */
+const ZONE = 0.5;
 
 /**
  * Reads the track for one stretch of a file. Worker-side: it draws to an
@@ -228,6 +240,67 @@ export function motionAt(
   time: number,
 ): { x: number; y: number } | null {
   return sampleAt(track.samples, time);
+}
+
+/**
+ * Where the window's centre is at `time` for a region at `scale`, following
+ * the action through its comfort zone.
+ *
+ * The path is a sequential pass over the whole track, so it is computed once
+ * per track and scale and kept on the track. It is pure in the track, which is
+ * what lets the preview and the export both call it and agree.
+ */
+export function windowAt(
+  track: MotionTrack,
+  scale: number,
+  time: number,
+): { x: number; y: number } | null {
+  let byScale = paths.get(track);
+  if (!byScale) {
+    byScale = new Map();
+    paths.set(track, byScale);
+  }
+  let path = byScale.get(scale);
+  if (!path) {
+    path = followPath(track.samples, scale);
+    byScale.set(scale, path);
+  }
+  return sampleAt(path, time);
+}
+
+const paths = new WeakMap<MotionTrack, Map<number, Float32Array>>();
+
+/**
+ * The window's centre over time. It starts on the first motion and after that
+ * moves only when the action leaves the zone, by exactly enough to bring the
+ * zone's edge back to the action, so a steady mover rides the zone's edge and
+ * a wiggle inside it moves nothing.
+ */
+function followPath(samples: Float32Array, scale: number): Float32Array {
+  const out = new Float32Array(samples.length);
+  const half = (ZONE / scale) / 2;
+  let cx = NaN;
+  let cy = NaN;
+
+  for (let i = 0; i < samples.length; i += 3) {
+    const ax = samples[i + 1];
+    const ay = samples[i + 2];
+    if (!Number.isNaN(ax)) {
+      if (Number.isNaN(cx)) {
+        cx = ax;
+        cy = ay;
+      } else {
+        if (ax > cx + half) cx = ax - half;
+        else if (ax < cx - half) cx = ax + half;
+        if (ay > cy + half) cy = ay - half;
+        else if (ay < cy - half) cy = ay + half;
+      }
+    }
+    out[i] = samples[i];
+    out[i + 1] = cx;
+    out[i + 2] = cy;
+  }
+  return out;
 }
 
 function sampleAt(
