@@ -3,18 +3,27 @@
  *
  * `auto` is the frame sizing itself to the artwork plus its padding, which is
  * what it always did. Anything else is a target the frame grows into, with the
- * artwork centred and the gradient filling whatever that opens up.
+ * artwork centred and the background filling whatever that opens up.
  *
- * These are the shapes a post is rendered at rather than a general list: a
- * square for a grid, 4:5 as the tallest a portrait post survives uncropped on
- * most feeds, 16:9 for a slide or a video embed, 9:16 for a story.
+ * These are the shapes a post is rendered at rather than a general list: 9:16
+ * for a story, 2:3 and 4:5 for a portrait post, a square for a grid, 3:2 for a
+ * photo, 16:9 for a slide or a video embed, and 1.91:1 for the card a link
+ * unfurls into.
+ *
+ * **Ordered by shape rather than by popularity**, tallest first, so the row
+ * reads as a scale and the one being looked for is where its proportions say
+ * it is. `auto` leads, since it is the absence of a target rather than a
+ * point on that scale.
  */
 export const aspectOptions = [
   { value: "auto", label: "Auto" },
-  { value: "1:1", label: "1:1" },
-  { value: "4:5", label: "4:5" },
-  { value: "16:9", label: "16:9" },
   { value: "9:16", label: "9:16" },
+  { value: "2:3", label: "2:3" },
+  { value: "4:5", label: "4:5" },
+  { value: "1:1", label: "1:1" },
+  { value: "3:2", label: "3:2" },
+  { value: "16:9", label: "16:9" },
+  { value: "1.91:1", label: "1.91:1" },
 ];
 
 /** Width over height, or null for `auto`, which has no target. */

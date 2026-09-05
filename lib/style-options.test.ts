@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   ALL_CORNERS,
   aspectBox,
+  aspectOptions,
   aspectRatio,
   cornerRadius,
 } from "@/lib/style-options";
@@ -17,6 +18,37 @@ describe("aspectRatio", () => {
     expect(aspectRatio("16:9")).toBeCloseTo(16 / 9, 10);
     expect(aspectRatio("9:16")).toBeCloseTo(9 / 16, 10);
     expect(aspectRatio("4:5")).toBe(0.8);
+  });
+
+  it("parses a decimal ratio, which the link-preview shape needs", () => {
+    expect(aspectRatio("1.91:1")).toBeCloseTo(1.91, 10);
+  });
+
+  it("answers for every shape the picker offers", () => {
+    for (const option of aspectOptions) {
+      const ratio = aspectRatio(option.value);
+      if (option.value === "auto") {
+        expect(ratio, option.value).toBeNull();
+      } else {
+        expect(ratio, option.value).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("lists the shapes tallest first, with auto leading", () => {
+    // The row reads as a scale, so the one being looked for is where its
+    // proportions say it is.
+    expect(aspectOptions[0].value).toBe("auto");
+    const ratios = aspectOptions.slice(1).map((o) => aspectRatio(o.value)!);
+    for (let i = 1; i < ratios.length; i++) {
+      expect(ratios[i]).toBeGreaterThan(ratios[i - 1]);
+    }
+  });
+
+  it("has a count the picker's grid lays out evenly", () => {
+    // Four across, so a ragged last row is a spec failure rather than a
+    // surprise in the panel.
+    expect(aspectOptions.length % 4).toBe(0);
   });
 
   it("is null for anything that is not two positive numbers", () => {

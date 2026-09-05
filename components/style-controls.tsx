@@ -1,7 +1,8 @@
 "use client";
 
-import { CheckIcon } from "lucide-react";
+import { CheckIcon, RotateCcwIcon } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { ColorPicker } from "@/components/color-picker";
 import { FieldLabel } from "@/components/ui/field-label";
 import { Input } from "@/components/ui/input";
@@ -39,12 +40,18 @@ import type { StyleOptions } from "@/types/screenshot";
 interface StyleControlsProps {
   options: StyleOptions;
   onChange: (options: Partial<StyleOptions>) => void;
+  /** Puts every control back to its default. Confirmed by the owner. */
+  onReset: () => void;
+  /** False while the style already is the default, which disables the reset. */
+  canReset: boolean;
   disabled?: boolean;
 }
 
 export function StyleControls({
   options,
   onChange,
+  onReset,
+  canReset,
   disabled = false,
 }: StyleControlsProps) {
   const activePreset = getGradient(options.gradientId);
@@ -273,7 +280,7 @@ export function StyleControls({
           name="aspect"
           value={options.aspect}
           options={aspectOptions}
-          columns={5}
+          columns={4}
           onChange={(aspect) => onChange({ aspect })}
         />
         <SliderRow
@@ -385,6 +392,23 @@ export function StyleControls({
           onChange={(value) => onChange({ shadow: value })}
         />
       </Section>
+
+      {/* Last, and quiet. The panel has no header for this to live in, and a
+          header added only to hold it would give a reset more prominence than
+          the controls it undoes. Disabled while the style already is the
+          default, since a reset that changes nothing is not an action. */}
+      <div className="px-5 py-4">
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={disabled || !canReset}
+          onClick={onReset}
+          className="text-muted-foreground hover:text-foreground"
+        >
+          <RotateCcwIcon className="size-3.5" aria-hidden="true" />
+          Reset the style
+        </Button>
+      </div>
     </div>
   );
 }
@@ -602,6 +626,7 @@ function isSameCorners(a: Corners, b: Corners): boolean {
 const COLUMNS: Record<number, string> = {
   2: "grid-cols-2",
   3: "grid-cols-3",
+  4: "grid-cols-4",
   5: "grid-cols-5",
 };
 
@@ -623,7 +648,7 @@ function ChoiceRow<T extends string>({
   value: T;
   options: readonly { value: T; label: string }[];
   /** How many across. Five short labels read better on one line than 3 and 2. */
-  columns?: 2 | 3 | 5;
+  columns?: 2 | 3 | 4 | 5;
   disabled?: boolean;
   onChange: (value: T) => void;
 }) {
