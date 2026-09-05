@@ -362,6 +362,15 @@ export function Clyp() {
     resolveGradientCss(DEFAULT_STYLE),
   );
   const [exportModalOpen, setExportModalOpen] = useState(false);
+  /**
+   * What a clip's Download writes: the encoded clip, or the frame under the
+   * playhead as a still.
+   *
+   * Here rather than inside the modal because it decides what the export is:
+   * the encode branch, the progress phase, the filename's extension and
+   * whether there is anything to cancel all follow it.
+   */
+  const [videoFormat, setVideoFormat] = useState<"mp4" | "png">("mp4");
   const [exportAction, setExportAction] = useState<"copy" | "download">(
     "download",
   );
@@ -466,7 +475,12 @@ export function Clyp() {
     media?.kind === "video" && !canEncode
       ? "This browser cannot encode video"
       : null;
-  const exportsVideo = media?.kind === "video" && exportAction === "download";
+  // Copy has no MP4 flavour and takes the poster frame, and a Download set to
+  // PNG asks for the same thing deliberately. Only this encodes.
+  const exportsVideo =
+    media?.kind === "video" &&
+    exportAction === "download" &&
+    videoFormat === "mp4";
   // What will actually be encoded, which is the trim at the chosen speed rather
   // than the file. The duration readout, the size estimate and the encode all
   // read this one value, so none of them can describe a length nobody asked
@@ -2259,6 +2273,8 @@ export function Clyp() {
         hasClipAudio={media?.hasAudio ?? false}
         soundtrackName={soundtrack?.name}
         transparent={styleOptions.background === "none"}
+        format={videoFormat}
+        onFormatChange={setVideoFormat}
         progress={progress}
         defaultFilename={filenameFor(
           undefined,

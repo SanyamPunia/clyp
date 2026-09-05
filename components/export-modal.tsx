@@ -66,6 +66,9 @@ interface ExportModalProps {
   soundtrackName?: string;
   /** Set when the background is transparent, which an MP4 cannot carry. */
   transparent?: boolean;
+  /** Video only. What a Download writes: the clip, or its current frame. */
+  format?: "mp4" | "png";
+  onFormatChange?: (format: "mp4" | "png") => void;
   /** 0 to 1 while a video encodes, null while a PNG renders. */
   progress?: number | null;
   /** What the filename field falls back to, shown as its placeholder. */
@@ -88,6 +91,8 @@ export function ExportModal({
   hasClipAudio = false,
   soundtrackName,
   transparent = false,
+  format = "mp4",
+  onFormatChange,
   progress = null,
   defaultFilename,
   onCancel,
@@ -110,9 +115,12 @@ export function ExportModal({
   } | null>(null);
 
   const isCopy = action === "copy";
+  /** Whether a Download offers the clip or the frame. Copy never does. */
+  const choosesFormat = kind === "video" && !isCopy;
   // Copy goes through the clipboard, which has no MP4 flavour, so a clip
-  // copies its styled poster frame. Only a download encodes.
-  const isVideo = kind === "video" && !isCopy;
+  // copies its styled poster frame. A Download set to PNG asks for the same
+  // thing deliberately. Only an encode is a video export.
+  const isVideo = choosesFormat && format === "mp4";
   const seconds = duration ?? 0;
 
   // Asked once per size, when the dialog opens. It resolves in milliseconds,
@@ -189,7 +197,9 @@ export function ExportModal({
     ? "Copy to clipboard"
     : isVideo
       ? "Download clip"
-      : "Download image";
+      : choosesFormat
+        ? "Download frame"
+        : "Download image";
 
   return (
     <Dialog
@@ -225,6 +235,39 @@ export function ExportModal({
         </DialogHeader>
 
         <DialogBody className="flex flex-col gap-4 pb-4">
+          {/* First, because it decides what the rest of this dialog means: a
+              still has no frame rate, no length, no sound and nothing to
+              cancel, and every one of those rows goes with it. */}
+          {choosesFormat && (
+            <div className="flex flex-col gap-2">
+              <FieldLabel>Format</FieldLabel>
+              <SegmentedGroup
+                value={format}
+                onValueChange={(value) =>
+                  onFormatChange?.(value as "mp4" | "png")
+                }
+                className="grid-cols-2"
+              >
+                <SegmentedOption
+                  id="format-mp4"
+                  value="mp4"
+                  selected={format === "mp4"}
+                  disabled={pending}
+                >
+                  Clip
+                </SegmentedOption>
+                <SegmentedOption
+                  id="format-png"
+                  value="png"
+                  selected={format === "png"}
+                  disabled={pending}
+                >
+                  This frame
+                </SegmentedOption>
+              </SegmentedGroup>
+            </div>
+          )}
+
           {/* Each value sits with the control that decides it. One line
               carrying dimensions, rate, length and size was four facts of equal
               weight behind three dots, which is a spec sheet rather than a

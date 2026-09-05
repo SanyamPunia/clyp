@@ -1,14 +1,17 @@
+import { readFileSync } from "node:fs";
 import { expect, test } from "@playwright/test";
 
 import {
   BANDS,
   CLIP_SECONDS,
+  bandOf,
   expectLength,
   exportFile,
   loadClip,
   loadImage,
   loadTrack,
   openEditor,
+  pickSegmented,
   pressLane,
   readAlpha,
   readAudio,
@@ -136,6 +139,45 @@ test.describe("the exported clip", () => {
     const { duration } = await readVideo(page, file, [0.5]);
     // No sound of its own past 1x, so this lands exactly.
     expectLength(duration, CLIP_SECONDS / 2);
+  });
+});
+
+test.describe("a clip's current frame", () => {
+  test("downloads as a PNG of the frame the playhead is on", async ({
+    page,
+  }) => {
+    await openEditor(page);
+    await loadClip(page);
+    await shrinkPadding(page);
+    // The yellow second. Download offers the clip or this, and Copy has
+    // always taken the frame because the clipboard has no MP4 flavour.
+    await seek(page, 3.5);
+
+    const started = page.waitForEvent("download", { timeout: 60_000 });
+    await page.getByRole("button", { name: /Download/ }).first().click();
+    await pickSegmented(page, "format-png");
+    await expect(
+      page.getByRole("heading", { name: "Download frame" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: /^Download/ }).last().click();
+    const download = await started;
+
+    expect(download.suggestedFilename()).toMatch(/\.png$/);
+    const alpha = await readAlpha(page, readFileSync((await download.path())!));
+    expect(bandOf(alpha.rgb)).toBe("yellow");
+  });
+
+  test("offers the choice only for a clip being downloaded", async ({
+    page,
+  }) => {
+    await openEditor(page);
+    await loadImage(page);
+    await page.getByRole("button", { name: /Download/ }).first().click();
+    // A still has no second thing it could be.
+    await expect(page.locator('label[for="format-png"]')).toHaveCount(0);
+    await expect(
+      page.getByRole("heading", { name: "Download image" }),
+    ).toBeVisible();
   });
 });
 

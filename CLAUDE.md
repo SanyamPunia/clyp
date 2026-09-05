@@ -208,6 +208,15 @@ styled chrome around it, which `toPng` already does for free. `exportsVideo` in
 `components/clyp.tsx` is the one test for whether an export encodes, and the
 modal derives its own `isVideo` the same way.
 
+**A clip's Download offers the frame as well as the clip.** `videoFormat`
+lives in `clyp.tsx` rather than the modal, because it decides what the export
+is: the encode branch, the progress phase, the filename's extension and
+whether there is anything to cancel all follow it. Choosing the frame makes
+`exportsVideo` false, and the PNG path then runs unchanged, which is why this
+needed no new branch in `handleExport`. The choice sits first in the dialog,
+since a still has no frame rate, no length, no sound and nothing to cancel,
+and every one of those rows goes with it.
+
 The size readout is measured, not guessed. `lib/export-size.ts` carries the
 sample tables both fits came from. Re-measure rather than adjusting a
 coefficient by eye.

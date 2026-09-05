@@ -7,6 +7,8 @@ import {
   loadClip,
   loadTrack,
   openEditor,
+  outputSize,
+  pickShape,
   pressLane,
   seek,
   settle,
@@ -327,6 +329,61 @@ test.describe("the keyboard", () => {
     // The picker alone was sixty-four of them before the roving grid, a wall
     // between the panel's first control and its second.
     expect(await tabStops(page)).toBeLessThan(60);
+  });
+});
+
+test.describe("the style panel", () => {
+  test("resets every control, and only when there is something to reset", async ({
+    page,
+  }) => {
+    await openEditor(page);
+    await loadClip(page);
+
+    const reset = page.getByRole("button", { name: "Reset the style" });
+    // Nothing to undo yet, so it is not an action.
+    await expect(reset).toBeDisabled();
+
+    await page.getByRole("tab", { name: "Solid" }).click();
+    await expect(reset).toBeEnabled();
+
+    // Confirmed first: undo covers the clip's edits and not the style, so
+    // this is the one panel action with nothing behind it.
+    await reset.click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toContainText("Reset the style?");
+    await dialog.getByRole("button", { name: "Reset" }).click();
+
+    await expect(reset).toBeDisabled();
+    await expect(page.getByRole("tab", { name: "Presets" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
+  test("offers eight frame shapes and applies the one picked", async ({
+    page,
+  }) => {
+    await openEditor(page);
+    await loadClip(page);
+
+    await expect(page.locator('label[for^="aspect-"]')).toHaveCount(8);
+
+    // A square target grows the short axis, so the output is square.
+    await pickShape(page, "1:1");
+    await page.getByRole("button", { name: /Download/ }).first().click();
+    const { width, height } = await outputSize(page);
+    expect(width).toBe(height);
+  });
+
+  test("the link-preview shape is wider than it is tall", async ({ page }) => {
+    await openEditor(page);
+    await loadClip(page);
+
+    await pickShape(page, "1.91:1");
+    await page.getByRole("button", { name: /Download/ }).first().click();
+    const { width, height } = await outputSize(page);
+    // A decimal ratio, which is the first one the parser has had to take.
+    expect(width / height).toBeCloseTo(1.91, 1);
   });
 });
 

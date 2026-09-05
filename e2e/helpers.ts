@@ -287,6 +287,13 @@ export async function readAlpha(page: Page, bytes: Buffer) {
     const alphaAt = (x: number, y: number) =>
       ctx.getImageData(x, y, 1, 1).data[3];
 
+    const middle = ctx.getImageData(
+      Math.floor(bitmap.width / 2),
+      Math.floor(bitmap.height / 2),
+      1,
+      1,
+    ).data;
+
     return {
       width: bitmap.width,
       height: bitmap.height,
@@ -297,8 +304,38 @@ export async function readAlpha(page: Page, bytes: Buffer) {
         Math.floor(bitmap.width / 2),
         Math.floor(bitmap.height / 2),
       ),
+      // The picture's own colour, which is what says a still came from the
+      // frame the playhead was on.
+      rgb: [middle[0], middle[1], middle[2]] as [number, number, number],
     };
   }, { data: [...bytes] });
+}
+
+/**
+ * Picks an option in a segmented control, by the id its label points at.
+ *
+ * The radio inside one is `sr-only` and its own label sits over it, so
+ * clicking the radio is refused with "label intercepts pointer events". The
+ * label is what a pointer actually reaches, so it is what a spec clicks.
+ */
+export const pickSegmented = (page: Page, id: string) =>
+  page.locator(`label[for="${id}"]`).click();
+
+export const pickShape = (page: Page, value: string) =>
+  pickSegmented(page, `aspect-${value}`);
+
+/**
+ * The output size the export dialog reports, off the `Dimensions` readout's
+ * own accessible name rather than its text, which is split around an icon.
+ */
+export async function outputSize(page: Page) {
+  const label = await page
+    .getByRole("dialog")
+    .locator('[aria-label$="pixels"]')
+    .first()
+    .getAttribute("aria-label");
+  const [, width, height] = /^(\d+) by (\d+) pixels$/.exec(label ?? "") ?? [];
+  return { width: Number(width), height: Number(height) };
 }
 
 /** Every element a Tab press can reach, which is not every button. */
