@@ -27,8 +27,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * changed a colour.
  */
 
-/** How long a change must hold still before it becomes an entry. */
-const SETTLE_MS = 400;
+/**
+ * How long a change must hold still before it becomes an entry.
+ *
+ * Exported so the browser specs wait on the real number rather than a guess
+ * that drifts from it.
+ */
+export const SETTLE_MS = 400;
 
 /** How far back it goes. Each entry is a few hundred bytes. */
 const LIMIT = 50;

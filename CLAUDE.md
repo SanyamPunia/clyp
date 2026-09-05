@@ -36,6 +36,7 @@ app/          routes, root layout, providers, the one stylesheet
 components/   feature components (canvas, controls, drop zone, upload card,
               trim bar)
 components/ui shared primitives, shadcn-generated or hand-added
+e2e/          browser specs and their fixtures
 lib/          pure modules, no React, and their specs beside them
 types/        shared types
 ```
@@ -1502,5 +1503,55 @@ on eases too. An overlay blend at opacity 0 is a no-op in the export.
 ## Build gate
 
 `pnpm check` runs typecheck, lint, test, and build. A green run is the gate for
-any push. `pnpm test` alone runs the specs. `next dev` regenerates `AGENTS.md`,
-so commit it with your work rather than reverting it.
+any push. `pnpm test` alone runs the unit specs. `next dev` regenerates
+`AGENTS.md`, so commit it with your work rather than reverting it.
+
+`pnpm e2e` is separate and is not in the gate: it needs a browser and a server,
+and the gate is meant to be fast enough to run on every change. Run it before a
+push that touches the export, the lanes, or anything a reader reaches by
+keyboard.
+
+### The browser suite
+
+`e2e/` drives the running app and reads back what it wrote. It exists because
+every bug the unit specs did not catch was found this way, never by a failing
+assertion: a transparent background that still showed the old gradient, a cut
+that could take the whole clip, a Cut button with no way back to it, a copy
+that took the wrong selection.
+
+- **It runs against a production build, not `next dev`.** Three separate
+  failures came from the dev server: it holds a single-instance lock per
+  project, so a second run cannot start one and a crashed one leaves the lock
+  behind; it recompiles when a file changes, which aborted a navigation
+  mid-test when an unrelated edit landed; and it costs several hundred
+  megabytes more. A build does not move under the suite.
+- **An exported file is decoded in the browser, never by a command line tool.**
+  An MP4 goes into a `<video>` on a blank page and a PNG through
+  `createImageBitmap`, so the suite needs nothing installed beyond the browser
+  it already drives. ffmpeg regenerates the fixtures and is never needed to
+  read an export.
+- **The fixtures are checked in, not generated.** `e2e/fixtures/README.md`
+  carries the ffmpeg command behind each one, and the assertions quote their
+  exact contents. `clip.mp4` is one flat colour a second over a continuous
+  440Hz tone, which is what makes a cut provable: the colours that survive say
+  what was removed, and a silent window says a join dropped samples.
+- **One worker, in order.** The exports encode video, and the suite is small
+  enough that determinism is worth the wall clock.
+- **A spec asserts a file or a behaviour, never a screenshot.** There is no
+  visual baseline to churn.
+
+The specs rot when an accessible name changes, which is the point: five
+throwaway scripts broke the moment `Cut` became an icon and the chips became
+radios, and that is a change worth being told about.
+
+Two things the suite has to wait for, and both are the app being right rather
+than slow. `settleArtwork` waits out the artwork's 420ms fade before any
+export, since a spec can reach the modal inside that window and bake a
+half-faded picture, which reads as alpha 253 on a transparent background and
+is invisible on any other. `settle` waits out the undo history's window, since
+two edits inside one are deliberately one entry.
+
+`expectLength` allows the tail an exported clip's audio adds. `video.duration`
+is the container's, which is the longest track, and AAC frames are 1024
+samples, so a carried soundtrack runs up to about 90ms past the last picture.
+A clip past 1x has no sound of its own and lands exactly on its length.
