@@ -447,6 +447,7 @@ function SliderRow({
         </span>
       </div>
       <Slider
+        label={label}
         value={[value]}
         min={min}
         max={max}

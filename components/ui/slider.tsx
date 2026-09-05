@@ -11,8 +11,18 @@ function Slider({
   value,
   min = 0,
   max = 100,
+  label,
   ...props
-}: React.ComponentProps<typeof SliderPrimitive.Root>) {
+}: React.ComponentProps<typeof SliderPrimitive.Root> & {
+  /**
+   * Names the thumb, which is the element that carries `role="slider"`.
+   *
+   * Radix spreads the root's props onto a plain div, so an `aria-label` there
+   * never reaches the thumb and every slider in the panel was announced as
+   * just "slider". A range gets one label a thumb, numbered.
+   */
+  label?: string
+}) {
   const _values = React.useMemo(
     () =>
       Array.isArray(value)
@@ -53,6 +63,9 @@ function Slider({
         <SliderPrimitive.Thumb
           data-slot="slider-thumb"
           key={index}
+          aria-label={
+            label && _values.length > 1 ? `${label} ${index + 1}` : label
+          }
           className="border-primary bg-background ring-ring/50 block size-4 shrink-0 rounded-full border shadow-sm transition-[color,box-shadow] hover:ring-4 focus-visible:ring-4 focus-visible:outline-hidden disabled:pointer-events-none disabled:opacity-50"
         />
       ))}
