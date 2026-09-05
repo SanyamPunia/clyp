@@ -1447,6 +1447,21 @@ builds the shorthand. When a window bar is on it takes the top corners
 (`only: "top"`) and the screenshot takes the bottom ones, so the two always
 meet flush.
 
+## Resetting the style
+
+`DEFAULT_STYLE` is the one source, so the reset is one `setStyleOptions` and
+`canResetStyle` is the whole style compared against it rather than field by
+field, which means a control added later is covered without anyone remembering
+to add it here.
+
+- **It confirms first.** Undo covers the clip's edits and deliberately not the
+  style, so this is the one action in the panel with nothing behind it.
+- **It is disabled while the style already is the default**, since a reset that
+  changes nothing is not an action.
+- **It sits last in the panel, quiet.** The panel has no header for it to live
+  in, and a header added only to hold it would give a reset more prominence
+  than the controls it undoes.
+
 ## Adding a control
 
 1. Add the field to `StyleOptions` in `types/screenshot.ts`.

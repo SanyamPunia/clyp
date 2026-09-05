@@ -297,6 +297,7 @@ export function Clyp() {
   const [selectedZoom, setSelectedZoom] = useState<string | null>(null);
   const [removeZoomOpen, setRemoveZoomOpen] = useState(false);
   const [removeCutOpen, setRemoveCutOpen] = useState(false);
+  const [resetStyleOpen, setResetStyleOpen] = useState(false);
   /**
    * A copied lane instance, waiting to be pasted.
    *
@@ -1330,6 +1331,26 @@ export function Clyp() {
     return () => document.removeEventListener("paste", handlePaste);
   }, [addSoundtrack, loadMedia]);
 
+  /**
+   * Whether the style is anything other than the default.
+   *
+   * Compared as a whole rather than field by field, so a control added later
+   * is covered without anyone remembering to add it here.
+   */
+  const canResetStyle =
+    JSON.stringify(styleOptions) !== JSON.stringify(DEFAULT_STYLE);
+
+  /**
+   * Puts every control back. Confirmed first: undo covers the clip's edits and
+   * deliberately not the style, so this is the one action in the panel with
+   * nothing behind it.
+   */
+  const resetStyle = useCallback(() => {
+    setPreviousGradientCss(resolveGradientCss(styleOptions));
+    setStyleOptions(DEFAULT_STYLE);
+    setResetStyleOpen(false);
+  }, [styleOptions]);
+
   const openExportModal = useCallback((action: "copy" | "download") => {
     setExportAction(action);
     setExportModalOpen(true);
@@ -2204,6 +2225,8 @@ export function Clyp() {
           <StyleControls
             options={styleOptions}
             onChange={handleStyleChange}
+            onReset={() => setResetStyleOpen(true)}
+            canReset={canResetStyle}
             disabled={!media}
           />
         </ScrollFade>
@@ -2300,6 +2323,17 @@ export function Clyp() {
         description="That stretch of the clip plays again, and the clip gets longer by its length."
         confirmLabel="Remove"
         onConfirm={removeCut}
+      />
+
+      {/* The one action in the style panel with nothing behind it: undo covers
+          the clip's edits and, deliberately, not the style. */}
+      <ConfirmDialog
+        open={resetStyleOpen}
+        onOpenChange={setResetStyleOpen}
+        title="Reset the style?"
+        description="Every control goes back to its default. Your clip, its trim and its edits are kept."
+        confirmLabel="Reset"
+        onConfirm={resetStyle}
       />
 
       <ConfirmDialog
