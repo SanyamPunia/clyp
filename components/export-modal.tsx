@@ -237,7 +237,14 @@ export function ExportModal({
         <DialogBody className="flex flex-col gap-4 pb-4">
           {/* First, because it decides what the rest of this dialog means: a
               still has no frame rate, no length, no sound and nothing to
-              cancel, and every one of those rows goes with it. */}
+              cancel, and every one of those rows goes with it.
+
+              A two-line tile, like the scale and the rate below it. The first
+              build passed no height at all, so the options collapsed to bare
+              line-height, 20px against their 54, and a `rounded-md` corner on
+              a box that short reads as a floating pill rather than a segment.
+              The second line names the file, which is the fact a reader wants
+              and the one nothing else in the dialog states. */}
           {choosesFormat && (
             <div className="flex flex-col gap-2">
               <FieldLabel>Format</FieldLabel>
@@ -253,16 +260,20 @@ export function ExportModal({
                   value="mp4"
                   selected={format === "mp4"}
                   disabled={pending}
+                  className="flex-col gap-0.5 py-2"
                 >
-                  Clip
+                  <span className="text-sm font-medium">Clip</span>
+                  <span className="text-xs text-muted-foreground">MP4</span>
                 </SegmentedOption>
                 <SegmentedOption
                   id="format-png"
                   value="png"
                   selected={format === "png"}
                   disabled={pending}
+                  className="flex-col gap-0.5 py-2"
                 >
-                  This frame
+                  <span className="text-sm font-medium">This frame</span>
+                  <span className="text-xs text-muted-foreground">PNG</span>
                 </SegmentedOption>
               </SegmentedGroup>
             </div>
