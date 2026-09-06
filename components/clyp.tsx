@@ -33,6 +33,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { CurveEditor } from "@/components/curve-editor";
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogHeader,
@@ -2507,12 +2508,17 @@ export function Clyp() {
               preset.
             </DialogDescription>
           </DialogHeader>
-          {selectedRamp && (
-            <CurveEditor
-              curve={selectedRamp.curve}
-              onChange={(curve) => updateFade({ ...selectedRamp, curve })}
-            />
-          )}
+          {/* In a body, like every other dialog's content. Dropped straight
+              into the content it had neither the side padding nor the bottom,
+              so the presets sat against the dialog's own edge. */}
+          <DialogBody className="pb-5">
+            {selectedRamp && (
+              <CurveEditor
+                curve={selectedRamp.curve}
+                onChange={(curve) => updateFade({ ...selectedRamp, curve })}
+              />
+            )}
+          </DialogBody>
         </DialogContent>
       </Dialog>
 
