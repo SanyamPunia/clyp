@@ -821,10 +821,16 @@ them is byte-identical to before.
   `h-7` for it: a 20px block has no room for a curve to be read, let alone
   grabbed.
   - **One handle, not two.** A bezier has two control points, which is more
-    than a fade needs by hand, so the handle moves `bendCurve`'s symmetric
-    family: both points offset from the diagonal by one number. `bendOf`
-    projects any curve back onto it by averaging the two, which puts the
-    handle where the ramp actually runs even for one shaped in the dialog.
+    than a fade needs by hand, so the handle moves `bendCurve`'s family from
+    one signed number. `bendOf` projects any curve back onto it, which puts
+    the handle where the ramp actually runs even for one shaped in the dialog.
+  - **The two control points are never put in the same place.** The first
+    version offset both from the diagonal by the same amount, which is the
+    simplest symmetric family and also stacks them exactly: the dialog then
+    drew two handles on one pixel and only the upper one could be grabbed, so
+    bending on the lane quietly broke the graph. Each point slides along its
+    own edge of the square instead, and the bend is capped short of the corner
+    where they would meet. Measured after: 203px apart in the dialog.
   - **Up always means the ramp holds high**, which for a fade in is arriving
     fast and for a fade out is leaving late, so the two are read the same way
     off the shape rather than needing the direction in mind.

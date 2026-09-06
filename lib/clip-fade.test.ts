@@ -7,6 +7,7 @@ import {
   DEFAULT_FADE_LENGTH,
   MIN_FADE,
   bendCurve,
+  bendOf,
   curveName,
   ease,
   opacityAt,
@@ -219,12 +220,35 @@ describe("bendCurve", () => {
   });
 
   it("clamps the bend, so a drag off the lane cannot leave the unit square", () => {
-    for (const bend of [-5, -0.5, 0, 0.5, 5]) {
+    for (const bend of [-5, -1, -0.5, 0, 0.5, 1, 5]) {
       for (const n of bendCurve(bend)) {
         expect(n).toBeGreaterThanOrEqual(0);
         expect(n).toBeLessThanOrEqual(1);
       }
     }
+  });
+
+  it("never puts the two control points in the same place", () => {
+    // Stacked points draw two handles on one pixel, and only the upper one
+    // can be grabbed, which is what broke the graph the first time.
+    for (let bend = -1.5; bend <= 1.5; bend += 0.05) {
+      const [x1, y1, x2, y2] = bendCurve(bend);
+      expect(Math.hypot(x2 - x1, y2 - y1), `bend ${bend}`).toBeGreaterThan(0.1);
+    }
+  });
+
+  it("round-trips through bendOf", () => {
+    for (let bend = -0.8; bend <= 0.8; bend += 0.1) {
+      expect(bendOf(bendCurve(bend))).toBeCloseTo(bend, 6);
+    }
+  });
+
+  it("reads a preset as the nearest bend this family has", () => {
+    // Smooth is an S-curve, which one handle cannot describe, so it projects
+    // to the straight line: that is where its own midpoint already sits.
+    const smooth = CURVE_PRESETS.find((p) => p.value === "smooth")!.curve;
+    expect(bendOf(smooth)).toBeCloseTo(0, 6);
+    expect(ease(smooth, 0.5)).toBeCloseTo(0.5, 6);
   });
 
   it("stays a usable curve at every bend", () => {
@@ -241,3 +265,4 @@ describe("bendCurve", () => {
     }
   });
 });
+

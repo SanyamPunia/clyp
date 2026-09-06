@@ -52,20 +52,26 @@ export const CURVE_PRESETS: { value: string; label: string; curve: Curve }[] = [
  *
  * A bezier has two control points, which is two things to drag and more than a
  * fade needs. Editors put one handle on the ramp itself and bend it, so this
- * is the symmetric family that handle moves through: both control points at
- * the same place, offset from the diagonal by `bend`.
+ * is the family that handle moves through, from one signed number.
  *
- * Zero is the straight line. Positive bows the curve above it, which starts
- * fast and eases to a stop. Negative bows it below, which starts slow.
+ * Zero is the straight line. Positive pulls the curve above it, which starts
+ * fast and eases to a stop. Negative pulls it below, which starts slow.
  *
- * The graph in the dialog still moves both points independently, so a curve
- * shaped there and then bent on the lane becomes symmetric again. That is the
- * cost of one handle, and it is why the dialog is still there.
+ * **The two points are never put in the same place.** The first version
+ * offset both from the diagonal by the same amount, which is the simplest
+ * symmetric family and also stacks them exactly: the dialog then drew two
+ * handles on one pixel and only the upper one could be grabbed, so bending on
+ * the lane quietly broke the graph. Each point slides along its own edge of
+ * the square instead, and the bend is capped short of the corner where they
+ * would meet.
  */
 export function bendCurve(bend: number): Curve {
-  const d = Math.min(Math.max(bend, -0.5), 0.5);
-  return [0.5 - d, 0.5 + d, 0.5 - d, 0.5 + d];
+  const d = Math.min(Math.max(bend, -MAX_BEND), MAX_BEND);
+  return d >= 0 ? [0, d, 1 - d, 1] : [-d, 0, 1, 1 + d];
 }
+
+/** Short of 1, where the two control points would land on each other. */
+const MAX_BEND = 0.85;
 
 /**
  * How bent a curve is, which is what the lane's handle sits at.
@@ -75,7 +81,10 @@ export function bendCurve(bend: number): Curve {
  * two control points, which puts the handle where the ramp actually runs.
  */
 export function bendOf(curve: Curve): number {
-  return 0.5 - (curve[0] + curve[2]) / 2;
+  // How far each point sits off the diagonal, averaged. Exact for anything
+  // `bendCurve` made, and for a curve shaped in the dialog it is the closest
+  // this family comes, which is where the lane's handle should sit.
+  return (curve[1] - curve[0] + (curve[3] - curve[2])) / 2;
 }
 
 const clamp = (value: number, low: number, high: number) =>

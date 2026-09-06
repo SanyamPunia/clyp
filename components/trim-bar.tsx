@@ -1145,7 +1145,9 @@ export function TrimBar({
       const move = (moved: PointerEvent) => {
         const from = clamp((moved.clientY - rect.top) / rect.height, 0, 1);
         const level = fade.kind === "in" ? 1 - from : from;
-        onFadeChange({ ...fade, curve: bendCurve(level - 0.5) });
+        // Doubled, so the lane's full height reaches the family's own limits
+        // rather than only half of them.
+        onFadeChange({ ...fade, curve: bendCurve((level - 0.5) * 2) });
       };
       const release = () => {
         window.removeEventListener("pointermove", move);
@@ -1758,8 +1760,8 @@ export function TrimBar({
                         role="slider"
                         tabIndex={selected ? 0 : -1}
                         aria-label="Fade curve"
-                        aria-valuemin={-50}
-                        aria-valuemax={50}
+                        aria-valuemin={-100}
+                        aria-valuemax={100}
                         aria-valuenow={Math.round(bendOf(fade.curve) * 100)}
                         onPointerDown={bendFade(fade)}
                         onKeyDown={(event) => {
