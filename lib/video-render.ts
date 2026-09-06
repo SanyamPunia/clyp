@@ -34,6 +34,7 @@ import {
 
 import { type ZoomRegion, sourceRect, zoomAt } from "@/lib/clip-zoom";
 import { type Cut, keptSeconds, keptSegments, outputAt } from "@/lib/clip-cuts";
+import { type FadeRegion, opacityAt } from "@/lib/clip-fade";
 import type { MotionTrack } from "@/lib/motion";
 import type { Trim } from "@/types/screenshot";
 
@@ -74,6 +75,8 @@ export interface RenderRequest {
   speed: number;
   /** Stretches of the clip that close in on a point of the picture. */
   zooms: ZoomRegion[];
+  /** Stretches where the picture arrives or leaves. */
+  fades: FadeRegion[];
   /** The clip's motion track, for the regions that follow. */
   motion: MotionTrack | null;
   /** Stream the clip's own sound across. Only true at 1x with nothing laid. */
@@ -125,6 +128,7 @@ export async function renderVideo({
   cuts,
   speed,
   zooms,
+  fades,
   motion,
   audio,
   mixed,
@@ -223,6 +227,10 @@ export async function renderVideo({
 
         ctx.drawImage(chrome, 0, 0);
         ctx.save();
+        // Under a fade the chrome shows through, which is the background: the
+        // media was left out of the raster for exactly this. At 1 the draw is
+        // opaque and covers the box as it always did.
+        ctx.globalAlpha = opacityAt(fades, sample.timestamp);
         ctx.beginPath();
         ctx.roundRect(box.x, box.y, box.width, box.height, radii);
         ctx.clip();

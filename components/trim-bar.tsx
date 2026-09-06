@@ -17,6 +17,7 @@ import {
   RepeatIcon,
   ScissorsIcon,
   SparklesIcon,
+  SunDimIcon,
   SquareIcon,
   StepBackIcon,
   StepForwardIcon,
@@ -33,6 +34,14 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  type Curve,
+  type FadeRegion,
+  CURVE_PRESETS,
+  MIN_FADE,
+  curveName,
+  roomFor as roomForFade,
+} from "@/lib/clip-fade";
 import {
   type Cut,
   MIN_CUT,
@@ -176,6 +185,13 @@ interface TrimBarProps {
   cuts: Cut[];
   selectedCut: string | null;
   onCutAdd: () => void;
+  /** Stretches where the picture arrives or leaves, on their own lane. */
+  fades: FadeRegion[];
+  selectedFade: string | null;
+  onFadeAdd: () => void;
+  onFadeChange: (fade: FadeRegion) => void;
+  onFadeSelect: (id: string | null) => void;
+  onFadeRemove: () => void;
   onCutChange: (cut: Cut) => void;
   onCutSelect: (id: string | null) => void;
   onCutRemove: () => void;
@@ -255,6 +271,12 @@ export function TrimBar({
   cuts,
   selectedCut,
   onCutAdd,
+  fades,
+  selectedFade,
+  onFadeAdd,
+  onFadeChange,
+  onFadeSelect,
+  onFadeRemove,
   onCutChange,
   onCutSelect,
   onCutRemove,
@@ -998,6 +1020,70 @@ export function TrimBar({
     [duration, speed],
   );
 
+  /** A fade moved by `by` seconds, bounded and snapped. `shiftZoom`'s twin. */
+  const shiftFade = useCallback(
+    (fade: FadeRegion, part: LanePart, by: number): FadeRegion => {
+      const { lo, hi } = roomForFade(fades, fade.id, duration);
+      const length = fade.end - fade.start;
+
+      if (part === "body") {
+        const start = snap(clamp(fade.start + by, lo, hi - length));
+        return { ...fade, start, end: start + length };
+      }
+      if (part === "head") {
+        return {
+          ...fade,
+          start: snap(clamp(fade.start + by, lo, fade.end - MIN_FADE)),
+        };
+      }
+      return {
+        ...fade,
+        end: snap(clamp(fade.end + by, fade.start + MIN_FADE, hi)),
+      };
+    },
+    [duration, fades],
+  );
+
+  const dragFade = useCallback(
+    (fade: FadeRegion, part: LanePart) =>
+      (event: React.PointerEvent<HTMLDivElement>) => {
+        if (disabled) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onFadeSelect(fade.id);
+        event.currentTarget.setPointerCapture(event.pointerId);
+        onPlayback(false);
+
+        const origin = timeAt(event.clientX);
+        const from = fade;
+        const wasSelected = selectedFade === fade.id;
+        let moved = false;
+        const show = (time: number) =>
+          onSeek(clamp(time, rangeRef.current.start, rangeRef.current.end - FRAME));
+
+        const move = (ev: PointerEvent) => {
+          const by = timeAt(ev.clientX) - origin;
+          if (!moved && Math.abs(by) < FRAME / 2) return;
+          moved = true;
+          const next = shiftFade(from, part, by);
+          onFadeChange(next);
+          show(part === "tail" ? next.end - FRAME : next.start);
+        };
+
+        const release = () => {
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", release);
+          window.removeEventListener("pointercancel", release);
+          if (!moved && wasSelected) onFadeSelect(null);
+        };
+
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", release);
+        window.addEventListener("pointercancel", release);
+      },
+    [disabled, onFadeChange, onFadeSelect, onPlayback, onSeek, selectedFade, shiftFade, timeAt],
+  );
+
   /** A cut moved by `by` seconds, bounded and snapped. `shiftZoom`'s twin. */
   const shiftCut = useCallback(
     (cut: Cut, part: LanePart, by: number): Cut => {
@@ -1140,6 +1226,7 @@ export function TrimBar({
 
   const selectedRegion = zooms.find((z) => z.id === selectedZoom) ?? null;
   const selectedRange = cuts.find((c) => c.id === selectedCut) ?? null;
+  const selectedRamp = fades.find((f) => f.id === selectedFade) ?? null;
 
   const first = trim.start / duration;
   const last = trim.end / duration;
@@ -1515,6 +1602,84 @@ export function TrimBar({
               </div>
             )}
 
+            {/* Fades, on a lane of their own. Only mounted when there are
+                any, the same as the zoom lane: a bar that grows a row for a
+                feature nobody is using is a bar that is too tall by default.
+                Each block is drawn as the ramp it is, so which way it runs is
+                read off the lane rather than off a label. */}
+            {fades.length > 0 && (
+              <div
+                className="relative mt-1 h-5"
+                onPointerDown={() => onFadeSelect(null)}
+              >
+                {fades.map((fade) => {
+                  const selected = fade.id === selectedFade;
+                  return (
+                    <div key={fade.id}>
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Fade ${fade.kind}, ${formatPrecise(fade.start, duration)} to ${formatPrecise(fade.end, duration)}`}
+                        aria-pressed={selected}
+                        onPointerDown={dragFade(fade, "body")}
+                        onKeyDown={laneKeys({
+                          part: "body",
+                          shift: (by) => shiftFade(fade, "body", by),
+                          apply: onFadeChange,
+                          at: (next) => next.start,
+                          onRemove: onFadeRemove,
+                          onToggle: () => onFadeSelect(selected ? null : fade.id),
+                        })}
+                        className={cn(
+                          "absolute inset-y-0 cursor-grab overflow-hidden rounded-md ring-1 transition-colors duration-150 active:cursor-grabbing",
+                          "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+                          selected ? "ring-brand" : "ring-stroke",
+                        )}
+                        style={{
+                          left: `calc(${at(fade.start / duration)} + ${INSET}px)`,
+                          width: at((fade.end - fade.start) / duration),
+                          // The ramp itself, so the direction needs no label.
+                          backgroundImage: `linear-gradient(to right, ${
+                            fade.kind === "in"
+                              ? "transparent, var(--track-active)"
+                              : "var(--track-active), transparent"
+                          })`,
+                        }}
+                      />
+                      <LaneEdge
+                        label="Fade start"
+                        value={fade.start}
+                        duration={duration}
+                        reachable={selected}
+                        position={at(fade.start / duration)}
+                        onPointerDown={dragFade(fade, "head")}
+                        onKeyDown={laneKeys({
+                          part: "head",
+                          shift: (by) => shiftFade(fade, "head", by),
+                          apply: onFadeChange,
+                          at: (next) => next.start,
+                        })}
+                      />
+                      <LaneEdge
+                        label="Fade end"
+                        value={fade.end}
+                        duration={duration}
+                        reachable={selected}
+                        position={at(fade.end / duration)}
+                        onPointerDown={dragFade(fade, "tail")}
+                        onKeyDown={laneKeys({
+                          part: "tail",
+                          shift: (by) => shiftFade(fade, "tail", by),
+                          apply: onFadeChange,
+                          at: (next) => next.end - FRAME,
+                        })}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
             {/* Laid under the picture on the same axis, so where the sound starts is
                 read against where the clip does rather than described in a number. */}
             {soundtrack && (
@@ -1713,6 +1878,9 @@ export function TrimBar({
                   <Transport label="Cut at the playhead" onClick={onCutAdd}>
                     <ScissorsIcon className="size-4" aria-hidden="true" />
                   </Transport>
+                  <Transport label="Add a fade" onClick={onFadeAdd}>
+                    <SunDimIcon className="size-4" aria-hidden="true" />
+                  </Transport>
                   {/* Shows or hides the ghosts. The first press reads the
                       clip's motion, through the same dialog the follow toggle
                       opens. */}
@@ -1800,6 +1968,50 @@ export function TrimBar({
                     </div>
                   )}
                   </>
+                )}
+
+                {selectedRamp && (
+                  <div
+                    role="group"
+                    aria-label="Fade"
+                    className="flex shrink-0 items-center gap-0.5 rounded-full bg-track p-0.5"
+                  >
+                    <SunDimIcon
+                      className="mx-1.5 size-3.5 shrink-0 text-muted-foreground"
+                      aria-hidden="true"
+                    />
+                    <ChipGroup label="Fade direction">
+                      {(["in", "out"] as const).map((kind) => (
+                        <Chip
+                          key={kind}
+                          active={selectedRamp.kind === kind}
+                          onClick={() => onFadeChange({ ...selectedRamp, kind })}
+                        >
+                          {kind === "in" ? "In" : "Out"}
+                        </Chip>
+                      ))}
+                    </ChipGroup>
+                    <span className="mx-1 h-4 w-px shrink-0 bg-stroke" aria-hidden="true" />
+                    <ChipGroup label="Fade curve">
+                      {CURVE_PRESETS.map((preset) => (
+                        <Chip
+                          key={preset.value}
+                          active={curveName(selectedRamp.curve) === preset.value}
+                          onClick={() =>
+                            onFadeChange({
+                              ...selectedRamp,
+                              curve: preset.curve as Curve,
+                            })
+                          }
+                        >
+                          {preset.label}
+                        </Chip>
+                      ))}
+                    </ChipGroup>
+                    <Transport label="Remove the fade" onClick={onFadeRemove}>
+                      <XIcon className="size-4" aria-hidden="true" />
+                    </Transport>
+                  </div>
                 )}
 
                 {selectedRange && (

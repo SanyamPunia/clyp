@@ -13,6 +13,7 @@
  */
 
 import type { Cut } from "@/lib/clip-cuts";
+import type { FadeRegion } from "@/lib/clip-fade";
 import type { ZoomRegion } from "@/lib/clip-zoom";
 import type { MediaKind, StyleOptions, Trim } from "@/types/screenshot";
 
@@ -115,6 +116,8 @@ export interface StoredEdits {
   cuts?: Cut[];
   speed: number;
   zooms: ZoomRegion[];
+  /** Fades. Absent in a record written before they existed. */
+  fades?: FadeRegion[];
   /** The laid track's placement. Absent when there is no track. */
   soundtrack?: { offset: number; start: number; end: number };
 }

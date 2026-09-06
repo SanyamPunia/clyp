@@ -12,12 +12,31 @@ import { toPng } from "html-to-image";
  */
 export const EXPORT_IGNORE = "data-export-ignore";
 
+/**
+ * Marks the media itself, so the video export can leave it out.
+ *
+ * `html-to-image` substitutes a still of the current frame for a `<video>`,
+ * and the composite then draws every decoded frame over that same box. At full
+ * opacity the still is covered and nothing shows. Under a fade it would be
+ * what shows through, instead of the background, so a clip with fades
+ * rasterizes its chrome without the media and the box is a shadowed hole over
+ * the gradient.
+ */
+export const EXPORT_MEDIA = "data-export-media";
+
 /** The one raster both exports and the video's chrome come from. */
-export function rasterize(frame: HTMLElement, pixelRatio: number): Promise<string> {
+export function rasterize(
+  frame: HTMLElement,
+  pixelRatio: number,
+  options: { dropMedia?: boolean } = {},
+): Promise<string> {
   return toPng(frame, {
     cacheBust: true,
     pixelRatio,
-    filter: (node) =>
-      !(node instanceof Element && node.hasAttribute(EXPORT_IGNORE)),
+    filter: (node) => {
+      if (!(node instanceof Element)) return true;
+      if (node.hasAttribute(EXPORT_IGNORE)) return false;
+      return !(options.dropMedia && node.hasAttribute(EXPORT_MEDIA));
+    },
   });
 }

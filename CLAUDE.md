@@ -788,6 +788,46 @@ something from another site.
 once, which made "the selected thing" ambiguous and had the copy shortcut
 taking the wrong one.
 
+## Fades
+
+`lib/clip-fade.ts` is the model. A fade is a stretch on the source's axis, like
+a cut and a zoom, carrying a direction and a curve. Its arithmetic runs in two
+places from the same numbers, the way the zoom's does: the preview's frame loop
+sets an opacity on the `<video>`, and the worker's encode loop draws the frame
+at that alpha. Fades live in `clyp.tsx` beside the cuts and are stored with
+them under the edits key.
+
+**What shows through is the background, which is why the export rasterizes its
+chrome with the video hidden.** `html-to-image` substitutes a still of the
+current frame for the `<video>`, and the composite then draws every decoded
+frame over that same box. At full opacity the still is covered and nothing
+shows, but under a fade it would be what shows through, instead of the
+gradient. So the media carries `EXPORT_MEDIA` and `rasterize` takes a
+`dropMedia` flag, leaving the frame's own box as a shadowed hole over the
+background. The flag is set only when there are fades, so an export without
+them is byte-identical to before.
+
+- **A fade leaves the picture where it put it.** Inside a region the opacity is
+  the curve. Outside one it is whatever the last fade to finish left behind, so
+  a fade out ends dark and stays dark rather than snapping back the instant its
+  region ends, and a fade in after it brings the picture back.
+- **The curve is a cubic bezier, the same four numbers CSS takes.** `ease`
+  solves x for t by Newton-Raphson and then reads y, since a bezier is
+  parametric and cannot be evaluated at x directly. Four presets have chips.
+- **A block is drawn as the ramp it is**, a gradient running the direction the
+  fade runs, so which way it goes is read off the lane rather than off a label.
+- **The lane is mounted only when there are fades**, the same as the zoom
+  lane. A bar that grows a row for a feature nobody is using is a bar that is
+  too tall by default.
+- The sound is not ramped. A fade is the picture only, and a fade to silence
+  would need the ramp in both audio paths.
+
+Verified through the export on the six-colour clip with a fade in over the
+first 0.6s: the centre of the frame at 0.05s is the gradient's own blue, at
+0.3s a blend of it and the red band, at 0.9s the full red, and the later bands
+are untouched. In the preview the opacity reads 0, 0.41, 0.98 and 1 across the
+same points.
+
 ## Speed
 
 `speed` in `clyp.tsx` is the clip's playback rate, one of `SPEED_OPTIONS` in

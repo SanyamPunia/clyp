@@ -68,7 +68,14 @@ import {
   tidyCuts,
 } from "@/lib/clip-cuts";
 import { useEditHistory } from "@/components/use-edit-history";
-import { rasterize } from "@/lib/raster";
+import {
+  type FadeRegion,
+  DEFAULT_CURVE,
+  newFadeId,
+  opacityAt,
+  placeFade,
+} from "@/lib/clip-fade";
+import { EXPORT_MEDIA, rasterize } from "@/lib/raster";
 import {
   DEFAULT_SOLID_COLOR,
   defaultCustomGradient,
@@ -281,6 +288,12 @@ export function Clyp() {
   const [cuts, setCuts] = useState<Cut[]>([]);
   const [selectedCut, setSelectedCut] = useState<string | null>(null);
   /**
+   * Stretches where the picture arrives or leaves, on the source's axis like
+   * the cuts and the zooms.
+   */
+  const [fades, setFades] = useState<FadeRegion[]>([]);
+  const [selectedFade, setSelectedFade] = useState<string | null>(null);
+  /**
    * The clip's playback rate, an edit like the trim and stored with it. The
    * preview plays at it and the export writes at it, so the two agree, and it
    * is the one place the clip's own sound gives way: past 1x there is no
@@ -298,6 +311,7 @@ export function Clyp() {
   const [removeZoomOpen, setRemoveZoomOpen] = useState(false);
   const [removeCutOpen, setRemoveCutOpen] = useState(false);
   const [resetStyleOpen, setResetStyleOpen] = useState(false);
+  const [removeFadeOpen, setRemoveFadeOpen] = useState(false);
   /**
    * A copied lane instance, waiting to be pasted.
    *
@@ -408,6 +422,7 @@ export function Clyp() {
   // For the zoom's frame loop, which is bound once per clip and would
   // otherwise close over the regions it mounted with. Written in an effect.
   const zoomsRef = useRef(zooms);
+  const fadesRef = useRef(fades);
   const motionRef = useRef(motion);
   const selectedZoomRef = useRef(selectedZoom);
   /** The read in flight, so a clip change can stop it. */
@@ -522,9 +537,10 @@ export function Clyp() {
 
   useEffect(() => {
     zoomsRef.current = zooms;
+    fadesRef.current = fades;
     motionRef.current = motion;
     selectedZoomRef.current = selectedZoom;
-  }, [zooms, motion, selectedZoom]);
+  }, [zooms, fades, motion, selectedZoom]);
 
   /**
    * Takes over from the loader in `lib/media.ts`, which has already read and
@@ -543,6 +559,8 @@ export function Clyp() {
     setSpeed(1);
     setCuts([]);
     setSelectedCut(null);
+    setFades([]);
+    setSelectedFade(null);
     setZooms([]);
     setSelectedZoom(null);
     // A read for the clip that has just been replaced is stopped, since its
@@ -590,6 +608,13 @@ export function Clyp() {
       ),
     );
     setSelectedCut(null);
+    setFades(
+      (edits.fades ?? [])
+        .map((f) => ({ ...f, start: grid(f.start), end: grid(f.end) }))
+        .filter((f) => f.end > f.start)
+        .sort((a, b) => a.start - b.start),
+    );
+    setSelectedFade(null);
 
     const rate = edits.speed as (typeof SPEED_OPTIONS)[number];
     setSpeed(SPEED_OPTIONS.includes(rate) ? rate : 1);
@@ -714,7 +739,10 @@ export function Clyp() {
       setSelectedZoom(id);
       // One selection across the lanes. Two at once make "the selected thing"
       // ambiguous, and the copy shortcut then has to guess which was meant.
-      if (id) setSelectedCut(null);
+      if (id) {
+        setSelectedCut(null);
+        setSelectedFade(null);
+      }
       const video = videoRef.current;
       const region = zooms.find((r) => r.id === id);
       if (!video || !region) return;
@@ -784,7 +812,10 @@ export function Clyp() {
 
   const selectCut = useCallback((id: string | null) => {
     setSelectedCut(id);
-    if (id) setSelectedZoom(null);
+    if (id) {
+      setSelectedZoom(null);
+      setSelectedFade(null);
+    }
   }, []);
 
   const removeCut = useCallback(() => {
@@ -792,6 +823,59 @@ export function Clyp() {
     setSelectedCut(null);
     setRemoveCutOpen(false);
   }, [selectedCut]);
+
+  /**
+   * A new fade lands at the playhead, the same rule a zoom and a cut follow.
+   * It arrives as a fade in, since that is what a first one usually is, and
+   * its direction is one chip away.
+   */
+  const addFade = useCallback(() => {
+    const video = videoRef.current;
+    if (!video || !duration) return;
+
+    const grid = (seconds: number) => Math.round(seconds * EDIT_FPS) / EDIT_FPS;
+    const placed = placeFade(fades, grid(video.currentTime), duration);
+    if (!placed) {
+      toast.error("There is no room for a fade at the playhead");
+      return;
+    }
+
+    const region: FadeRegion = {
+      id: newFadeId(),
+      start: grid(placed.start),
+      end: grid(placed.end),
+      kind: "in",
+      curve: DEFAULT_CURVE,
+    };
+    setFades((previous) =>
+      [...previous, region].sort((a, b) => a.start - b.start),
+    );
+    setSelectedFade(region.id);
+    setSelectedZoom(null);
+    setSelectedCut(null);
+  }, [duration, fades]);
+
+  const updateFade = useCallback((next: FadeRegion) => {
+    setFades((previous) =>
+      previous
+        .map((f) => (f.id === next.id ? next : f))
+        .sort((a, b) => a.start - b.start),
+    );
+  }, []);
+
+  const selectFade = useCallback((id: string | null) => {
+    setSelectedFade(id);
+    if (id) {
+      setSelectedZoom(null);
+      setSelectedCut(null);
+    }
+  }, []);
+
+  const removeFade = useCallback(() => {
+    setFades((previous) => previous.filter((f) => f.id !== selectedFade));
+    setSelectedFade(null);
+    setRemoveFadeOpen(false);
+  }, [selectedFade]);
 
   /**
    * Moving a trim handle re-clips the cuts to it, so a cut dragged outside the
@@ -897,6 +981,7 @@ export function Clyp() {
       cuts,
       speed,
       zooms,
+      fades,
       placement: soundtrack
         ? {
             offset: soundtrack.offset,
@@ -905,7 +990,7 @@ export function Clyp() {
           }
         : null,
     }),
-    [trim, cuts, speed, zooms, soundtrack],
+    [trim, cuts, speed, zooms, fades, soundtrack],
   );
 
   const restoreEdits = useCallback((next: typeof editState) => {
@@ -913,10 +998,12 @@ export function Clyp() {
     setCuts(next.cuts);
     setSpeed(next.speed);
     setZooms(next.zooms);
+    setFades(next.fades);
     // A selection is a view of the state rather than part of it, and the
-    // region or cut it named may be the one coming back or going away.
+    // region it named may be the one coming back or going away.
     setSelectedZoom(null);
     setSelectedCut(null);
+    setSelectedFade(null);
     if (next.placement) {
       setSoundtrack((previous) =>
         previous ? { ...previous, ...next.placement } : previous,
@@ -1310,6 +1397,7 @@ export function Clyp() {
       cuts,
       speed,
       zooms,
+      fades,
       soundtrack: soundtrack
         ? {
             offset: soundtrack.offset,
@@ -1320,7 +1408,17 @@ export function Clyp() {
     };
     const timer = window.setTimeout(() => writeEdits(record), EDITS_DEBOUNCE);
     return () => window.clearTimeout(timer);
-  }, [restored, media, dimensions, trim, cuts, speed, zooms, soundtrack]);
+  }, [
+    restored,
+    media,
+    dimensions,
+    trim,
+    cuts,
+    speed,
+    zooms,
+    fades,
+    soundtrack,
+  ]);
 
   // Paste anywhere on the page drops an image onto the canvas.
   useEffect(() => {
@@ -1450,6 +1548,7 @@ export function Clyp() {
             trim,
             cuts,
             speed,
+            fades,
             zooms,
             motion,
             audio: options.audio,
@@ -1507,6 +1606,7 @@ export function Clyp() {
       trim,
       cuts,
       zooms,
+      fades,
     ],
   );
 
@@ -1566,6 +1666,12 @@ export function Clyp() {
       const state = aimingRef.current
         ? null
         : zoomAt(zoomsRef.current, video.currentTime, speed, motionRef.current);
+      // The fade rides on the same loop and the same element. Written only on
+      // a change, like the transform, so a still preview costs no style
+      // writes at all.
+      const opacity = `${opacityAt(fadesRef.current, video.currentTime)}`;
+      if (video.style.opacity !== opacity) video.style.opacity = opacity;
+
       const transform = state && state.scale > 1.0001 ? `scale(${state.scale})` : "";
       const origin = state ? `${state.focus.x * 100}% ${state.focus.y * 100}%` : "";
       if (video.style.transform !== transform) video.style.transform = transform;
@@ -1735,6 +1841,8 @@ export function Clyp() {
     setTrim(null);
     setCuts([]);
     setSelectedCut(null);
+    setFades([]);
+    setSelectedFade(null);
     setSpeed(1);
     setZooms([]);
     setSelectedZoom(null);
@@ -2064,6 +2172,7 @@ export function Clyp() {
                               >
                                 <video
                                   ref={videoRef}
+                                  {...{ [EXPORT_MEDIA]: "" }}
                                   src={media.src}
                                   // Silent past 1x, because the export is. See
                                   // `SPEED_OPTIONS`.
@@ -2203,6 +2312,12 @@ export function Clyp() {
               onCutChange={updateCut}
               onCutSelect={selectCut}
               onCutRemove={() => setRemoveCutOpen(true)}
+              fades={fades}
+              selectedFade={selectedFade}
+              onFadeAdd={addFade}
+              onFadeChange={updateFade}
+              onFadeSelect={selectFade}
+              onFadeRemove={() => setRemoveFadeOpen(true)}
               onUndo={history.undo}
               onRedo={history.redo}
               canUndo={history.canUndo}
@@ -2350,6 +2465,15 @@ export function Clyp() {
         description="Every control goes back to its default. Your clip, its trim and its edits are kept."
         confirmLabel="Reset"
         onConfirm={resetStyle}
+      />
+
+      <ConfirmDialog
+        open={removeFadeOpen}
+        onOpenChange={setRemoveFadeOpen}
+        title="Remove this fade?"
+        description="The picture plays at full strength through that stretch again."
+        confirmLabel="Remove"
+        onConfirm={removeFade}
       />
 
       <ConfirmDialog

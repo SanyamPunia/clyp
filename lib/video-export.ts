@@ -16,6 +16,7 @@
 
 import { mixAudio } from "@/lib/audio-mix";
 import type { Cut } from "@/lib/clip-cuts";
+import type { FadeRegion } from "@/lib/clip-fade";
 import type { ZoomRegion } from "@/lib/clip-zoom";
 import type { MotionTrack } from "@/lib/motion";
 import { rasterize } from "@/lib/raster";
@@ -51,6 +52,8 @@ export interface VideoExportRequest {
   speed?: number;
   /** Stretches of the clip that close in on a point of the picture. */
   zooms?: ZoomRegion[];
+  /** Stretches where the picture arrives or leaves. */
+  fades?: FadeRegion[];
   /** The clip's motion track, for the regions that follow. */
   motion?: MotionTrack | null;
   /** Carry the clip's own sound across. Ignored when it has none, or past 1x. */
@@ -155,6 +158,7 @@ export async function exportVideo({
   cuts = [],
   speed = 1,
   zooms = [],
+  fades = [],
   motion = null,
   audio = true,
   soundtrack,
@@ -163,7 +167,10 @@ export async function exportVideo({
   onProgress,
   signal,
 }: VideoExportRequest): Promise<Blob> {
-  const dataUrl = await rasterize(frame, scale);
+  // Only when something fades. With no fade the alpha is 1 throughout and the
+  // media's still is covered exactly as before, so leaving it in keeps every
+  // existing export byte-identical.
+  const dataUrl = await rasterize(frame, scale, { dropMedia: fades.length > 0 });
   const chrome = await createImageBitmap(await (await fetch(dataUrl)).blob());
   // The raster cannot be interrupted, so the earliest a cancel during it can
   // be heard is here, before any encoder is opened.
@@ -199,6 +206,7 @@ export async function exportVideo({
       cuts,
       speed,
       zooms,
+      fades,
       motion,
       audio: clipSound && !mixed,
       mixed: mixed ? planar(mixed) : null,
