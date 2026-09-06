@@ -47,6 +47,37 @@ export const CURVE_PRESETS: { value: string; label: string; curve: Curve }[] = [
   { value: "smooth", label: "Smooth", curve: [0.42, 0, 0.58, 1] },
 ];
 
+/**
+ * The curve a single handle can reach.
+ *
+ * A bezier has two control points, which is two things to drag and more than a
+ * fade needs. Editors put one handle on the ramp itself and bend it, so this
+ * is the symmetric family that handle moves through: both control points at
+ * the same place, offset from the diagonal by `bend`.
+ *
+ * Zero is the straight line. Positive bows the curve above it, which starts
+ * fast and eases to a stop. Negative bows it below, which starts slow.
+ *
+ * The graph in the dialog still moves both points independently, so a curve
+ * shaped there and then bent on the lane becomes symmetric again. That is the
+ * cost of one handle, and it is why the dialog is still there.
+ */
+export function bendCurve(bend: number): Curve {
+  const d = Math.min(Math.max(bend, -0.5), 0.5);
+  return [0.5 - d, 0.5 + d, 0.5 - d, 0.5 + d];
+}
+
+/**
+ * How bent a curve is, which is what the lane's handle sits at.
+ *
+ * Exact for anything `bendCurve` made. A curve shaped in the dialog need not
+ * be symmetric at all, so this projects it onto the family by averaging the
+ * two control points, which puts the handle where the ramp actually runs.
+ */
+export function bendOf(curve: Curve): number {
+  return 0.5 - (curve[0] + curve[2]) / 2;
+}
+
 const clamp = (value: number, low: number, high: number) =>
   Math.min(Math.max(value, low), high);
 

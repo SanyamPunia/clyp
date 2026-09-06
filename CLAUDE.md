@@ -814,8 +814,28 @@ them is byte-identical to before.
 - **The curve is a cubic bezier, the same four numbers CSS takes.** `ease`
   solves x for t by Newton-Raphson and then reads y, since a bezier is
   parametric and cannot be evaluated at x directly.
+- **The curve is bent on the tile itself, which is where an editor puts it.**
+  The block draws its own ramp from its own four numbers, so the direction and
+  the shape are one thing and neither needs a label, and a single handle rides
+  the line at its midpoint. The lane is `h-8` rather than the zoom lane's
+  `h-7` for it: a 20px block has no room for a curve to be read, let alone
+  grabbed.
+  - **One handle, not two.** A bezier has two control points, which is more
+    than a fade needs by hand, so the handle moves `bendCurve`'s symmetric
+    family: both points offset from the diagonal by one number. `bendOf`
+    projects any curve back onto it by averaging the two, which puts the
+    handle where the ramp actually runs even for one shaped in the dialog.
+  - **Up always means the ramp holds high**, which for a fade in is arriving
+    fast and for a fade out is leaving late, so the two are read the same way
+    off the shape rather than needing the direction in mind.
+  - The fill is drawn from the line down to the floor, so its height is
+    exactly how opaque the picture is. SVG counts y downwards, which is why
+    `rampY` is the level upside down.
 - **`components/curve-editor.tsx` is the graph, in a dialog, and it holds the
-  presets too.** Naming the four presets as chips in the bottom row cost about
+  presets too.** It is the precise route rather than the usual one: both
+  control points move independently there, and a curve shaped that way becomes
+  symmetric again the moment the lane's handle is dragged. That is the cost of
+  one handle and the reason the dialog stays. Naming the four presets as chips in the bottom row cost about
   260px and put the fade's group beside the actions pill as a second long bar,
   which is exactly the congestion the actions pill was collapsed to fix. The
   row keeps the shape as a glyph drawn from the fade's own four numbers, so

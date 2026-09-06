@@ -6,6 +6,7 @@ import {
   type FadeRegion,
   DEFAULT_FADE_LENGTH,
   MIN_FADE,
+  bendCurve,
   curveName,
   ease,
   opacityAt,
@@ -194,5 +195,49 @@ describe("roomAt and roomFor", () => {
       fade(7, 8, "in", LINEAR, "c"),
     ];
     expect(roomFor(fades, "b", 10)).toEqual({ lo: 2, hi: 7 });
+  });
+});
+
+describe("bendCurve", () => {
+  it("is the straight line at zero", () => {
+    const curve = bendCurve(0);
+    for (let x = 0; x <= 1; x += 0.05) {
+      expect(ease(curve, x)).toBeCloseTo(x, 4);
+    }
+  });
+
+  it("bows above the diagonal when bent up, which starts fast", () => {
+    const curve = bendCurve(0.4);
+    expect(ease(curve, 0.25)).toBeGreaterThan(0.25);
+    expect(ease(curve, 0.5)).toBeGreaterThan(0.5);
+  });
+
+  it("bows below when bent down, which starts slow", () => {
+    const curve = bendCurve(-0.4);
+    expect(ease(curve, 0.25)).toBeLessThan(0.25);
+    expect(ease(curve, 0.5)).toBeLessThan(0.5);
+  });
+
+  it("clamps the bend, so a drag off the lane cannot leave the unit square", () => {
+    for (const bend of [-5, -0.5, 0, 0.5, 5]) {
+      for (const n of bendCurve(bend)) {
+        expect(n).toBeGreaterThanOrEqual(0);
+        expect(n).toBeLessThanOrEqual(1);
+      }
+    }
+  });
+
+  it("stays a usable curve at every bend", () => {
+    for (let bend = -0.5; bend <= 0.5; bend += 0.05) {
+      const curve = bendCurve(bend);
+      let previous = -1;
+      for (let x = 0; x <= 1; x += 0.05) {
+        const y = ease(curve, x);
+        expect(y).toBeGreaterThanOrEqual(previous - 1e-6);
+        expect(y).toBeGreaterThanOrEqual(0);
+        expect(y).toBeLessThanOrEqual(1);
+        previous = y;
+      }
+    }
   });
 });

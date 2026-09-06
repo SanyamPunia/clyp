@@ -38,7 +38,10 @@ import {
   type Curve,
   type FadeRegion,
   MIN_FADE,
+  bendCurve,
+  bendOf,
   curveName,
+  ease,
   roomFor as roomForFade,
 } from "@/lib/clip-fade";
 import {
@@ -99,6 +102,37 @@ const FRAME = 1 / EDIT_FPS;
 const COARSE_STEP = 1;
 
 const snap = (seconds: number) => Math.round(seconds / FRAME) * FRAME;
+
+/*
+ * The fade's ramp, in a 0 to 100 box the block stretches to.
+ *
+ * `y` is the level upside down, since SVG counts down: a fill from the line to
+ * the bottom is then exactly as tall as the picture is opaque, which is how a
+ * fade is drawn everywhere it is drawn at all.
+ */
+const rampY = (fade: FadeRegion, x: number) => {
+  const eased = ease(fade.curve, x);
+  return (1 - (fade.kind === "in" ? eased : 1 - eased)) * 100;
+};
+
+/** The line itself, as a bezier in that box. */
+function rampLine(fade: FadeRegion): string {
+  const [x1, y1, x2, y2] = fade.curve;
+  const flip = (y: number) => (fade.kind === "in" ? 1 - y : y);
+  return [
+    `M 0,${fade.kind === "in" ? 100 : 0}`,
+    `C ${x1 * 100},${flip(y1) * 100}`,
+    `${x2 * 100},${flip(y2) * 100}`,
+    `100,${fade.kind === "in" ? 0 : 100}`,
+  ].join(" ");
+}
+
+/** The same line closed to the floor, which is the level as an area. */
+const rampPath = (fade: FadeRegion) =>
+  `${rampLine(fade)} L ${fade.kind === "in" ? 100 : 0},100 Z`;
+
+/** Where the handle sits on it, as a fraction from the top. */
+const rampMid = (fade: FadeRegion) => rampY(fade, 0.5) / 100;
 
 /** Which part of a lane instance a gesture is moving. */
 type LanePart = "body" | "head" | "tail";
@@ -316,6 +350,7 @@ export function TrimBar({
   // it still costs no render per frame.
   const [laneWidth, setLaneWidth] = useState(0);
   const laneRef = useRef<HTMLDivElement>(null);
+  const fadeLaneRef = useRef<HTMLDivElement>(null);
   const regionRef = useRef<HTMLDivElement>(null);
   const playheadRef = useRef<HTMLDivElement>(null);
   const clockRef = useRef<HTMLSpanElement>(null);
@@ -1086,6 +1121,44 @@ export function TrimBar({
     [disabled, onFadeChange, onFadeSelect, onPlayback, onSeek, selectedFade, shiftFade, timeAt],
   );
 
+  /**
+   * Bends the ramp by dragging its handle.
+   *
+   * The pointer's height in the lane is the level it is asking for, and the
+   * bend follows it: up is a ramp that holds high, which for a fade in means
+   * arriving fast and for a fade out means leaving late, so the two are read
+   * the same way off the shape.
+   */
+  const bendFade = useCallback(
+    (fade: FadeRegion) => (event: React.PointerEvent<HTMLDivElement>) => {
+      if (disabled) return;
+      event.preventDefault();
+      event.stopPropagation();
+      onFadeSelect(fade.id);
+      event.currentTarget.setPointerCapture(event.pointerId);
+      onPlayback(false);
+
+      const lane = fadeLaneRef.current;
+      if (!lane) return;
+      const rect = lane.getBoundingClientRect();
+
+      const move = (moved: PointerEvent) => {
+        const from = clamp((moved.clientY - rect.top) / rect.height, 0, 1);
+        const level = fade.kind === "in" ? 1 - from : from;
+        onFadeChange({ ...fade, curve: bendCurve(level - 0.5) });
+      };
+      const release = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", release);
+        window.removeEventListener("pointercancel", release);
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", release);
+      window.addEventListener("pointercancel", release);
+    },
+    [disabled, onFadeChange, onFadeSelect, onPlayback],
+  );
+
   /** A cut moved by `by` seconds, bounded and snapped. `shiftZoom`'s twin. */
   const shiftCut = useCallback(
     (cut: Cut, part: LanePart, by: number): Cut => {
@@ -1609,9 +1682,13 @@ export function TrimBar({
                 feature nobody is using is a bar that is too tall by default.
                 Each block is drawn as the ramp it is, so which way it runs is
                 read off the lane rather than off a label. */}
+            {/* Taller than the zoom's lane, because the ramp is drawn in it
+                and bent by hand. A 20px block has no room for a curve to be
+                read, let alone grabbed. */}
             {fades.length > 0 && (
               <div
-                className="relative mt-1 h-5"
+                ref={fadeLaneRef}
+                className="relative mt-1 h-8"
                 onPointerDown={() => onFadeSelect(null)}
               >
                 {fades.map((fade) => {
@@ -1633,19 +1710,82 @@ export function TrimBar({
                           onToggle: () => onFadeSelect(selected ? null : fade.id),
                         })}
                         className={cn(
-                          "absolute inset-y-0 cursor-grab overflow-hidden rounded-md ring-1 transition-colors duration-150 active:cursor-grabbing",
+                          "absolute inset-y-0 cursor-grab overflow-hidden rounded-md bg-track ring-1 transition-colors duration-150 active:cursor-grabbing",
                           "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
                           selected ? "ring-brand" : "ring-stroke",
                         )}
                         style={{
                           left: `calc(${at(fade.start / duration)} + ${INSET}px)`,
                           width: at((fade.end - fade.start) / duration),
-                          // The ramp itself, so the direction needs no label.
-                          backgroundImage: `linear-gradient(to right, ${
-                            fade.kind === "in"
-                              ? "transparent, var(--track-active)"
-                              : "var(--track-active), transparent"
-                          })`,
+                        }}
+                      >
+                        {/* The ramp, drawn from the fade's own curve. It is
+                            the direction and the shape at once, so neither
+                            needs a label, and it is the thing the handle
+                            below bends. `preserveAspectRatio` is off so the
+                            unit square stretches to whatever width the block
+                            has on the lane. */}
+                        <svg
+                          viewBox="0 0 100 100"
+                          preserveAspectRatio="none"
+                          aria-hidden="true"
+                          className="absolute inset-0 size-full"
+                        >
+                          <path
+                            d={rampPath(fade)}
+                            fill="var(--track-active)"
+                            fillOpacity={0.55}
+                            stroke="none"
+                          />
+                          <path
+                            d={rampLine(fade)}
+                            fill="none"
+                            stroke={
+                              selected ? "var(--brand)" : "var(--stroke-strong)"
+                            }
+                            strokeWidth={2}
+                            vectorEffect="non-scaling-stroke"
+                          />
+                        </svg>
+                      </div>
+
+                      {/* One handle, on the ramp, the way an editor puts it
+                          there. A bezier has two control points, which is more
+                          than a fade needs by hand: this moves the symmetric
+                          family, and the dialog is still where both points
+                          move independently. */}
+                      <div
+                        role="slider"
+                        tabIndex={selected ? 0 : -1}
+                        aria-label="Fade curve"
+                        aria-valuemin={-50}
+                        aria-valuemax={50}
+                        aria-valuenow={Math.round(bendOf(fade.curve) * 100)}
+                        onPointerDown={bendFade(fade)}
+                        onKeyDown={(event) => {
+                          const step = event.shiftKey ? 0.1 : 0.02;
+                          const by =
+                            event.key === "ArrowUp"
+                              ? step
+                              : event.key === "ArrowDown"
+                                ? -step
+                                : 0;
+                          if (!by) return;
+                          event.preventDefault();
+                          onFadeChange({
+                            ...fade,
+                            curve: bendCurve(bendOf(fade.curve) + by),
+                          });
+                        }}
+                        className={cn(
+                          "absolute size-3 -translate-x-1/2 -translate-y-1/2 cursor-ns-resize rounded-full",
+                          "border-2 border-brand bg-panel transition-opacity duration-150",
+                          "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+                          selected ? "opacity-100" : "pointer-events-none opacity-0",
+                        )}
+                        style={{
+                          left: `calc(${at(fade.start / duration)} + ${INSET}px + ${at((fade.end - fade.start) / duration)} / 2)`,
+                          top: `${rampMid(fade) * 100}%`,
                         }}
                       />
                       <LaneEdge
