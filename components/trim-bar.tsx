@@ -37,7 +37,6 @@ import {
 import {
   type Curve,
   type FadeRegion,
-  CURVE_PRESETS,
   MIN_FADE,
   curveName,
   roomFor as roomForFade,
@@ -192,6 +191,8 @@ interface TrimBarProps {
   onFadeChange: (fade: FadeRegion) => void;
   onFadeSelect: (id: string | null) => void;
   onFadeRemove: () => void;
+  /** Opens the curve editor for the selected fade. */
+  onFadeCurveEdit: () => void;
   onCutChange: (cut: Cut) => void;
   onCutSelect: (id: string | null) => void;
   onCutRemove: () => void;
@@ -277,6 +278,7 @@ export function TrimBar({
   onFadeChange,
   onFadeSelect,
   onFadeRemove,
+  onFadeCurveEdit,
   onCutChange,
   onCutSelect,
   onCutRemove,
@@ -1991,23 +1993,18 @@ export function TrimBar({
                         </Chip>
                       ))}
                     </ChipGroup>
-                    <span className="mx-1 h-4 w-px shrink-0 bg-stroke" aria-hidden="true" />
-                    <ChipGroup label="Fade curve">
-                      {CURVE_PRESETS.map((preset) => (
-                        <Chip
-                          key={preset.value}
-                          active={curveName(selectedRamp.curve) === preset.value}
-                          onClick={() =>
-                            onFadeChange({
-                              ...selectedRamp,
-                              curve: preset.curve as Curve,
-                            })
-                          }
-                        >
-                          {preset.label}
-                        </Chip>
-                      ))}
-                    </ChipGroup>
+                    {/* The curve as itself, not as four words. Naming the
+                        presets in the row cost about 260px and put the fade's
+                        group beside the actions pill as a second long bar,
+                        which is the congestion the actions pill was collapsed
+                        to fix. The shape is the label, and the editor behind
+                        it holds the presets and the graph together. */}
+                    <Transport
+                      label={`Edit the curve (${curveName(selectedRamp.curve) ?? "custom"})`}
+                      onClick={onFadeCurveEdit}
+                    >
+                      <CurveThumb curve={selectedRamp.curve} />
+                    </Transport>
                     <Transport label="Remove the fade" onClick={onFadeRemove}>
                       <XIcon className="size-4" aria-hidden="true" />
                     </Transport>
@@ -2261,6 +2258,36 @@ function CutEdge({
         )}
       />
     </div>
+  );
+}
+
+/**
+ * The curve, small enough to be a glyph.
+ *
+ * Drawn from the same four numbers the fade carries, so the button says which
+ * curve is on without a word of text and without a second source for it.
+ */
+function CurveThumb({ curve }: { curve: Curve }) {
+  const [x1, y1, x2, y2] = curve;
+  const S = 12;
+  const P = 2;
+  const at = (x: number, y: number) => `${P + x * S},${P + (1 - y) * S}`;
+  return (
+    <svg
+      width={S + P * 2}
+      height={S + P * 2}
+      viewBox={`0 0 ${S + P * 2} ${S + P * 2}`}
+      aria-hidden="true"
+      className="shrink-0"
+    >
+      <path
+        d={`M ${at(0, 0)} C ${at(x1, y1)} ${at(x2, y2)} ${at(1, 1)}`}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.75}
+        strokeLinecap="round"
+      />
+    </svg>
   );
 }
 

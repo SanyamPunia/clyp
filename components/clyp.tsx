@@ -30,6 +30,14 @@ import { TrimBar } from "@/components/trim-bar";
 import { UploadCard } from "@/components/upload-card";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { CurveEditor } from "@/components/curve-editor";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Dimensions } from "@/components/ui/dimensions";
 import { ScrollFade } from "@/components/ui/scroll-fade";
 import {
@@ -312,6 +320,7 @@ export function Clyp() {
   const [removeCutOpen, setRemoveCutOpen] = useState(false);
   const [resetStyleOpen, setResetStyleOpen] = useState(false);
   const [removeFadeOpen, setRemoveFadeOpen] = useState(false);
+  const [curveOpen, setCurveOpen] = useState(false);
   /**
    * A copied lane instance, waiting to be pasted.
    *
@@ -534,6 +543,7 @@ export function Clyp() {
   const caption = styleOptions.caption.trim();
   const zoomed = zoom !== 1 && frameSize.width > 0;
   const selectedRegion = zooms.find((r) => r.id === selectedZoom) ?? null;
+  const selectedRamp = fades.find((f) => f.id === selectedFade) ?? null;
 
   useEffect(() => {
     zoomsRef.current = zooms;
@@ -2318,6 +2328,7 @@ export function Clyp() {
               onFadeChange={updateFade}
               onFadeSelect={selectFade}
               onFadeRemove={() => setRemoveFadeOpen(true)}
+              onFadeCurveEdit={() => setCurveOpen(true)}
               onUndo={history.undo}
               onRedo={history.redo}
               canUndo={history.canUndo}
@@ -2466,6 +2477,27 @@ export function Clyp() {
         confirmLabel="Reset"
         onConfirm={resetStyle}
       />
+
+      {/* The curve, as the graph it is, with the presets beside it. At the
+          page level like every other modal, and the row behind it keeps only
+          the shape as a glyph. */}
+      <Dialog open={curveOpen} onOpenChange={setCurveOpen}>
+        <DialogContent className="sm:max-w-[320px]">
+          <DialogHeader>
+            <DialogTitle>Fade curve</DialogTitle>
+            <DialogDescription className="sr-only">
+              Drag either control point to shape how the fade runs, or pick a
+              preset.
+            </DialogDescription>
+          </DialogHeader>
+          {selectedRamp && (
+            <CurveEditor
+              curve={selectedRamp.curve}
+              onChange={(curve) => updateFade({ ...selectedRamp, curve })}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
 
       <ConfirmDialog
         open={removeFadeOpen}

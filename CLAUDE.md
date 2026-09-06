@@ -813,7 +813,20 @@ them is byte-identical to before.
   region ends, and a fade in after it brings the picture back.
 - **The curve is a cubic bezier, the same four numbers CSS takes.** `ease`
   solves x for t by Newton-Raphson and then reads y, since a bezier is
-  parametric and cannot be evaluated at x directly. Four presets have chips.
+  parametric and cannot be evaluated at x directly.
+- **`components/curve-editor.tsx` is the graph, in a dialog, and it holds the
+  presets too.** Naming the four presets as chips in the bottom row cost about
+  260px and put the fade's group beside the actions pill as a second long bar,
+  which is exactly the congestion the actions pill was collapsed to fix. The
+  row keeps the shape as a glyph drawn from the fade's own four numbers, so
+  there is no second source for what the button shows.
+  - **The handles are real elements over the drawing, not SVG circles**, so
+    they focus and tab like any other control and answer the arrow keys. Both
+    sit in one box of the graph's own size, so a handle's position is the same
+    number the path was drawn with.
+  - **No numeric readout.** The four numbers are not what anyone is choosing:
+    the shape is. The handles carry their values in their accessible names
+    instead, where a reader who cannot see the line still gets them.
 - **A block is drawn as the ramp it is**, a gradient running the direction the
   fade runs, so which way it goes is read off the lane rather than off a label.
 - **The lane is mounted only when there are fades**, the same as the zoom
