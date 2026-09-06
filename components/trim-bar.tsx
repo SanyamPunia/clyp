@@ -6,6 +6,7 @@ import {
   ChevronDownIcon,
   ChevronUpIcon,
   GaugeIcon,
+  LayersIcon,
   Loader2Icon,
   MousePointer2Icon,
   Music2Icon,
@@ -2146,6 +2147,25 @@ export function TrimBar({
                       onClick={onFadeCurveEdit}
                     >
                       <CurveThumb curve={selectedRamp.curve} />
+                    </Transport>
+                    {/* What the fade takes with it. Off, the picture goes and
+                        the background stays, which is what a fade over a
+                        gradient usually wants. On, the whole frame goes. */}
+                    <Transport
+                      label={
+                        selectedRamp.whole
+                          ? "Fade the picture only"
+                          : "Fade the background too"
+                      }
+                      pressed={Boolean(selectedRamp.whole)}
+                      onClick={() =>
+                        onFadeChange({
+                          ...selectedRamp,
+                          whole: !selectedRamp.whole,
+                        })
+                      }
+                    >
+                      <LayersIcon className="size-4" aria-hidden="true" />
                     </Transport>
                     <Transport label="Remove the fade" onClick={onFadeRemove}>
                       <XIcon className="size-4" aria-hidden="true" />

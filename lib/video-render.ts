@@ -34,7 +34,7 @@ import {
 
 import { type ZoomRegion, sourceRect, zoomAt } from "@/lib/clip-zoom";
 import { type Cut, keptSeconds, keptSegments, outputAt } from "@/lib/clip-cuts";
-import { type FadeRegion, opacityAt } from "@/lib/clip-fade";
+import { type FadeRegion, fadeAt } from "@/lib/clip-fade";
 import type { MotionTrack } from "@/lib/motion";
 import type { Trim } from "@/types/screenshot";
 
@@ -225,12 +225,14 @@ export async function renderVideo({
           continue;
         }
 
+        const fade = fadeAt(fades, sample.timestamp);
+
         ctx.drawImage(chrome, 0, 0);
         ctx.save();
-        // Under a fade the chrome shows through, which is the background: the
-        // media was left out of the raster for exactly this. At 1 the draw is
-        // opaque and covers the box as it always did.
-        ctx.globalAlpha = opacityAt(fades, sample.timestamp);
+        // Under a picture-only fade the chrome shows through, which is the
+        // background: the media was left out of the raster for exactly this.
+        // At 1 the draw is opaque and covers the box as it always did.
+        ctx.globalAlpha = fade.media;
         ctx.beginPath();
         ctx.roundRect(box.x, box.y, box.width, box.height, radii);
         ctx.clip();
@@ -259,6 +261,18 @@ export async function renderVideo({
           sample.draw(ctx, box.x, box.y, box.width, box.height);
         }
         ctx.restore();
+
+        // A whole-frame fade is a veil over the finished composite rather
+        // than an opacity on each layer, which would show the background
+        // through the picture on the way down. Black, because that is the
+        // only thing an MP4 fades to.
+        if (fade.veil > 0) {
+          ctx.save();
+          ctx.globalAlpha = fade.veil;
+          ctx.fillStyle = "#000";
+          ctx.fillRect(0, 0, width, height);
+          ctx.restore();
+        }
 
         const span = ((sample.duration || 0) + carried) / speed;
         carried = 0;

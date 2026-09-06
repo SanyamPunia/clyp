@@ -79,11 +79,11 @@ import { useEditHistory } from "@/components/use-edit-history";
 import {
   type FadeRegion,
   DEFAULT_CURVE,
+  fadeAt,
   newFadeId,
-  opacityAt,
   placeFade,
 } from "@/lib/clip-fade";
-import { EXPORT_MEDIA, rasterize } from "@/lib/raster";
+import { EXPORT_IGNORE, EXPORT_MEDIA, rasterize } from "@/lib/raster";
 import {
   DEFAULT_SOLID_COLOR,
   defaultCustomGradient,
@@ -427,6 +427,7 @@ export function Clyp() {
   const resetHistoryRef = useRef<(() => void) | null>(null);
   /** The clip's box: what holds still, carries the radius, and is measured. */
   const clipBoxRef = useRef<HTMLDivElement>(null);
+  const veilRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   // For the zoom's frame loop, which is bound once per clip and would
   // otherwise close over the regions it mounted with. Written in an effect.
@@ -1676,11 +1677,16 @@ export function Clyp() {
       const state = aimingRef.current
         ? null
         : zoomAt(zoomsRef.current, video.currentTime, speed, motionRef.current);
-      // The fade rides on the same loop and the same element. Written only on
-      // a change, like the transform, so a still preview costs no style
-      // writes at all.
-      const opacity = `${opacityAt(fadesRef.current, video.currentTime)}`;
+      // The fade rides on the same loop. Written only on a change, like the
+      // transform, so a still preview costs no style writes at all. A
+      // whole-frame fade veils the composite instead of dimming the picture,
+      // which is what the export does with it too.
+      const fade = fadeAt(fadesRef.current, video.currentTime);
+      const opacity = `${fade.media}`;
       if (video.style.opacity !== opacity) video.style.opacity = opacity;
+      const veil = veilRef.current;
+      const shade = `${fade.veil}`;
+      if (veil && veil.style.opacity !== shade) veil.style.opacity = shade;
 
       const transform = state && state.scale > 1.0001 ? `scale(${state.scale})` : "";
       const origin = state ? `${state.focus.x * 100}% ${state.focus.y * 100}%` : "";
@@ -2083,11 +2089,22 @@ export function Clyp() {
                     the image, not on the ref. */}
                 <div
                   ref={screenshotRef}
-                  className="artwork-ease w-max overflow-hidden transition-[border-radius]"
+                  className="artwork-ease relative w-max overflow-hidden transition-[border-radius]"
                   style={{
                     borderRadius: `${styleOptions.outerRadius}px`,
                   }}
                 >
+                  {/* A whole-frame fade, as the veil the export draws. It is
+                      inside the frame so a still of one matches, and carries
+                      the ignore attribute so the video's chrome raster, which
+                      is taken once, does not bake a single instant of it. */}
+                  <div
+                    ref={veilRef}
+                    aria-hidden="true"
+                    {...{ [EXPORT_IGNORE]: "" }}
+                    className="pointer-events-none absolute inset-0 z-40 bg-black"
+                    style={{ opacity: 0 }}
+                  />
                   <GradientBackground
                     css={gradientCss}
                     previousCss={previousGradientCss}

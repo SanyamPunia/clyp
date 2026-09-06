@@ -27,6 +27,19 @@ export interface FadeRegion {
   end: number;
   kind: FadeKind;
   curve: Curve;
+  /**
+   * Take the background with it. Off, only the picture fades and what shows
+   * through is the background. On, the whole frame goes.
+   */
+  whole?: boolean;
+}
+
+/** What a fade is doing at one instant, split by what it is doing it to. */
+export interface FadeState {
+  /** The picture's own opacity. */
+  media: number;
+  /** How black the whole frame is veiled, 0 to 1. */
+  veil: number;
 }
 
 /** The shortest fade worth having, in source seconds. */
@@ -164,6 +177,42 @@ export function opacityAt(
     if (fade.end <= time && (!last || fade.end > last.end)) last = fade;
   }
   return last ? (last.kind === "in" ? 1 : 0) : 1;
+}
+
+/** The fade governing `time`: the one covering it, else the last to finish. */
+function governing(
+  fades: readonly FadeRegion[],
+  time: number,
+): FadeRegion | null {
+  const covering = fades.find((f) => time >= f.start && time < f.end);
+  if (covering) return covering;
+
+  let last: FadeRegion | null = null;
+  for (const fade of fades) {
+    if (fade.end <= time && (!last || fade.end > last.end)) last = fade;
+  }
+  return last;
+}
+
+/**
+ * What to draw at `time`, split by what the fade is applied to.
+ *
+ * **A whole-frame fade is a black veil over the finished composite, not an
+ * opacity on each layer.** Fading the chrome and the picture separately and
+ * then compositing them leaves the background showing through the picture on
+ * the way down, which is not a fade of the frame but a cross-dissolve between
+ * its parts. Drawing everything solid and then veiling it is the only version
+ * that darkens as one thing, and black is the only thing an MP4 can fade to.
+ */
+export function fadeAt(
+  fades: readonly FadeRegion[],
+  time: number,
+): FadeState {
+  const opacity = opacityAt(fades, time);
+  const fade = governing(fades, time);
+  return fade?.whole
+    ? { media: 1, veil: 1 - opacity }
+    : { media: opacity, veil: 0 };
 }
 
 /** The free stretch around `time`, between its neighbours, or null inside one. */

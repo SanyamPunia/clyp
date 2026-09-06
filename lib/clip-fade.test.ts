@@ -10,6 +10,7 @@ import {
   bendOf,
   curveName,
   ease,
+  fadeAt,
   opacityAt,
   placeFade,
   roomAt,
@@ -266,3 +267,36 @@ describe("bendCurve", () => {
   });
 });
 
+describe("fadeAt", () => {
+  it("fades the picture alone by default", () => {
+    const fades = [fade(0, 2, "in")];
+    expect(fadeAt(fades, 1)).toEqual({ media: 0.5, veil: 0 });
+  });
+
+  it("veils the whole frame instead when asked to", () => {
+    const fades = [{ ...fade(0, 2, "in"), whole: true }];
+    // The picture stays solid and the composite is darkened over it, which is
+    // the only version that goes down as one thing.
+    expect(fadeAt(fades, 1)).toEqual({ media: 1, veil: 0.5 });
+  });
+
+  it("holds the veil after a whole-frame fade out", () => {
+    const fades = [{ ...fade(1, 2, "out"), whole: true }];
+    expect(fadeAt(fades, 5)).toEqual({ media: 1, veil: 1 });
+  });
+
+  it("is nothing at all where no fade governs", () => {
+    expect(fadeAt([], 3)).toEqual({ media: 1, veil: 0 });
+  });
+
+  it("takes the mode from whichever fade governs the instant", () => {
+    const fades = [
+      { ...fade(0, 1, "out"), whole: true },
+      fade(3, 4, "in", LINEAR, "b"),
+    ];
+    // Between them the whole-frame one still holds.
+    expect(fadeAt(fades, 2).veil).toBe(1);
+    // Inside the second, the picture-only rule applies again.
+    expect(fadeAt(fades, 3.5)).toEqual({ media: 0.5, veil: 0 });
+  });
+});

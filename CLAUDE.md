@@ -858,6 +858,24 @@ them is byte-identical to before.
 - **The lane is mounted only when there are fades**, the same as the zoom
   lane. A bar that grows a row for a feature nobody is using is a bar that is
   too tall by default.
+- **A fade takes the background with it only when told to.** Off, the picture
+  goes and what shows through is the background, which is what a fade over a
+  gradient usually wants. On, the whole frame goes.
+  - **A whole-frame fade is a black veil over the finished composite, not an
+    opacity on each layer.** Fading the chrome and the picture separately and
+    then compositing them leaves the background showing through the picture on
+    the way down, which is a cross-dissolve between the parts rather than a
+    fade of the frame. Drawing everything solid and veiling it is the only
+    version that darkens as one thing, and black is the only thing an MP4
+    fades to.
+  - The preview draws the same veil, inside the frame so a still of one
+    matches, carrying `EXPORT_IGNORE` so the video's chrome raster, taken
+    once, does not bake a single instant of it.
+
+  Verified through the export with the background fade on: at 0.03s the
+  padding and the picture both read pure black, at 0.3s the gradient is dimmed
+  to [65,90,108] and the picture to [121,12,1], and at 1.5s both are back to
+  full strength.
 - The sound is not ramped. A fade is the picture only, and a fade to silence
   would need the ramp in both audio paths.
 
