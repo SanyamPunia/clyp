@@ -499,7 +499,6 @@ export function TrimBar({
 
       // Paused for the drag, or the frame under the handle is gone before it
       // can be read, which is the whole point of dragging one.
-      const resume = video.current ? !video.current.paused : false;
       onPlayback(false);
       event.currentTarget.setPointerCapture(event.pointerId);
 
@@ -525,14 +524,13 @@ export function TrimBar({
         window.removeEventListener("pointermove", move);
         window.removeEventListener("pointerup", release);
         window.removeEventListener("pointercancel", release);
-        if (resume) onPlayback(true);
       };
 
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", release);
       window.addEventListener("pointercancel", release);
     },
-    [disabled, onChange, onPlayback, onSeek, timeAt, video],
+    [disabled, onChange, onPlayback, onSeek, timeAt],
   );
 
   const nudge = useCallback(
@@ -590,7 +588,6 @@ export function TrimBar({
 
       // Paused for the drag. Playback fights a scrub for the same clock, and
       // what comes out is the video stuttering rather than being moved.
-      const resume = video.current ? !video.current.paused : false;
       onPlayback(false);
 
       const to = (clientX: number) => {
@@ -612,14 +609,13 @@ export function TrimBar({
         window.removeEventListener("pointermove", move);
         window.removeEventListener("pointerup", release);
         window.removeEventListener("pointercancel", release);
-        if (resume) onPlayback(true);
       };
 
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", release);
       window.addEventListener("pointercancel", release);
     },
-    [disabled, onCutSelect, onPlayback, onSeek, timeAt, video],
+    [disabled, onCutSelect, onPlayback, onSeek, timeAt],
   );
 
   /**
@@ -743,7 +739,6 @@ export function TrimBar({
         // Paused for the drag, like everything else dragged on these lanes,
         // so the sound is placed against a still picture and the two are not
         // both moving at once.
-        const resume = video.current ? !video.current.paused : false;
         onPlayback(false);
 
         const origin = timeAt(event.clientX);
@@ -825,7 +820,6 @@ export function TrimBar({
           window.removeEventListener("pointermove", move);
           window.removeEventListener("pointerup", release);
           window.removeEventListener("pointercancel", release);
-          if (resume) onPlayback(true);
         };
 
         window.addEventListener("pointermove", move);
@@ -840,7 +834,6 @@ export function TrimBar({
       soundtrack,
       speed,
       timeAt,
-      video,
     ],
   );
 
@@ -900,7 +893,6 @@ export function TrimBar({
         onZoomSelect(region.id);
         event.currentTarget.setPointerCapture(event.pointerId);
 
-        const resume = video.current ? !video.current.paused : false;
         onPlayback(false);
 
         const origin = timeAt(event.clientX);
@@ -925,7 +917,6 @@ export function TrimBar({
           window.removeEventListener("pointerup", release);
           window.removeEventListener("pointercancel", release);
           if (!moved && wasSelected) onZoomSelect(null);
-          if (resume) onPlayback(true);
         };
 
         window.addEventListener("pointermove", move);
@@ -941,7 +932,6 @@ export function TrimBar({
       selectedZoom,
       shiftZoom,
       timeAt,
-      video,
     ],
   );
 
@@ -1050,7 +1040,6 @@ export function TrimBar({
         onCutSelect(cut.id);
         event.currentTarget.setPointerCapture(event.pointerId);
 
-        const resume = video.current ? !video.current.paused : false;
         onPlayback(false);
 
         const origin = timeAt(event.clientX);
@@ -1075,7 +1064,6 @@ export function TrimBar({
           window.removeEventListener("pointerup", release);
           window.removeEventListener("pointercancel", release);
           if (!moved && wasSelected) onCutSelect(null);
-          if (resume) onPlayback(true);
         };
 
         window.addEventListener("pointermove", move);
@@ -1091,7 +1079,6 @@ export function TrimBar({
       selectedCut,
       shiftCut,
       timeAt,
-      video,
     ],
   );
 

@@ -467,15 +467,23 @@ have to agree about where a second is.
 - **The loop's mirror refs are written in an effect, never during render.**
   `react-hooks/refs` rejects the render-time write, and the frame loop is bound
   once, so without the mirror it closes over the trim the bar mounted with.
-- **Dragging anything on these lanes pauses the preview and resumes on
-  release** if it was playing: a trim handle, a zoom region or its edges, a
+- **Dragging anything on these lanes pauses the preview, and leaves it
+  paused**: a trim handle, a zoom region or its edges, a cut or its edges, a
   soundtrack region or its edges, and the zoom's aim marker on the picture.
   Reading the frame under a handle is the whole point of dragging one, and it
-  is gone before you can read it otherwise. A zoom edge also moves the
-  playhead to itself, clamped into the trim so the loop does not fight it,
-  since the frame under the edge is what decides where a zoom should start or
-  stop. A soundtrack drag only pauses, since sound is placed against the
-  picture rather than a frame.
+  is gone before you can read it otherwise.
+
+  **The resume on release was a bug wearing the pause's own reasoning.** The
+  pause exists so the frame can be read, and resuming the moment the pointer
+  lifts takes that frame away again. Worse, a scrub is almost always aimed at
+  doing something at that point, and the picture running off before the next
+  press is the exact opposite of what the gesture asked for. Space is one key
+  away when playback is wanted back.
+
+  A zoom edge also moves the playhead to itself, clamped into the trim so the
+  loop does not fight it, since the frame under the edge is what decides where
+  a zoom should start or stop. A soundtrack drag moves no playhead, since
+  sound is placed against the picture rather than a frame.
 - **A sample's timestamp is absolute, so the export offsets it.** A trim
   starting at six seconds would otherwise write an MP4 whose first frame is at
   six seconds, which is six seconds of nothing at the front. Verified: trimming
