@@ -2500,7 +2500,9 @@ export function Clyp() {
           page level like every other modal, and the row behind it keeps only
           the shape as a glyph. */}
       <Dialog open={curveOpen} onOpenChange={setCurveOpen}>
-        <DialogContent className="sm:max-w-[320px]">
+        {/* Wide enough for the four presets on one line, which is the width
+            the export modal already uses. At 320px they wrapped onto two. */}
+        <DialogContent className="sm:max-w-[420px]">
           <DialogHeader>
             <DialogTitle>Fade curve</DialogTitle>
             <DialogDescription className="sr-only">

@@ -175,7 +175,9 @@ export function CurveEditor({
         ))}
       </div>
 
-      <div className="flex flex-wrap items-center justify-center gap-1">
+      {/* One line. They are four short labels and wrapping them reads as a
+          layout accident rather than two rows of anything. */}
+      <div className="flex items-center justify-center gap-1">
         {CURVE_PRESETS.map((preset) => (
           <button
             key={preset.value}
