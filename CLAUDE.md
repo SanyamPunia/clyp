@@ -139,7 +139,7 @@ both derive their CSS from that data, so the two cannot drift.
   consumer goes through it.
 - **A family holds a multiple of eight presets, so the picker lays out as even
   rows.** It is eight columns wide, and a ninth in one family leaves a ragged
-  last row. Each family currently holds sixteen, which is two rows.
+  last row. Each family currently holds thirty-two, which is four rows.
   `lib/gradients.test.ts` fails on any other count.
 - **No two presets share a label.** A swatch shows no text, so the label is its
   tooltip and its screen-reader name. Where a colour name is wanted in two
