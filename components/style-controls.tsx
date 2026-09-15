@@ -1,6 +1,7 @@
 "use client";
 
-import { CheckIcon, RotateCcwIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, RotateCcwIcon } from "lucide-react";
+import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { ColorPicker } from "@/components/color-picker";
@@ -20,6 +21,8 @@ import {
   getGradient,
   solidToCss,
   supportsAngle,
+  type GradientFamily,
+  type GradientPreset,
 } from "@/lib/gradients";
 import {
   aspectOptions,
@@ -89,84 +92,19 @@ export function StyleControls({
           </TabsList>
 
           <TabsContent value="preset" className="flex flex-col gap-4">
-            {gradientFamilies.map((family) => {
-              const presets = gradientPresets.filter(
-                (preset) => preset.family === family.id
-              );
-              // Whether the chosen background is one of this family's, which
-              // decides where the family's single tab stop sits.
-              const chosen =
-                options.background === "preset" &&
-                presets.some((preset) => preset.id === options.gradientId);
-
-              return (
-                <div key={family.id} className="flex flex-col gap-2">
-                  <p className="text-[13px] text-muted-foreground">{family.label}</p>
-                  <RovingGrid
-                    label={`${family.label} backgrounds`}
-                    className="grid grid-cols-4 gap-2 sm:grid-cols-8"
-                  >
-                    {presets.map((preset, index) => {
-                      const selected =
-                        options.background === "preset" &&
-                        options.gradientId === preset.id;
-                      // One tab stop per family: the chosen swatch, or the
-                      // first when the choice is elsewhere. Sixty-four stops
-                      // between the picker and the angle slider is a long walk
-                      // for a reader who is not looking for a background.
-                      const stop = selected || (!chosen && index === 0);
-
-                      return (
-                        <button
-                          key={preset.id}
-                          type="button"
-                          title={preset.label}
-                          aria-pressed={selected}
-                          onClick={() =>
-                            onChange({
-                              gradientId: preset.id,
-                              background: "preset",
-                            })
-                          }
-                          tabIndex={stop ? 0 : -1}
-                          className={cn(
-                            "group relative aspect-[4/5] cursor-pointer overflow-hidden rounded-md",
-                            "outline-2 outline-offset-2 transition-all duration-150 active:scale-[0.94]",
-                            selected
-                              ? "outline-brand"
-                              : "outline-transparent hover:outline-stroke-strong"
-                          )}
-                        >
-                          <span
-                            className="absolute inset-0"
-                            style={{
-                              backgroundImage: gradientToCss(
-                                preset,
-                                supportsAngle(preset)
-                                  ? options.gradientAngle
-                                  : undefined
-                              ),
-                            }}
-                          />
-                          {selected && (
-                            <span className="absolute inset-0 flex items-center justify-center">
-                              <span className="rounded-full bg-black/35 p-0.5 backdrop-blur-sm">
-                                <CheckIcon
-                                  className="size-3"
-                                  style={{ color: "#fff" }}
-                                  aria-hidden="true"
-                                />
-                              </span>
-                            </span>
-                          )}
-                          <span className="sr-only">{preset.label}</span>
-                        </button>
-                      );
-                    })}
-                  </RovingGrid>
-                </div>
-              );
-            })}
+            {gradientFamilies.map((family) => (
+              <FamilyPicker
+                key={family.id}
+                family={family}
+                selectedId={
+                  options.background === "preset" ? options.gradientId : null
+                }
+                angle={options.gradientAngle}
+                onPick={(gradientId) =>
+                  onChange({ gradientId, background: "preset" })
+                }
+              />
+            ))}
           </TabsContent>
 
           <TabsContent value="custom" className="grid gap-3 sm:grid-cols-2">
@@ -751,13 +689,164 @@ function ToggleRow({
   );
 }
 
+/** What a family shows before its fold: one row of the eight-column grid. */
+const FAMILY_ROW = 8;
+
+/**
+ * One family of preset swatches: a row of them, and the rest behind a fold.
+ *
+ * A family holds thirty-two presets. Four families open at once is sixteen rows
+ * of colour stacked over the angle slider, which pushes every other control in
+ * the section off the panel. One row says what a family looks like, and the
+ * fold is where a reader goes once they know which family they want.
+ *
+ * The row is the picker's eight columns. Below `sm` the grid is four columns
+ * wide, where eight swatches are two rows: a phone's panel is the full width of
+ * the screen, and eight across it leaves a swatch too small to judge a gradient
+ * by or to hit with a thumb.
+ *
+ * The fold transitions the grid row rather than a measured height, and keeps
+ * the rows mounted, the same as the trim bar's. `inert` takes them out of the
+ * tab order while they are out of sight.
+ */
+function FamilyPicker({
+  family,
+  selectedId,
+  angle,
+  onPick,
+}: {
+  family: { id: GradientFamily; label: string };
+  /** The chosen preset's id, or null when the background is not a preset. */
+  selectedId: string | null;
+  angle: number;
+  onPick: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const presets = gradientPresets.filter(
+    (preset) => preset.family === family.id
+  );
+  const folded = presets.length - FAMILY_ROW;
+
+  // One tab stop per family. It sits on the chosen swatch while that swatch is
+  // reachable and on the first otherwise: a swatch behind a closed fold is not,
+  // so the family's only stop would be folded away with it.
+  const chosen = presets.findIndex((preset) => preset.id === selectedId);
+  const reachable = chosen >= 0 && (open || chosen < FAMILY_ROW);
+  const stopAt = reachable ? chosen : 0;
+
+  const swatch = (preset: GradientPreset, index: number) => {
+    const selected = preset.id === selectedId;
+
+    return (
+      <button
+        key={preset.id}
+        type="button"
+        title={preset.label}
+        aria-pressed={selected}
+        onClick={() => onPick(preset.id)}
+        tabIndex={index === stopAt ? 0 : -1}
+        className={cn(
+          "group relative aspect-[4/5] cursor-pointer overflow-hidden rounded-md",
+          "outline-2 outline-offset-2 transition-all duration-150 active:scale-[0.94]",
+          selected
+            ? "outline-brand"
+            : "outline-transparent hover:outline-stroke-strong"
+        )}
+      >
+        <span
+          className="absolute inset-0"
+          style={{
+            backgroundImage: gradientToCss(
+              preset,
+              supportsAngle(preset) ? angle : undefined
+            ),
+          }}
+        />
+        {selected && (
+          <span className="absolute inset-0 flex items-center justify-center">
+            <span className="rounded-full bg-black/35 p-0.5 backdrop-blur-sm">
+              <CheckIcon
+                className="size-3"
+                style={{ color: "#fff" }}
+                aria-hidden="true"
+              />
+            </span>
+          </span>
+        )}
+        <span className="sr-only">{preset.label}</span>
+      </button>
+    );
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      {/* The whole header is the trigger, so the family's name is what a
+          reader presses. The dot says the choice is one of the folded ones,
+          which is otherwise the one state the row cannot show. */}
+      <Button
+        variant="ghost"
+        size="sm"
+        aria-expanded={open}
+        aria-controls={`${family.id}-folded`}
+        onClick={() => setOpen(!open)}
+        className="-mx-2 justify-between px-2 text-[13px] font-normal"
+      >
+        <span>{family.label}</span>
+        <span className="flex items-center gap-1.5">
+          {chosen >= FAMILY_ROW && !open && (
+            <span
+              aria-hidden="true"
+              className="inline-block size-1 shrink-0 rounded-full bg-brand"
+            />
+          )}
+          {open ? "Fewer" : `${folded} more`}
+          <ChevronDownIcon
+            className={cn(
+              "size-3.5 transition-transform duration-200",
+              open && "rotate-180"
+            )}
+            aria-hidden="true"
+          />
+        </span>
+      </Button>
+
+      <RovingGrid label={`${family.label} backgrounds`}>
+        <div className="grid grid-cols-4 gap-2 sm:grid-cols-8">
+          {presets.slice(0, FAMILY_ROW).map(swatch)}
+        </div>
+
+        <div
+          id={`${family.id}-folded`}
+          inert={!open}
+          className={cn(
+            "grid transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none",
+            open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
+          )}
+        >
+          {/* The clip cuts the outline off the swatches along its edges, so the
+              box is given that much slack and pulled back by the same, which
+              leaves the two grids aligned to the pixel. */}
+          <div className="-mx-1 min-h-0 overflow-hidden px-1">
+            <div className="grid grid-cols-4 gap-2 pt-2 pb-1 sm:grid-cols-8">
+              {presets
+                .slice(FAMILY_ROW)
+                .map((preset, index) => swatch(preset, index + FAMILY_ROW))}
+            </div>
+          </div>
+        </div>
+      </RovingGrid>
+    </div>
+  );
+}
+
 /**
  * A grid whose items share one tab stop and are walked with the arrow keys.
  *
- * The background picker is sixty-four swatches. As sixty-four tab stops it is
- * a wall between the panel's first control and its second, and a reader not
- * looking for a background has to walk all of it. One stop per family and the
- * arrows inside is what a set of related choices is supposed to do.
+ * The background picker is a hundred and twenty-eight swatches. As that many
+ * tab stops it is a wall between the panel's first control and its second, and
+ * a reader not looking for a background has to walk all of it. One stop per
+ * family and the arrows inside is what a set of related choices is supposed to
+ * do. A family's folded rows are walked too, once the fold is open.
  *
  * Navigation is linear rather than by row and column. The grid is four columns
  * at one width and eight at another, so a Down that means "one row" would have
@@ -766,11 +855,9 @@ function ToggleRow({
  */
 function RovingGrid({
   label,
-  className,
   children,
 }: {
   label: string;
-  className?: string;
   children: React.ReactNode;
 }) {
   const move = (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -779,7 +866,9 @@ function RovingGrid({
 
     const items = [
       ...event.currentTarget.querySelectorAll<HTMLButtonElement>("button"),
-    ].filter((item) => !item.disabled);
+      // A swatch behind a closed fold cannot take focus, so walking onto it
+      // would look like the arrow keys dying at the end of the visible row.
+    ].filter((item) => !item.disabled && !item.closest("[inert]"));
     const from = items.indexOf(document.activeElement as HTMLButtonElement);
     if (from < 0) return;
 
@@ -796,7 +885,7 @@ function RovingGrid({
   };
 
   return (
-    <div role="group" aria-label={label} className={className} onKeyDown={move}>
+    <div role="group" aria-label={label} onKeyDown={move}>
       {children}
     </div>
   );

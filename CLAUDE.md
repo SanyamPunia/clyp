@@ -144,6 +144,37 @@ both derive their CSS from that data, so the two cannot drift.
 - **No two presets share a label.** A swatch shows no text, so the label is its
   tooltip and its screen-reader name. Where a colour name is wanted in two
   families, the mesh one carries the suffix: `Ember` and `Ember Mesh`.
+- **A family shows its first row and folds the other three.** Four families
+  open at once is sixteen rows of colour stacked over the angle slider, and the
+  Background section then runs past the panel on its own: the grain switch, the
+  frame and everything under it are a scroll away from the control a reader
+  came for. One row says what a family looks like, and the fold is where they
+  go once they know which family they want. So the first eight of a family are
+  what gets seen without asking, which is why the strongest go at the front of
+  the registry and additions go at the back.
+  - **The whole header is the trigger**, so the family's own name is what a
+    reader presses rather than a chevron beside it.
+  - **The folded rows stay mounted and are hidden by height**, the same as the
+    trim bar's lane: `grid-template-rows` transitions to `0fr` and `inert`
+    takes the swatches out of the tab order while they are out of sight. The
+    clip cuts the outline off the swatches along its edges, so that box carries
+    a hairline of horizontal slack and takes it back with a negative margin,
+    which leaves the two grids aligned to the pixel.
+  - **A folded swatch cannot be the family's one tab stop.** The stop sits on
+    the chosen swatch while that swatch is reachable and on the first
+    otherwise, or a closed fold would take the family's only stop with it.
+    `RovingGrid` skips anything inside an `[inert]` subtree for the same
+    reason: arrows walking onto an unfocusable swatch read as the keys dying
+    at the end of the visible row.
+  - **The header carries a dot when the choice is one of the folded ones.**
+    That is the one state the visible row cannot show, and the section's own
+    meta already names the preset, so the dot only has to say which family to
+    open.
+  - **The row is the picker's eight columns, which below `sm` is two rows of
+    four.** A phone's panel is the full width of the screen, and eight across
+    it leaves a swatch too small to judge a gradient by or to hit with a thumb.
+    Measured: 35x44 at the narrowest the panel gets beside the canvas, against
+    58x72 on a 320px screen. Nothing overflows sideways at any of them.
 
 Every generated layer must be fully opaque. `GradientBackground` keeps the
 previous gradient painted underneath during a cross-fade, and an incoming layer
@@ -749,11 +780,11 @@ stop each.**
 
 - **The background picker was sixty-four stops**, a wall between the panel's
   first control and its second that a reader not looking for a background had
-  to walk. `RovingGrid` gives each family one stop, on the chosen swatch or
-  the first, and the arrows move within it. Navigation is linear rather than
-  by row and column: the grid is four columns at one width and eight at
-  another, so a Down meaning "one row" would have to measure the layout to
-  know what a row is and would be wrong whenever it guessed.
+  to walk. It is a hundred and twenty-eight now. `RovingGrid` gives each family
+  one stop, on the chosen swatch or the first, and the arrows move within it.
+  Navigation is linear rather than by row and column: a Down meaning "one row"
+  would have to measure the layout to know what a row is, and next and previous
+  are right at any column count.
 - **The chip pills are radiogroups.** `aria-pressed` on each chip said "four
   buttons, one of them down". A speed, a zoom level and a follow pace are one
   of four, and a radiogroup says so and brings the roving stop with it. Arrows
@@ -761,8 +792,9 @@ stop each.**
 - A restored zoom's level is clamped to one the picker offers, since a
   radiogroup with nothing checked would have no tab stop at all.
 
-Measured with a clip loaded: 46 tab stops for the whole page, against 109
-before this.
+Measured with a clip loaded: 51 tab stops for the whole page, against 109
+before this. Four of them are the background picker: one a family, on the
+header that folds it, with its swatches behind the arrow keys.
 
 ### Shortcuts
 

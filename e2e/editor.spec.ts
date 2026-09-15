@@ -290,7 +290,7 @@ test.describe("the keyboard", () => {
     );
     expect(grids).toHaveLength(4);
     for (const grid of grids) {
-      expect(grid.swatches).toBe(16);
+      expect(grid.swatches).toBe(32);
       expect(grid.stops).toBe(1);
     }
 
@@ -300,10 +300,54 @@ test.describe("the keyboard", () => {
     expect(await focused()).toBe("Golden Hour");
     await page.keyboard.press("ArrowRight");
     expect(await focused()).toBe("Afterglow");
+    // The arrows stop at the fold: a swatch behind a closed one cannot take
+    // focus, so walking onto it would look like the keys dying.
     await page.keyboard.press("End");
-    expect(await focused()).toBe("Pre-Dawn");
+    expect(await focused()).toBe("Tidal");
     await page.keyboard.press("Home");
     expect(await focused()).toBe("Golden Hour");
+
+    await page.getByRole("button", { name: /^Atmosphere/ }).click();
+    await page.locator('[aria-label="Atmosphere backgrounds"] button').first().focus();
+    await page.keyboard.press("End");
+    expect(await focused()).toBe("Ionosphere");
+  });
+
+  test("shows one row of a family and folds the rest", async ({ page }) => {
+    await openEditor(page);
+    await loadClip(page);
+
+    const trigger = page.getByRole("button", { name: /^Atmosphere/ });
+    await expect(trigger).toHaveAttribute("aria-expanded", "false");
+
+    const shape = () =>
+      page.evaluate(() => {
+        const grid = document.querySelector(
+          '[aria-label="Atmosphere backgrounds"]',
+        )!;
+        const all = [...grid.querySelectorAll("button")];
+        const shown = all.filter((b) => !b.closest("[inert]"));
+        const box = (b: Element) => b.getBoundingClientRect();
+        return {
+          shown: shown.length,
+          rows: new Set(shown.map((b) => Math.round(box(b).top))).size,
+          // Both grids have to line up column for column, or the fold reads as
+          // a second picker rather than more of the same one.
+          columns: new Set(all.map((b) => Math.round(box(b).left))).size,
+        };
+      });
+
+    expect(await shape()).toEqual({ shown: 8, rows: 1, columns: 8 });
+
+    await trigger.click();
+    await expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(await shape()).toEqual({ shown: 32, rows: 4, columns: 8 });
+
+    // A folded swatch is a real choice, and the section names what it picked.
+    await page.getByRole("button", { name: "Ionosphere" }).click();
+    await expect(
+      page.getByText("Ionosphere", { exact: true }).first(),
+    ).toBeVisible();
   });
 
   test("moves and chooses inside a chip pill", async ({ page }) => {
