@@ -21,13 +21,19 @@ function SelectValue(props: React.ComponentProps<typeof SelectPrimitive.Value>) 
 function SelectTrigger({
   className,
   children,
+  size = "default",
   ...props
-}: React.ComponentProps<typeof SelectPrimitive.Trigger>) {
+}: React.ComponentProps<typeof SelectPrimitive.Trigger> & {
+  /** `sm` is the dense tier, for a select sitting in a pill of chips. */
+  size?: "default" | "sm"
+}) {
   return (
     <SelectPrimitive.Trigger
       data-slot="select-trigger"
+      data-size={size}
       className={cn(
-        "flex h-9 w-full cursor-pointer items-center justify-between gap-2 rounded-md border border-input bg-input/30 px-3 text-xs whitespace-nowrap shadow-xs outline-none",
+        "flex w-full cursor-pointer items-center justify-between gap-2 border border-input bg-input/30 text-xs whitespace-nowrap shadow-xs outline-none",
+        size === "sm" ? "h-7 rounded-full px-2.5" : "h-9 rounded-md px-3",
         "transition-all duration-200 hover:bg-gray-300 aria-expanded:bg-gray-300 active:scale-[0.98]",
         "focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]",
         "disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-muted-foreground",
