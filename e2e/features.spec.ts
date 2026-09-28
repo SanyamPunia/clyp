@@ -2,12 +2,16 @@ import { expect, test, type Page } from "@playwright/test";
 
 import {
   bandOf,
+  expectLength,
   exportFile,
   loadClip,
   loadImage,
   openEditor,
   pause,
   pickSegmented,
+  pressLane,
+  readVideo,
+  seek,
   settle,
 } from "./helpers";
 
@@ -393,6 +397,144 @@ test.describe("marks", () => {
     // The caption's field is labelled Text too, so this one goes by its id.
     await page.locator("#mark-text").fill("Click here");
     await expect(page.getByRole("button", { name: "Text: Click here" })).toBeVisible();
+  });
+});
+
+test.describe("pieces", () => {
+  /** Splits either side of the blue second and selects the piece between. */
+  async function splitBlue(page: Page) {
+    await seek(page, 2);
+    await page.keyboard.press("s");
+    await seek(page, 3);
+    await page.keyboard.press("s");
+    // 2.5s of 6, the middle of the blue piece.
+    await pressLane(page, 2.5 / 6);
+    await expect(page.getByRole("button", { name: /^Piece, 2\.000/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  }
+
+  test("a split piece is deleted with the Delete key", async ({ page }) => {
+    await openEditor(page);
+    await loadClip(page);
+    await splitBlue(page);
+    await page.keyboard.press("Delete");
+    await expect(page.getByRole("button", { name: /^Cut, / })).toHaveCount(1);
+
+    const { duration, colours } = await readVideo(page, await exportFile(page), [
+      0.5, 1.5, 2.5, 3.5, 4.5,
+    ]);
+    expectLength(duration, 5);
+    expect(colours).toEqual(["red", "green", "yellow", "magenta", "cyan"]);
+  });
+
+  test("undo puts a deleted piece back", async ({ page }) => {
+    await openEditor(page);
+    await loadClip(page);
+    await splitBlue(page);
+    await settle(page);
+    await page.keyboard.press("Delete");
+    await expect(page.getByRole("button", { name: /^Cut, / })).toHaveCount(1);
+    await page.keyboard.press("ControlOrMeta+z");
+    await expect(page.getByRole("button", { name: /^Cut, / })).toHaveCount(0);
+  });
+
+  test("a piece moves into the room beside it", async ({ page }) => {
+    await openEditor(page);
+    await loadClip(page);
+    await splitBlue(page);
+    await page.keyboard.press("Delete");
+
+    // The piece after the gap, [3, 6], moves back a second into it.
+    await pressLane(page, 4.5 / 6);
+    const piece = page.getByRole("button", { name: /^Piece, 3\.000/ });
+    await piece.focus();
+    await piece.press("Shift+ArrowLeft");
+    await expect(page.getByRole("button", { name: /^Piece, 2\.000/ })).toBeVisible();
+
+    // It now opens on the blue second it moved over, and still runs 3s.
+    const { duration, colours } = await readVideo(page, await exportFile(page), [
+      1.5, 2.5, 4.5,
+    ]);
+    expectLength(duration, 5);
+    expect(colours).toEqual(["green", "blue", "magenta"]);
+  });
+});
+
+test.describe("transitions", () => {
+  async function cutBlueWith(page: Page, kind: string) {
+    await seek(page, 2);
+    await page.keyboard.press("s");
+    await seek(page, 3);
+    await page.keyboard.press("s");
+    await pressLane(page, 2.5 / 6);
+    await page.keyboard.press("Delete");
+    await page.getByRole("button", { name: /^Cut, / }).click();
+    await page.getByRole("combobox", { name: "Transition at this join" }).click();
+    await page.getByRole("option", { name: kind, exact: true }).click();
+  }
+
+  test("a dip to black goes dark at the join and comes back", async ({ page }) => {
+    await openEditor(page);
+    await loadClip(page);
+    await cutBlueWith(page, "Dip to black");
+
+    const bytes = await exportFile(page);
+    const [before, join, after] = await centres(page, bytes, [1.5, 2.0, 2.6]);
+    expect(bandOf(before)).toBe("green");
+    expect(join[0] + join[1] + join[2]).toBeLessThan(60);
+    expect(bandOf(after)).toBe("yellow");
+  });
+
+  test("two pieces that touch take a transition at their join", async ({ page }) => {
+    await openEditor(page);
+    await loadClip(page);
+    await seek(page, 3);
+    await page.keyboard.press("s");
+
+    // Nothing is removed, so the join is the split itself.
+    await page.getByRole("button", { name: /^Join at 3\.000/ }).click();
+    await page.getByRole("combobox", { name: "Transition at this join" }).click();
+    await page.getByRole("option", { name: "Dip to black", exact: true }).click();
+
+    const bytes = await exportFile(page);
+    const { duration } = await readVideo(page, bytes, []);
+    expectLength(duration, 6);
+    const [before, join, after] = await centres(page, bytes, [2.5, 3.0, 3.6]);
+    expect(bandOf(before)).toBe("blue");
+    expect(join[0] + join[1] + join[2]).toBeLessThan(60);
+    expect(bandOf(after)).toBe("yellow");
+  });
+
+  test("a join between touching pieces is joined back with Delete", async ({
+    page,
+  }) => {
+    await openEditor(page);
+    await loadClip(page);
+    await seek(page, 3);
+    await page.keyboard.press("s");
+    await page.getByRole("button", { name: /^Join at 3\.000/ }).click();
+    await page.keyboard.press("Delete");
+    await expect(page.getByRole("button", { name: /^Join at / })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /^Piece, / })).toHaveCount(0);
+  });
+
+  test("a dissolve holds the frame before the join and fades it out", async ({
+    page,
+  }) => {
+    await openEditor(page);
+    await loadClip(page);
+    await cutBlueWith(page, "Dissolve");
+
+    const bytes = await exportFile(page);
+    const [early, mid, late] = await centres(page, bytes, [2.03, 2.2, 2.8]);
+    // Green holding over yellow, then yellow on its own. Green has no red,
+    // so the red channel is how far the yellow has come through.
+    expect(early[0]).toBeLessThan(60);
+    expect(mid[0]).toBeGreaterThan(40);
+    expect(mid[0]).toBeLessThan(200);
+    expect(bandOf(late)).toBe("yellow");
   });
 });
 
