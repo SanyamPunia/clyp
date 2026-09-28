@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { gradientFamilies, gradientPresets } from "../lib/gradients";
 
 import {
   CLIP_SECONDS,
@@ -288,11 +289,15 @@ test.describe("the keyboard", () => {
         }),
       ),
     );
-    expect(grids).toHaveLength(4);
-    for (const grid of grids) {
-      expect(grid.swatches).toBe(32);
+    // From the registry, so a family added later is counted rather than
+    // breaking the spec: the first four hold thirty-two, the scenes sixteen.
+    expect(grids).toHaveLength(gradientFamilies.length);
+    grids.forEach((grid, i) => {
+      expect(grid.swatches).toBe(
+        gradientPresets.filter((p) => p.family === gradientFamilies[i].id).length,
+      );
       expect(grid.stops).toBe(1);
-    }
+    });
 
     const focused = () =>
       page.evaluate(() => document.activeElement?.textContent?.trim());
@@ -371,8 +376,11 @@ test.describe("the keyboard", () => {
     await openEditor(page);
     await loadClip(page);
     // The picker alone was sixty-four of them before the roving grid, a wall
-    // between the panel's first control and its second.
-    expect(await tabStops(page)).toBeLessThan(60);
+    // between the panel's first control and its second. Each panel section's
+    // header is a stop of its own since they fold, which a reader can use to
+    // take the rest of a section out of the walk. Each background family is
+    // two, its header and its one swatch stop.
+    expect(await tabStops(page)).toBeLessThan(80);
   });
 });
 
