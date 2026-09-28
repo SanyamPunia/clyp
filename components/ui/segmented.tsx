@@ -40,6 +40,7 @@ export function SegmentedOption({
   value,
   selected,
   disabled = false,
+  title,
   className,
   children,
 }: {
@@ -47,12 +48,15 @@ export function SegmentedOption({
   value: string;
   selected: boolean;
   disabled?: boolean;
+  /** A name on hover, for an option that shows no text of its own. */
+  title?: string;
   className?: string;
   children: React.ReactNode;
 }) {
   return (
     <label
       htmlFor={id}
+      title={title}
       className={cn(
         "relative flex select-none items-center justify-center rounded-md text-[13px]",
         "transition-all duration-150",
