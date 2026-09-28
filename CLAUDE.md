@@ -178,8 +178,8 @@ both derive their CSS from that data, so the two cannot drift.
   `band` is a linear layer whose stops may be `transparent`. Each shape takes a
   `hold`, the part of its radius that stays solid, so the same layer is a glow
   at 0 and a dune with a crisp edge at 96. A band with two stops at nearly one
-  position is a hard line, which is how a horizon, a door's walls and a print's
-  paper border are drawn. It ignores the angle.
+  position is a hard line, which is how a horizon and a door's walls are
+  drawn. It ignores the angle.
   - **A disc is `circle`, never two radii.** CSS takes no percentage for a
     circle's own size, so its radius is a percent of the ray to the farthest
     corner, and that is what keeps a moon round on a tall frame. Two percentage
@@ -192,18 +192,18 @@ both derive their CSS from that data, so the two cannot drift.
 - **A family holds a multiple of eight presets, so the picker lays out as even
   rows.** It is eight columns wide, and a ninth in one family leaves a ragged
   last row. The first four families hold thirty-two each, four rows, and the
-  five scene families sixteen each, two rows. `lib/gradients.test.ts` fails on
+  four scene families sixteen each, two rows. `lib/gradients.test.ts` fails on
   any count that is not a multiple of eight.
 - **A family can carry the grain it is made to be seen with.** Defocus is 70,
-  Glow 40, Horizon 30, Spectral 55 and Print 90: a defocused photograph and a
-  stippled print are mostly their grain, and without it they read as plain
-  blur. Picking one of their presets switches grain on at that amount, but only
+  Glow 40, Horizon 30 and Spectral 55: a defocused photograph is mostly its
+  grain, and without it it reads as plain blur. Picking one of their presets switches grain on at that amount, but only
   while grain is off, so a strength someone chose is never moved.
 - **The scene families were drawn against references**, which is why they are
   data and not generated at run time. Defocus is a defocused photograph, Glow
   is light through colour (waves and lenses on black), Horizon a still scene
-  with a hard horizon, Spectral bands of colour pulled out of a specimen, and
-  Print a stippled print on cream paper. A wave is a chain of overlapping
+  with a hard horizon, and Spectral bands of colour pulled out of a specimen.
+  A Print family of stippled prints on cream paper was built and then taken
+  out. A wave is a chain of overlapping
   ovals along a path, resampled so neighbours overlap by most of their width:
   spaced out, the first build read as a string of beads. Spectral's
   references also have vertical smear streaks, which a gradient cannot draw,
@@ -806,11 +806,100 @@ yellow, cyan. With a soundtrack that steps 440Hz to 880Hz at its own midpoint,
 the step lands at the output second its anchor maps to. With no cuts, 6.000s
 and 180 frames, unchanged.
 
+## Pieces
+
+`lib/clip-pieces.ts` is the model. Split the clip at the playhead, press the
+piece that should go, delete it: the model every editor uses, beside the cut
+that is dragged out by its edges. Split is S or the button beside Cut.
+
+**A deleted piece is a cut.** Nothing downstream learns a new idea: the
+encode, both audio paths, the preview and every readout already handle a cut,
+and a deleted piece is one. The split points are the only new state, stored
+with the edits and in the undo history.
+
+- **Splits are kept raw and read through `tidySplits`.** A split inside a cut,
+  outside the trim, or closer than `MIN_PIECE` to an edge divides nothing and
+  is ignored, so a trim or a cut dragged across one needs no repair.
+  `MIN_PIECE` is `MIN_CUT`, so every piece can be deleted as a cut, and a
+  split that would leave a piece under it is refused with a toast.
+- **A press selects the piece under it, and a drag on the selected one moves
+  it.** Selecting first keeps a scrub a scrub: nothing moves on a press that
+  did not mean to pick a piece up. Pieces are lane instances only while there
+  is more than one, so a clip in one piece has nothing new to tab past.
+- **A piece moves into the room beside it and keeps its length.** The room is
+  up to the piece before and the piece after, or the file's own ends, so the
+  first piece can move into what the trim took off. `movePiece` moves it in
+  the list of pieces and reads the whole edit back off: the trim is the first
+  piece's start to the last one's end, every gap is a cut, and pieces that
+  touch meet at a split. A gap keeps the id and transition of the cut that
+  was in the same place, so a move does not lose a join's transition.
+- **Delete or Backspace removes the selected piece at once**, the same as a
+  mark, and the toast carries an Undo. The piece's own Delete button asks
+  first, since a press on a button is the easier one to make by accident.
+- Two pieces that touch are drawn a hairline apart, so a split reads as a
+  division of the block. The selected piece is ringed in the selection tone,
+  since brand is the playhead's.
+
+Verified through the export: splitting either side of the blue second and
+deleting the piece gives 5s reading red, green, yellow, magenta, cyan. Moving
+the piece after that gap back a second makes it open on the blue it moved
+over.
+
+## Transitions
+
+`lib/clip-transitions.ts` is the model. A transition lives on the cut whose
+join it softens, and is placed on the output's clock, since that is where the
+join is: two source seconds a cut apart are one output instant. The preview's
+loop and the worker's encode loop both read `transitionAt`, so they agree.
+
+- **Four are centred on the join and one is not.** A dip to black, a dip to
+  white, a blur and a zoom each ramp up to the join and back down, so both
+  sides take half. A dissolve cannot be centred without two sources decoded at
+  once, so it starts at the join: the last frame before it is held and fades
+  out over the part after, which plays underneath.
+- **The held frame is the picture copied on every frame outside a dissolve.**
+  On the first frame past the join the copy is still the frame before it. The
+  encode copies the composited box into an `OffscreenCanvas`. The preview
+  copies the video into a canvas over the clip, and only while playing, since
+  a paused playhead has no frame before it to have held: paused inside a
+  dissolve the preview shows the plain frame.
+- **A duration is fitted to the parts it runs into.** A centred one takes at
+  most each neighbour's whole length from the join, and a dissolve at most the
+  part after it, so a transition never reaches past a part.
+- **A dip is a colour over the picture, inside its own corners**, so the frame
+  around it holds while the picture goes to black or white. A zoom pushes in
+  on top of any zoom region, and marks ride it the way they ride a region.
+- **Every join between two pieces can carry one, a gap's or a touch's.** Where
+  the pieces are a gap apart the join is a cut and the transition is the
+  cut's. Where they touch it is a split, and a split is `{ at, transition? }`
+  for this: the footage either side is continuous, but a dip or a push in on a
+  change of subject is a style, not a repair. `joinsBetween` lists every join
+  off the pieces with whichever transition it carries, so `joinsOf` reads a
+  gap and a touch the same way, and `movePiece` carries a join's transition
+  across when a move closes a gap onto a neighbour or opens one.
+- **A touching join is a lane instance of its own.** The hairline between the
+  two pieces gets a handle's width of hit area and a tooltip, and a press on
+  it selects the join rather than scrubbing. Its controls take the same
+  `TransitionPicker` a cut's do, so the two cannot offer different choices,
+  with an X that joins the pieces back. Delete does the same, without asking:
+  nothing is lost but the transition, and undo brings that back.
+- It is picked as a select, since five named kinds as chips would run the row
+  past the panel. A join with one shows a small blend mark on the lane.
+- A split stored as a bare number, from a record written before a split could
+  carry a transition, is read back as a split with none.
+- A stored transition of a kind or length this build does not offer is read
+  back as a straight cut or the default length, through `tidyTransition`.
+
+Verified through the export, with the blue second removed: a dip to black
+reads under 60 across all three channels at the join and the yellow after it
+at 2.6s, and a dissolve reads the green frame at 2.03s, a blend at 2.2s and
+the yellow alone at 2.8s.
+
 ## Undo
 
 `components/use-edit-history.ts` is the history, and it covers the edits: the
-trim, the cuts, the speed, the zoom regions, a soundtrack's placement and the
-marks. Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z, plus two buttons beside the playhead
+trim, the cuts, the splits, the speed, the zoom regions, a soundtrack's
+placement and the marks. Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z, plus two buttons beside the playhead
 clock. It runs for an image too, since marks are edits on a still, and there
 the keys are the only way in.
 
@@ -898,12 +987,12 @@ stop each.**
 - A restored zoom's level is clamped to one the picker offers, since a
   radiogroup with nothing checked would have no tab stop at all.
 
-Measured with a clip loaded: 77 tab stops for the whole page with every
-section open, against 109 before this. Each of the nine background families
-is two of them, its header and its one swatch stop. The
-Marks, Handle, Clicks and Saved looks sections added seven, each a radiogroup
-or a single control, and each of the nine section headers is one. Four of them are the background picker: one a family, on the
-header that folds it, with its swatches behind the arrow keys.
+Measured with a clip loaded: 76 tab stops for the whole page with every
+section open, against 109 before this, and 34 with every section folded. Each of the eight background families
+is two of them, its header and its one swatch stop, with the swatches behind
+the arrow keys. The Marks, Handle, Clicks and Saved looks sections added
+seven, each a radiogroup or a single control, and each of the nine panel
+section headers is one.
 
 ### Shortcuts
 
@@ -915,6 +1004,8 @@ header that folds it, with its swatches behind the arrow keys.
 | Cmd/Ctrl C | Copy the selected zoom or cut |
 | Cmd/Ctrl V | Paste it at the playhead |
 | Cmd/Ctrl Z | Undo, Shift to redo |
+| S | Split the clip at the playhead |
+| Delete or Backspace | Remove the selected mark or piece, or join a selected join's pieces back |
 
 **Cmd C never fires over a real copy.** Text the reader has selected is theirs,
 and a field being typed in keeps its own undo stack, which is the browser's and
@@ -1526,8 +1617,8 @@ Style options are a few hundred bytes and stay in localStorage, merged over
 field undefined.
 
 **The clip's edits are stored under a key of their own, `edits`, in the same
-IndexedDB store.** The trim, the cuts, the speed, the zoom regions and the
-soundtrack's placement are a few hundred bytes. They were not stored at all at first,
+IndexedDB store.** The trim, the cuts with their transitions, the splits, the
+speed, the zoom regions and the soundtrack's placement are a few hundred bytes. They were not stored at all at first,
 because the only record held the Blob and rewriting forty megabytes on every
 drag of a handle was out of the question. A second key costs nothing to
 rewrite, so the edits follow every change on a 300 ms debounce, which a drag
