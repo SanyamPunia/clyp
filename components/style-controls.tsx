@@ -1,16 +1,41 @@
 "use client";
 
-import { CheckIcon, ChevronDownIcon, RotateCcwIcon } from "lucide-react";
-import { useState } from "react";
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  Loader2Icon,
+  PipetteIcon,
+  PlusIcon,
+  RotateCcwIcon,
+  XIcon,
+} from "lucide-react";
+import { useId, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Dimensions } from "@/components/ui/dimensions";
 import { ColorPicker } from "@/components/color-picker";
 import { FieldLabel } from "@/components/ui/field-label";
 import { Input } from "@/components/ui/input";
+import { PlatformIcon } from "@/components/platform-icon";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectSeparator,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { SegmentedGroup, SegmentedOption } from "@/components/ui/segmented";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   angleApplies,
   backgroundKinds,
@@ -19,18 +44,31 @@ import {
   gradientPresets,
   gradientToCss,
   getGradient,
+  resolveGradientCss,
   solidToCss,
   supportsAngle,
   type GradientFamily,
   type GradientPreset,
 } from "@/lib/gradients";
+import { type Look, isLook } from "@/lib/looks";
+import {
+  MAX_SLIDES,
+  NO_TEMPLATE,
+  getTemplate,
+  platforms,
+  slideCount,
+  templates,
+} from "@/lib/templates";
 import {
   aspectOptions,
+  BADGE_SIZE,
+  badgePositionOptions,
   CAPTION_SIZE,
   captionPositionOptions,
   CORNER_ORDER,
   cornerPresets,
   cornerRadius,
+  deviceOptions,
   radiusSizes,
   shadowOptions,
   windowChromeOptions,
@@ -38,7 +76,7 @@ import {
   type Corners,
 } from "@/lib/style-options";
 import { cn } from "@/lib/utils";
-import type { StyleOptions } from "@/types/screenshot";
+import type { MediaKind, StyleOptions } from "@/types/screenshot";
 
 interface StyleControlsProps {
   options: StyleOptions;
@@ -48,6 +86,27 @@ interface StyleControlsProps {
   /** False while the style already is the default, which disables the reset. */
   canReset: boolean;
   disabled?: boolean;
+  /** What is loaded, which decides whether the clip's own controls show. */
+  kind?: MediaKind;
+  /** Sets the custom gradient from the picture's own colours. */
+  onMatchPicture: () => void;
+  /** Whether the safe zone and slide guides are drawn over the canvas. */
+  showGuides: boolean;
+  onShowGuidesChange: (show: boolean) => void;
+  /** Whether the clip's motion has been read, which click ripples need. */
+  motionReady: boolean;
+  /** 0 to 1 while the motion is being read, null otherwise. */
+  motionProgress: number | null;
+  /** Asks to read the motion. The owner confirms first. */
+  onReadMotion: () => void;
+  looks: Look[];
+  /** Asks for a name and saves the current style. */
+  onSaveLook: () => void;
+  onApplyLook: (look: Look) => void;
+  /** Asks to delete a look. The owner confirms first. */
+  onDeleteLook: (look: Look) => void;
+  /** Sections the panel shows between the frame and the window. */
+  children?: React.ReactNode;
 }
 
 export function StyleControls({
@@ -56,7 +115,23 @@ export function StyleControls({
   onReset,
   canReset,
   disabled = false,
+  kind,
+  onMatchPicture,
+  showGuides,
+  onShowGuidesChange,
+  motionReady,
+  motionProgress,
+  onReadMotion,
+  looks,
+  onSaveLook,
+  onApplyLook,
+  onDeleteLook,
+  children,
 }: StyleControlsProps) {
+  const template = getTemplate(options.template);
+  const slides = slideCount(template, options.slides);
+  const hasGuides = Boolean(template && (template.safe || template.carousel));
+  const badged = options.badge.trim().length > 0;
   const activePreset = getGradient(options.gradientId);
   const hasAngle = angleApplies(options);
   const captioned = options.caption.trim().length > 0;
@@ -76,6 +151,14 @@ export function StyleControls({
         disabled && "pointer-events-none opacity-45 select-none"
       )}
     >
+      <LooksSection
+        looks={looks}
+        options={options}
+        onSave={onSaveLook}
+        onApply={onApplyLook}
+        onDelete={onDeleteLook}
+      />
+
       <Section title="Background" meta={backgroundMeta}>
         <Tabs
           value={options.background}
@@ -101,7 +184,17 @@ export function StyleControls({
                 }
                 angle={options.gradientAngle}
                 onPick={(gradientId) =>
-                  onChange({ gradientId, background: "preset" })
+                  onChange({
+                    gradientId,
+                    background: "preset",
+                    // A family made to be seen grainy brings its grain, but
+                    // only while grain is off, so a chosen strength stays.
+                    ...(family.grain !== undefined &&
+                      !options.showNoiseOverlay && {
+                        showNoiseOverlay: true,
+                        noiseIntensity: family.grain,
+                      }),
+                  })
                 }
               />
             ))}
@@ -119,6 +212,14 @@ export function StyleControls({
               }}
               aria-hidden="true"
             />
+            <Button
+              variant="secondary"
+              onClick={onMatchPicture}
+              className="sm:col-span-2"
+            >
+              <PipetteIcon className="size-3.5" aria-hidden="true" />
+              Match the picture
+            </Button>
             <div className="flex flex-col gap-1.5">
               <FieldLabel>Start</FieldLabel>
               <ColorPicker
@@ -185,7 +286,9 @@ export function StyleControls({
                 ? "A flat colour does not use an angle."
                 : options.background === "none"
                   ? "There is nothing behind the artwork to angle."
-                  : "Mesh gradients do not use an angle."}
+                  : activePreset.kind === "scene"
+                    ? "This scene does not turn with an angle."
+                    : "Mesh gradients do not use an angle."}
             </p>
           )}
 
@@ -213,12 +316,40 @@ export function StyleControls({
       </Section>
 
       <Section title="Frame">
+        <TemplateRow
+          value={options.template}
+          onChange={(value) => onChange({ template: value })}
+        />
+
+        {template?.carousel && (
+          <SliderRow
+            label="Carousel slides"
+            value={slides}
+            min={1}
+            max={MAX_SLIDES}
+            step={1}
+            suffix=""
+            onChange={(value) => onChange({ slides: value })}
+          />
+        )}
+
+        {hasGuides && (
+          <ToggleRow
+            id="frame-guides"
+            label={template?.safe ? "Safe zone guides" : "Slide guides"}
+            checked={showGuides}
+            onCheckedChange={onShowGuidesChange}
+          />
+        )}
+
+        {/* A template decides the shape itself, from its own size. */}
         <ChoiceRow
           label="Shape"
           name="aspect"
           value={options.aspect}
           options={aspectOptions}
           columns={4}
+          disabled={template !== null}
           onChange={(aspect) => onChange({ aspect })}
         />
         <SliderRow
@@ -252,6 +383,8 @@ export function StyleControls({
         />
       </Section>
 
+      {children}
+
       <Section title="Window">
         <ChoiceRow
           label="Style"
@@ -276,6 +409,14 @@ export function StyleControls({
           placeholder="example.com"
           disabled={options.windowChrome !== "browser"}
           onChange={(windowUrl) => onChange({ windowUrl })}
+        />
+
+        <ChoiceRow
+          label="Device"
+          name="device"
+          value={options.device}
+          options={deviceOptions}
+          onChange={(device) => onChange({ device })}
         />
       </Section>
 
@@ -321,6 +462,76 @@ export function StyleControls({
         />
       </Section>
 
+      {/* The same shape as the caption: the rows under the text follow it. */}
+      <Section title="Handle">
+        <TextRow
+          id="badge"
+          label="Handle"
+          value={options.badge}
+          placeholder="@yourname"
+          onChange={(badge) => onChange({ badge })}
+        />
+
+        <ChoiceRow
+          label="Corner"
+          name="badge-position"
+          value={options.badgePosition}
+          options={badgePositionOptions}
+          columns={2}
+          disabled={!badged}
+          onChange={(badgePosition) => onChange({ badgePosition })}
+        />
+
+        <SliderRow
+          label="Size"
+          value={options.badgeSize}
+          min={BADGE_SIZE.min}
+          max={BADGE_SIZE.max}
+          step={BADGE_SIZE.step}
+          suffix="px"
+          disabled={!badged}
+          onChange={(value) => onChange({ badgeSize: value })}
+        />
+
+        <ToggleRow
+          id="badge-dark"
+          label="Light pill"
+          checked={options.badgeDark}
+          disabled={!badged}
+          onCheckedChange={(checked) => onChange({ badgeDark: checked })}
+        />
+      </Section>
+
+      {kind === "video" && (
+        <Section title="Clicks">
+          <ToggleRow
+            id="click-ripples"
+            label="Show each click"
+            checked={options.clickRipples}
+            onCheckedChange={(checked) => onChange({ clickRipples: checked })}
+          />
+          {options.clickRipples && !motionReady && (
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs text-muted-foreground">
+                {motionProgress !== null
+                  ? `Reading the motion, ${Math.round(motionProgress * 100)}%`
+                  : "The clicks come from the clip's motion, which has not been read yet."}
+              </p>
+              <Button
+                variant="secondary"
+                onClick={onReadMotion}
+                disabled={motionProgress !== null}
+              >
+                {motionProgress !== null && (
+                  <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
+                )}
+                Read the motion
+              </Button>
+            </div>
+          )}
+        </Section>
+      )}
+
       <Section title="Depth">
         <ChoiceRow
           label="Shadow"
@@ -351,7 +562,30 @@ export function StyleControls({
   );
 }
 
-function Section({
+/**
+ * A panel section that folds to its title, accordion style.
+ *
+ * The whole header is the trigger, so the section's own name is what a reader
+ * presses, and the chevron sits at the far right. Sections fold independently:
+ * a reader drawing marks still wants the background open beside them.
+ *
+ * The body stays mounted and is hidden by height, the same as the trim bar's
+ * fold: `grid-template-rows` transitions to `0fr` and `inert` takes the
+ * controls out of the tab order while they are out of sight. The clip carries
+ * a margin of slack on three sides, taken back by a negative margin, so focus
+ * rings and swatch outlines are not cut off at its edges. The body's own top
+ * padding is what shows in that slack while folded, so nothing leaks.
+ *
+ * The header is a plain row with no fill, open or hovered. The ghost button's
+ * `aria-expanded` wash is for a trigger holding a menu open, not for a
+ * section header, so it is switched off. Hover brightens the chevron instead.
+ * It has no press scale either, by request: the chevron turning is the
+ * feedback, and a full-width row shrinking on click reads as a jolt.
+ *
+ * The meta stays on the header when folded, since it is what says what a
+ * folded section is set to. Open or closed is view state and is not stored.
+ */
+export function Section({
   title,
   meta,
   children,
@@ -360,22 +594,50 @@ function Section({
   meta?: string;
   children: React.ReactNode;
 }) {
+  const [open, setOpen] = useState(true);
+  const id = useId();
+
   return (
-    <section className="flex flex-col gap-4 px-5 py-5">
-      <div className="flex items-center justify-between gap-2">
-        <h3 className="text-sm font-medium tracking-tight text-foreground">
-          {title}
-        </h3>
-        {meta && (
-          <span className="text-[13px] text-muted-foreground">{meta}</span>
+    <section className="flex flex-col px-5 py-5">
+      <h3>
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-expanded={open}
+          aria-controls={id}
+          onClick={() => setOpen(!open)}
+          className="group -my-1.5 flex w-full justify-between rounded-sm px-0 text-sm font-medium tracking-tight text-foreground hover:bg-transparent hover:text-foreground aria-expanded:bg-transparent active:scale-100"
+        >
+          <span>{title}</span>
+          <span className="flex items-center gap-2 text-[13px] font-normal tracking-normal text-muted-foreground">
+            {meta}
+            <ChevronDownIcon
+              className={cn(
+                "size-4 transition-all duration-200 group-hover:text-foreground",
+                !open && "-rotate-90"
+              )}
+              aria-hidden="true"
+            />
+          </span>
+        </Button>
+      </h3>
+      <div
+        id={id}
+        inert={!open}
+        className={cn(
+          "grid transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none",
+          open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
         )}
+      >
+        <div className="-mx-2 -mb-2 min-h-0 overflow-hidden px-2 pb-2">
+          <div className="flex flex-col gap-4 pt-4">{children}</div>
+        </div>
       </div>
-      {children}
     </section>
   );
 }
 
-function SliderRow({
+export function SliderRow({
   label,
   value,
   min,
@@ -572,7 +834,7 @@ const COLUMNS: Record<number, string> = {
  * Generic over the option value, so a field typed as a union stays one through
  * the control instead of widening to `string` on the way back.
  */
-function ChoiceRow<T extends string>({
+export function ChoiceRow<T extends string>({
   label,
   name,
   value,
@@ -620,7 +882,7 @@ function ChoiceRow<T extends string>({
   );
 }
 
-function TextRow({
+export function TextRow({
   id,
   label,
   value,
@@ -656,7 +918,7 @@ function TextRow({
   );
 }
 
-function ToggleRow({
+export function ToggleRow({
   id,
   label,
   checked,
@@ -686,6 +948,142 @@ function ToggleRow({
         onCheckedChange={onCheckedChange}
       />
     </div>
+  );
+}
+
+/**
+ * The platform size, grouped by platform. A select rather than chips, because
+ * there are two dozen of them and the name is what a reader is looking for.
+ */
+function TemplateRow({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const template = getTemplate(value);
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-2">
+        <FieldLabel htmlFor="template">Size</FieldLabel>
+        {template && (
+          <Dimensions
+            width={template.width}
+            height={template.height}
+            className="text-[13px] text-muted-foreground"
+          />
+        )}
+      </div>
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger id="template" aria-label="Platform size">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={NO_TEMPLATE}>
+            <span className="flex items-center gap-2">
+              <PlatformIcon platform={null} />
+              Any size
+            </span>
+          </SelectItem>
+          {platforms.map((platform) => (
+            <SelectGroup key={platform.id}>
+              <SelectSeparator />
+              <SelectLabel>{platform.label}</SelectLabel>
+              {templates
+                .filter((t) => t.platform === platform.id)
+                .map((t) => (
+                  <SelectItem key={t.id} value={t.id}>
+                    {/* Inside the item's text, so the trigger shows the
+                        selected platform's logo too: it renders this. */}
+                    <span className="flex items-center gap-2">
+                      <PlatformIcon platform={platform.id} />
+                      {`${platform.label} ${t.label}`}
+                    </span>
+                  </SelectItem>
+                ))}
+            </SelectGroup>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
+/**
+ * Saved looks, first in the panel, since putting one back is the fastest way
+ * to style the next capture. Each look is its own gradient as a swatch and
+ * its name. The one the style already is carries a check, and pressing it
+ * again changes nothing, so it is disabled.
+ */
+function LooksSection({
+  looks,
+  options,
+  onSave,
+  onApply,
+  onDelete,
+}: {
+  looks: Look[];
+  options: StyleOptions;
+  onSave: () => void;
+  onApply: (look: Look) => void;
+  onDelete: (look: Look) => void;
+}) {
+  return (
+    <Section title="Saved looks" meta={looks.length ? `${looks.length}` : undefined}>
+      {looks.length > 0 ? (
+        <ul className="flex flex-col gap-1">
+          {looks.map((look) => {
+            const current = isLook(options, look);
+            const style = { ...options, ...look.style };
+            return (
+              <li key={look.id} className="flex items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={current}
+                  onClick={() => onApply(look)}
+                  className="min-w-0 flex-1 justify-start px-2 text-[13px] font-normal text-foreground disabled:opacity-100"
+                >
+                  <span
+                    aria-hidden="true"
+                    className="size-4 shrink-0 rounded-full border border-stroke"
+                    style={{ backgroundImage: resolveGradientCss(style) }}
+                  />
+                  <span className="truncate">{look.name}</span>
+                  {current && (
+                    <CheckIcon className="ml-auto size-3.5 text-muted-foreground" aria-hidden="true" />
+                  )}
+                </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={`Delete ${look.name}`}
+                      onClick={() => onDelete(look)}
+                    >
+                      <XIcon className="size-3.5" aria-hidden="true" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Delete this look</TooltipContent>
+                </Tooltip>
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Save the background, frame, window and handle to use on the next
+          capture.
+        </p>
+      )}
+      <Button variant="secondary" onClick={onSave} className="self-start">
+        <PlusIcon className="size-3.5" aria-hidden="true" />
+        Save the current look
+      </Button>
+    </Section>
   );
 }
 

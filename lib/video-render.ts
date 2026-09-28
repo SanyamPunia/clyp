@@ -35,7 +35,9 @@ import {
 import { type ZoomRegion, sourceRect, zoomAt } from "@/lib/clip-zoom";
 import { type Cut, keptSeconds, keptSegments, outputAt } from "@/lib/clip-cuts";
 import { type FadeRegion, fadeAt } from "@/lib/clip-fade";
+import { normalized, project } from "@/lib/marks";
 import type { MotionTrack } from "@/lib/motion";
+import { drawRipple, ripplesAt } from "@/lib/ripples";
 import type { Trim } from "@/types/screenshot";
 
 export interface Box {
@@ -43,6 +45,18 @@ export interface Box {
   y: number;
   width: number;
   height: number;
+}
+
+/**
+ * A blur mark as the encode needs it: its rectangle in fractions of the
+ * picture, and its radius as a fraction of the picture's width.
+ */
+export interface BlurRegion {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  radius: number;
 }
 
 /** Top left, top right, bottom right, bottom left, matching `roundRect`. */
@@ -85,6 +99,12 @@ export interface RenderRequest {
   mixed: MixedAudio | null;
   /** The output's frame rate ceiling. */
   fps: number;
+  /** Every mark other than a blur, rasterized at the picture's own size. */
+  overlay: ImageBitmap | null;
+  /** The blur marks, applied to each decoded frame. */
+  blurs: BlurRegion[];
+  /** The motion pass's clicks, drawn as ripples, or null for none. */
+  ripples: Float32Array | null;
   onProgress?: (fraction: number) => void;
 }
 
@@ -133,6 +153,9 @@ export async function renderVideo({
   audio,
   mixed,
   fps,
+  overlay,
+  blurs,
+  ripples,
   onProgress,
 }: RenderRequest): Promise<ArrayBuffer> {
   const minFrameGap = 1 / fps;
@@ -259,6 +282,71 @@ export async function renderVideo({
           );
         } else {
           sample.draw(ctx, box.x, box.y, box.width, box.height);
+        }
+
+        // The marks ride the same zoom as the picture, through the same
+        // arithmetic the preview's transform uses, so a blur stays on what it
+        // hides and an arrow on what it points at.
+        const view = project(zoom, box);
+        const W = sample.displayWidth;
+        const H = sample.displayHeight;
+
+        // A blur is the frame drawn again through a filter, clipped to the
+        // region. Only the region and a margin of three radii are drawn, since
+        // filtering the whole frame for each blur is most of a frame's budget.
+        for (const blur of blurs) {
+          const r = normalized(blur);
+          const radius = blur.radius * view.unit;
+          const mx = (radius * 3) / view.unit;
+          const my = (radius * 3) / (view.unit * (box.height / box.width));
+          const x0 = Math.max(r.x - mx, 0);
+          const y0 = Math.max(r.y - my, 0);
+          const x1 = Math.min(r.x + r.w + mx, 1);
+          const y1 = Math.min(r.y + r.h + my, 1);
+          const a = view.at({ x: r.x, y: r.y });
+          const c = view.at({ x: r.x + r.w, y: r.y + r.h });
+          const d0 = view.at({ x: x0, y: y0 });
+          const d1 = view.at({ x: x1, y: y1 });
+
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(a.x, a.y, c.x - a.x, c.y - a.y);
+          ctx.clip();
+          ctx.filter = `blur(${radius}px)`;
+          sample.draw(
+            ctx,
+            x0 * W,
+            y0 * H,
+            (x1 - x0) * W,
+            (y1 - y0) * H,
+            d0.x,
+            d0.y,
+            d1.x - d0.x,
+            d1.y - d0.y,
+          );
+          ctx.restore();
+        }
+
+        if (overlay) {
+          const { window } = view;
+          ctx.drawImage(
+            overlay,
+            window.x * overlay.width,
+            window.y * overlay.height,
+            window.size * overlay.width,
+            window.size * overlay.height,
+            box.x,
+            box.y,
+            box.width,
+            box.height,
+          );
+        }
+
+        if (ripples) {
+          for (const ripple of ripplesAt(ripples, sample.timestamp)) {
+            const at = view.at(ripple);
+            drawRipple(ctx, at.x, at.y, view.unit, ripple.progress);
+          }
         }
         ctx.restore();
 

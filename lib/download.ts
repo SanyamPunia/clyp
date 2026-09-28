@@ -27,7 +27,7 @@ export function downloadBlob(blob: Blob, filename: string): void {
  */
 export function filenameFor(
   typed: string | undefined,
-  extension: "png" | "mp4",
+  extension: "png" | "mp4" | "zip",
   source?: string,
 ): string {
   const base = (value: string) => value.trim().replace(/\.[^./\\]+$/, "");

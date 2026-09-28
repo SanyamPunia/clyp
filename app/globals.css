@@ -147,6 +147,16 @@
     }
   }
 
+  /*
+   * Set on the frame while a several-sizes export lays it out at one size
+   * after another. The raster reads computed styles as they are, so a box
+   * still easing towards a new shape would be baked halfway there.
+   */
+  [data-instant].artwork-ease,
+  [data-instant] .artwork-ease {
+    --tw-duration: 0s;
+  }
+
   /* Dot grid the artwork floats on. Sized so it stays legible at any zoom. */
   .canvas-grid {
     background-color: var(--canvas);

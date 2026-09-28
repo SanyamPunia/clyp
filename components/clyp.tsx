@@ -20,6 +20,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import { flushSync } from "react-dom";
 import { toast } from "sonner";
 
 import { DropZone, readMediaFile } from "@/components/drop-zone";
@@ -31,14 +32,21 @@ import { UploadCard } from "@/components/upload-card";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { CurveEditor } from "@/components/curve-editor";
+import { DeviceFrame, deviceScreenRadius } from "@/components/device-frame";
+import { HandleBadge } from "@/components/handle-badge";
+import { MarkControls } from "@/components/mark-controls";
+import { MarksLayer } from "@/components/marks-layer";
 import {
   Dialog,
   DialogBody,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { FieldLabel } from "@/components/ui/field-label";
+import { Input } from "@/components/ui/input";
 import { Dimensions } from "@/components/ui/dimensions";
 import { ScrollFade } from "@/components/ui/scroll-fade";
 import {
@@ -84,7 +92,41 @@ import {
   newFadeId,
   placeFade,
 } from "@/lib/clip-fade";
-import { EXPORT_IGNORE, EXPORT_MEDIA, rasterize } from "@/lib/raster";
+import {
+  EXPORT_IGNORE,
+  EXPORT_MEDIA,
+  type RasterSize,
+  bakeBlurs,
+  rasterize,
+  slice,
+} from "@/lib/raster";
+import {
+  type Mark,
+  type MarkColor,
+  type MarkKind,
+  blurRadius,
+  normalized,
+  tidyMarks,
+} from "@/lib/marks";
+import { drawRipple, ripplesAt } from "@/lib/ripples";
+import { paletteFrom } from "@/lib/palette";
+import {
+  type Look,
+  applyLook,
+  lookFrom,
+  newLookId,
+  nextLookName,
+} from "@/lib/looks";
+import {
+  NO_TEMPLATE,
+  getTemplate,
+  outputFor,
+  slideCount,
+  slideRects,
+  templateName,
+  templateRatio,
+} from "@/lib/templates";
+import { uniqueNames, zip } from "@/lib/zip";
 import {
   DEFAULT_SOLID_COLOR,
   defaultCustomGradient,
@@ -111,13 +153,18 @@ import {
 import {
   type StoredEdits,
   deleteEdits,
+  deleteMarks,
   deleteMedia,
   deleteMotion,
   readEdits,
+  readLooks,
+  readMarks,
   readMedia,
   readMotion as readStoredMotion,
   readStyle,
   writeEdits,
+  writeLooks,
+  writeMarks,
   writeMedia,
   writeMotion,
   writeStyle,
@@ -250,6 +297,17 @@ const TIMING = {
 /** How long an edit sits before it is written. A drag settles well inside it. */
 const EDITS_DEBOUNCE = 300;
 
+/** "Instagram Story" as "instagram-story", for a filename inside a ZIP. */
+const slug = (text: string) =>
+  text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+
+/** A data URL's bytes, for an entry in a ZIP. */
+const bytesOf = async (url: string) =>
+  new Uint8Array(await (await fetch(url)).arrayBuffer());
+
 const clamp = (value: number, low: number, high: number) =>
   Math.min(Math.max(value, low), Math.max(low, high));
 
@@ -257,6 +315,8 @@ const DEFAULT_STYLE: StyleOptions = {
   gradientId: defaultGradientId,
   gradientAngle: 180,
   aspect: "auto",
+  template: NO_TEMPLATE,
+  slides: 1,
   padding: 64,
   outerRadius: 12,
   imageRadius: 8,
@@ -268,10 +328,16 @@ const DEFAULT_STYLE: StyleOptions = {
   windowChrome: "none",
   windowUrl: "",
   windowNavbarDark: false,
+  device: "none",
   caption: "",
   captionPosition: "below",
   captionSize: 32,
   captionDark: false,
+  badge: "",
+  badgePosition: "bottom-right",
+  badgeSize: 28,
+  badgeDark: false,
+  clickRipples: false,
   showNoiseOverlay: false,
   noiseIntensity: 55,
   background: "preset",
@@ -347,11 +413,39 @@ export function Clyp() {
    * same way whichever wants it.
    */
   const [motionAsk, setMotionAsk] = useState<
-    { kind: "follow"; region: ZoomRegion } | { kind: "suggest" } | null
+    | { kind: "follow"; region: ZoomRegion }
+    | { kind: "suggest" }
+    | { kind: "ripples" }
+    | null
   >(null);
   /** Whether suggested regions are shown on the lane. */
   const [suggesting, setSuggesting] = useState(false);
   const [soundtrack, setSoundtrack] = useState<Soundtrack | null>(null);
+  /**
+   * What is drawn on the picture: blurs and blocks that redact, boxes,
+   * arrows and text that point. In fractions of the picture, so they mean the
+   * same thing at any zoom and any export size. An edit like the trim, so undo
+   * walks them back, and stored under a key of their own, since an image has
+   * no edits record and marks belong to images as much as to clips.
+   */
+  const [marks, setMarks] = useState<Mark[]>([]);
+  const [selectedMark, setSelectedMark] = useState<string | null>(null);
+  /** What a press on the picture draws, or null to only select. */
+  const [markTool, setMarkTool] = useState<MarkKind | null>(null);
+  const [markColor, setMarkColor] = useState<MarkColor>("red");
+  const [removeMarkId, setRemoveMarkId] = useState<string | null>(null);
+  /** Whether the safe zone and slide seams are drawn over the canvas. View state. */
+  const [showGuides, setShowGuides] = useState(true);
+  /**
+   * A template the frame is laid out at for one step of a several-sizes
+   * export, in place of the chosen one. Set and cleared synchronously around
+   * each raster, so the canvas only ever shows it for the length of one.
+   */
+  const [sizeOverride, setSizeOverride] = useState<string | null>(null);
+  const [looks, setLooks] = useState<Look[]>([]);
+  const [saveLookOpen, setSaveLookOpen] = useState(false);
+  const [lookName, setLookName] = useState("");
+  const [deleteLook, setDeleteLook] = useState<Look | null>(null);
   /**
    * The preview's own volume, not the export's, and one per source.
    *
@@ -446,6 +540,11 @@ export function Clyp() {
   const resumeAfterAimRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
+  /** The marks' layer, which the zoom loop transforms with the video. */
+  const marksLayerRef = useRef<HTMLDivElement>(null);
+  /** The preview's click ripples, drawn by the same loop. */
+  const rippleCanvasRef = useRef<HTMLCanvasElement>(null);
+  const ripplesOnRef = useRef(false);
 
   /**
    * What the artwork measures, which is the picture plus the title bar when it
@@ -503,10 +602,18 @@ export function Clyp() {
       : null;
   // Copy has no MP4 flavour and takes the poster frame, and a Download set to
   // PNG asks for the same thing deliberately. Only this encodes.
+  /**
+   * The platform size the frame is laid out at. A several-sizes export steps
+   * through others one raster at a time, and each is a single slide.
+   */
+  const template = getTemplate(sizeOverride ?? styleOptions.template);
+  const slides = sizeOverride ? 1 : slideCount(template, styleOptions.slides);
+  // A carousel's slides are stills, so a clip set to one exports its frame.
   const exportsVideo =
     media?.kind === "video" &&
     exportAction === "download" &&
-    videoFormat === "mp4";
+    videoFormat === "mp4" &&
+    slides === 1;
   // What will actually be encoded, which is the trim at the chosen speed rather
   // than the file. The duration readout, the size estimate and the encode all
   // read this one value, so none of them can describe a length nobody asked
@@ -527,7 +634,9 @@ export function Clyp() {
    * rather than the artwork, so shaping the frame around it would preview a
    * frame nobody is going to export.
    */
-  const ratio = aspectRatio(styleOptions.aspect);
+  const ratio = template
+    ? templateRatio(template, slides)
+    : aspectRatio(styleOptions.aspect);
   const shaped =
     ratio !== null && artwork !== null && media !== null
       ? aspectBox(artwork, styleOptions.padding, ratio)
@@ -537,12 +646,33 @@ export function Clyp() {
     media?.kind === "video" ? "Remove clip" : "Remove screenshot";
 
   const framed = styleOptions.windowChrome !== "none";
+  // A device decides the screen's corners itself: a phone's are its own
+  // radius all round, and a laptop's screen is square inside its bezel.
+  const screenRadius = deviceScreenRadius(
+    styleOptions.device,
+    dimensions?.w ?? 1280,
+  );
+  const radius = screenRadius ?? styleOptions.imageRadius;
+  const corners = screenRadius === null ? styleOptions.imageCorners : ALL_CORNERS;
   const mediaRadius = cornerRadius(
-    styleOptions.imageRadius,
-    styleOptions.imageCorners,
+    radius,
+    corners,
     framed ? "bottom" : undefined,
   );
+  // The shadow moves to the device when there is one, since the device is
+  // what sits on the background.
+  const mediaShadow =
+    styleOptions.device === "none" ? styleOptions.shadow : "shadow-none";
+  const picture = useMemo(
+    () =>
+      dimensions
+        ? { width: dimensions.w, height: dimensions.h }
+        : { width: 1280, height: 720 },
+    [dimensions],
+  );
+  const selectedMarkValue = marks.find((m) => m.id === selectedMark) ?? null;
   const caption = styleOptions.caption.trim();
+  const badge = styleOptions.badge.trim();
   const zoomed = zoom !== 1 && frameSize.width > 0;
   const selectedRegion = zooms.find((r) => r.id === selectedZoom) ?? null;
   const selectedRamp = fades.find((f) => f.id === selectedFade) ?? null;
@@ -552,7 +682,8 @@ export function Clyp() {
     fadesRef.current = fades;
     motionRef.current = motion;
     selectedZoomRef.current = selectedZoom;
-  }, [zooms, fades, motion, selectedZoom]);
+    ripplesOnRef.current = styleOptions.clickRipples;
+  }, [zooms, fades, motion, selectedZoom, styleOptions.clickRipples]);
 
   /**
    * Takes over from the loader in `lib/media.ts`, which has already read and
@@ -575,6 +706,9 @@ export function Clyp() {
     setSelectedFade(null);
     setZooms([]);
     setSelectedZoom(null);
+    // Marks were placed on a picture that is no longer here.
+    setMarks([]);
+    setSelectedMark(null);
     // A read for the clip that has just been replaced is stopped, since its
     // answer would be about the wrong picture.
     motionReadRef.current?.cancel();
@@ -994,6 +1128,7 @@ export function Clyp() {
       speed,
       zooms,
       fades,
+      marks,
       placement: soundtrack
         ? {
             offset: soundtrack.offset,
@@ -1002,7 +1137,7 @@ export function Clyp() {
           }
         : null,
     }),
-    [trim, cuts, speed, zooms, fades, soundtrack],
+    [trim, cuts, speed, zooms, fades, marks, soundtrack],
   );
 
   const restoreEdits = useCallback((next: typeof editState) => {
@@ -1011,11 +1146,13 @@ export function Clyp() {
     setSpeed(next.speed);
     setZooms(next.zooms);
     setFades(next.fades);
+    setMarks(next.marks);
     // A selection is a view of the state rather than part of it, and the
     // region it named may be the one coming back or going away.
     setSelectedZoom(null);
     setSelectedCut(null);
     setSelectedFade(null);
+    setSelectedMark(null);
     if (next.placement) {
       setSoundtrack((previous) =>
         previous ? { ...previous, ...next.placement } : previous,
@@ -1026,13 +1163,45 @@ export function Clyp() {
   const history = useEditHistory({
     state: editState,
     restore: restoreEdits,
-    enabled: restored && media?.kind === "video",
+    // Any picture, since marks are edits on an image too.
+    enabled: restored && media !== null,
   });
   const { undo, redo } = history;
 
   useEffect(() => {
     resetHistoryRef.current = history.reset;
   }, [history.reset]);
+
+  const addMark = useCallback((mark: Mark) => {
+    setMarks((previous) => [...previous, mark]);
+    setSelectedMark(mark.id);
+  }, []);
+
+  const updateMark = useCallback((next: Mark) => {
+    setMarks((previous) => previous.map((m) => (m.id === next.id ? next : m)));
+  }, []);
+
+  const removeMark = useCallback(() => {
+    setMarks((previous) => previous.filter((m) => m.id !== removeMarkId));
+    setSelectedMark(null);
+    setRemoveMarkId(null);
+  }, [removeMarkId]);
+
+  /** The Delete key's removal, which undo covers, so it does not confirm. */
+  const deleteSelectedMark = useCallback(() => {
+    if (!selectedMark) return;
+    setMarks((previous) => previous.filter((m) => m.id !== selectedMark));
+    setSelectedMark(null);
+    toast("Mark removed", { action: { label: "Undo", onClick: () => undo() } });
+  }, [selectedMark, undo]);
+
+  /**
+   * A drag on a mark pauses a clip and leaves it paused, like every other drag
+   * on the picture: the frame under the mark is what decides where it goes.
+   */
+  const handleMarkGesture = useCallback((active: boolean) => {
+    if (active) videoRef.current?.pause();
+  }, []);
 
   /**
    * Reads the whole clip's motion, once. Progress lands on the toggle, the
@@ -1138,6 +1307,8 @@ export function Clyp() {
 
     if (ask.kind === "follow") {
       updateZoom({ ...ask.region, follow: true });
+      startMotionRead();
+    } else if (ask.kind === "ripples") {
       startMotionRead();
     } else {
       setSuggesting(true);
@@ -1254,16 +1425,38 @@ export function Clyp() {
         if (cancelled) return;
 
         setStyleOptions(readStyle(DEFAULT_STYLE));
+        setLooks(readLooks());
         const done = () => {
           if (!cancelled) setRestored(true);
         };
+        // Put back only onto the picture they were drawn on, matched the way
+        // the edits are, so marks never land on a different screenshot.
+        const restoreMarks = (name: string | undefined, w: number, h: number) =>
+          readMarks()
+            .catch(() => null)
+            .then((stored) => {
+              if (
+                !cancelled &&
+                stored &&
+                stored.of.width === w &&
+                stored.of.height === h &&
+                stored.of.name === name
+              ) {
+                setMarks(tidyMarks(stored.marks));
+                resetHistoryRef.current?.();
+              }
+            });
 
         if (stored?.kind === "image" && typeof stored.payload === "string") {
           const probe = new Image();
           probe.onload = () => {
             setMedia({ kind: "image", src: probe.src, name: stored.name });
             setDimensions({ w: probe.naturalWidth, h: probe.naturalHeight });
-            done();
+            void restoreMarks(
+              stored.name,
+              probe.naturalWidth,
+              probe.naturalHeight,
+            ).then(done);
           };
           probe.onerror = done;
           probe.src = stored.payload;
@@ -1296,6 +1489,7 @@ export function Clyp() {
                   ? edits
                   : null;
               if (kept) applyEdits(kept, length);
+              await restoreMarks(loaded.media.name, loaded.width, loaded.height);
               done();
 
               // The motion track is derived from the file, but reading it is
@@ -1432,6 +1626,28 @@ export function Clyp() {
     soundtrack,
   ]);
 
+  // The marks, on the same debounce as the edits. Written under the picture
+  // they belong to, and cleared with it.
+  useEffect(() => {
+    if (!restored) return;
+
+    if (!media || !dimensions || marks.length === 0) {
+      deleteMarks();
+      return;
+    }
+    const record = {
+      of: { name: media.name, width: dimensions.w, height: dimensions.h },
+      marks,
+    };
+    const timer = window.setTimeout(() => writeMarks(record), EDITS_DEBOUNCE);
+    return () => window.clearTimeout(timer);
+  }, [restored, media, dimensions, marks]);
+
+  useEffect(() => {
+    if (!restored) return;
+    writeLooks(looks);
+  }, [looks, restored]);
+
   // Paste anywhere on the page drops an image onto the canvas.
   useEffect(() => {
     const handlePaste = (e: ClipboardEvent) => {
@@ -1475,6 +1691,76 @@ export function Clyp() {
     setResetStyleOpen(false);
   }, [styleOptions]);
 
+  /**
+   * Applying a look is one press and cheap to reverse, so it does not ask.
+   * The style has no undo of its own, so the toast carries one.
+   */
+  const handleApplyLook = useCallback(
+    (look: Look) => {
+      const before = styleOptions;
+      setPreviousGradientCss(resolveGradientCss(before));
+      setStyleOptions(applyLook(before, look));
+      toast(`Applied ${look.name}`, {
+        action: {
+          label: "Undo",
+          onClick: () => {
+            setPreviousGradientCss(resolveGradientCss(applyLook(before, look)));
+            setStyleOptions(before);
+          },
+        },
+      });
+    },
+    [styleOptions],
+  );
+
+  const saveLook = useCallback(() => {
+    const name = lookName.trim() || nextLookName(looks);
+    setLooks((previous) => [
+      ...previous,
+      { id: newLookId(), name, style: lookFrom(styleOptions) },
+    ]);
+    setSaveLookOpen(false);
+    setLookName("");
+    toast.success(`Saved ${name}`);
+  }, [lookName, looks, styleOptions]);
+
+  const confirmDeleteLook = useCallback(() => {
+    setLooks((previous) => previous.filter((l) => l.id !== deleteLook?.id));
+    setDeleteLook(null);
+  }, [deleteLook]);
+
+  /**
+   * The custom gradient, from the picture's own colours. The picture is drawn
+   * into a small canvas first: a few thousand pixels say as much about its
+   * colours as a few million, and reading them back is the slow part.
+   */
+  const matchPicture = useCallback(() => {
+    const source: CanvasImageSource | null | undefined =
+      media?.kind === "video"
+        ? videoRef.current
+        : screenshotRef.current?.querySelector("img");
+    if (!source) return;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return;
+    try {
+      ctx.drawImage(source, 0, 0, 64, 64);
+      const { from, to } = paletteFrom(ctx.getImageData(0, 0, 64, 64).data);
+      setPreviousGradientCss(resolveGradientCss(styleOptions));
+      setStyleOptions({
+        ...styleOptions,
+        background: "custom",
+        customGradientFrom: from,
+        customGradientTo: to,
+      });
+    } catch {
+      toast.error("The picture's colours could not be read");
+    }
+  }, [media?.kind, styleOptions]);
+
   const openExportModal = useCallback((action: "copy" | "download") => {
     setExportAction(action);
     setExportModalOpen(true);
@@ -1486,16 +1772,38 @@ export function Clyp() {
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if (!media) return;
-      const mod = e.metaKey || e.ctrlKey;
-      if (!mod) return;
+      // Escape puts the tool down, so a press on the picture selects again.
+      if (e.key === "Escape" && markTool) {
+        setMarkTool(null);
+        return;
+      }
 
-      // A field being typed in keeps its own undo stack, which is the browser's
-      // and is about the text rather than the clip.
+      // A field being typed in keeps its own keys: its own undo stack, which
+      // is the browser's and is about the text, and its own Backspace.
       const target = e.target as HTMLElement | null;
       const typing =
         target?.isContentEditable ||
         target?.tagName === "INPUT" ||
         target?.tagName === "TEXTAREA";
+
+      // Delete takes the selected mark off from anywhere on the page, not only
+      // while the mark has focus: a mark is selected the moment it is drawn,
+      // and reaching for Tab first to delete it is not what anyone does. It
+      // does not ask, since Cmd+Z brings it back and the toast says so. A lane
+      // that already answered the key, for its own zoom or cut, keeps it.
+      if (
+        (e.key === "Delete" || e.key === "Backspace") &&
+        selectedMark &&
+        !typing &&
+        !e.defaultPrevented
+      ) {
+        e.preventDefault();
+        deleteSelectedMark();
+        return;
+      }
+
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod) return;
 
       // The same two gates the buttons carry. Cmd+S has to be swallowed either
       // way, or the browser offers to save the page.
@@ -1527,6 +1835,9 @@ export function Clyp() {
     // every render: this binds a window listener, and a drag renders per frame.
   }, [
     media,
+    markTool,
+    selectedMark,
+    deleteSelectedMark,
     openExportModal,
     downloadBlocked,
     undo,
@@ -1535,15 +1846,57 @@ export function Clyp() {
     pasteCopied,
   ]);
 
+  /**
+   * One still of the frame at a size, with the blurs baked in. Every PNG path
+   * goes through this: one size, a carousel, several sizes and a copy.
+   */
+  const still = useCallback(async (size: RasterSize) => {
+    const frame = screenshotRef.current;
+    if (!frame) throw new Error("There is nothing to export");
+    return bakeBlurs(await rasterize(frame, size), frame);
+  }, []);
+
   const handleExport = useCallback(
     async (options: ExportOptions) => {
       const frame = screenshotRef.current;
       if (!media || !frame) return;
 
+      const sizes = options.sizes ?? [];
+      // The name everything is saved under, less its extension, which each
+      // branch imposes for itself.
+      const base = filenameFor(options.filename, "png", media.name).slice(0, -4);
+
       setExporting(true);
       setProgress(exportsVideo ? 0 : null);
       try {
-        if (exportsVideo) {
+        if (sizes.length > 0) {
+          // Each size is its own shape around the same artwork, so the frame is
+          // laid out at each in turn, synchronously, and rasterized there. The
+          // override also switches the frame's easing off, or the raster would
+          // catch the box halfway between two shapes.
+          const entries: { name: string; data: Uint8Array }[] = [];
+          try {
+            for (const id of sizes) {
+              const t = getTemplate(id);
+              if (!t) continue;
+              flushSync(() => setSizeOverride(id));
+              const url = await still({ width: t.width, height: t.height });
+              entries.push({
+                name: `${base}-${slug(templateName(t))}-${t.width}x${t.height}.png`,
+                data: await bytesOf(url),
+              });
+            }
+          } finally {
+            flushSync(() => setSizeOverride(null));
+          }
+          const names = uniqueNames(entries.map((e) => e.name));
+          const archive = zip(entries.map((e, i) => ({ ...e, name: names[i] })));
+          downloadBlob(
+            new Blob([archive.buffer as ArrayBuffer], { type: "application/zip" }),
+            filenameFor(options.filename, "zip", media.name),
+          );
+          toast.success(`${entries.length} sizes downloaded`);
+        } else if (exportsVideo) {
           const box = clipBoxRef.current;
           if (!box || !media.blob || !trim) {
             throw new Error("That clip is not loaded");
@@ -1552,11 +1905,13 @@ export function Clyp() {
           const controller = new AbortController();
           abortRef.current = controller;
 
+          const layer = marksLayerRef.current;
+          const blurs = marks.filter((m) => m.kind === "blur");
           const blob = await exportVideo({
             frame,
             box,
             source: media.blob,
-            scale: options.quality,
+            size: template ? outputFor(template) : options.quality,
             trim,
             cuts,
             speed,
@@ -1567,13 +1922,28 @@ export function Clyp() {
             soundtrack: soundtrack ?? undefined,
             music: options.music,
             fps: options.fps,
+            marks:
+              layer && marks.length > 0
+                ? {
+                    layer,
+                    picture,
+                    drawn: marks.length > blurs.length,
+                    blurs: blurs.map((m) => ({
+                      ...normalized(m),
+                      radius: blurRadius(picture.width) / picture.width,
+                    })),
+                  }
+                : undefined,
+            ripples: styleOptions.clickRipples ? motion?.clicks : null,
             onProgress: setProgress,
             signal: controller.signal,
           });
           downloadBlob(blob, filenameFor(options.filename, "mp4", media.name));
           toast.success("Video downloaded");
         } else {
-          const dataUrl = await rasterize(frame, options.quality);
+          const dataUrl = await still(
+            template ? outputFor(template, slides) : options.quality,
+          );
 
           if (exportAction === "copy") {
             const blob = await fetch(dataUrl).then((res) => res.blob());
@@ -1581,6 +1951,23 @@ export function Clyp() {
               new ClipboardItem({ [blob.type]: blob }),
             ]);
             toast.success("Copied to clipboard");
+          } else if (template && slides > 1) {
+            // A carousel is one raster of the whole strip, cut at the seams,
+            // so the artwork crosses from one slide to the next unbroken.
+            const parts = await slice(dataUrl, slideRects(template, slides));
+            const archive = zip(
+              await Promise.all(
+                parts.map(async (part, i) => ({
+                  name: `${base}-${i + 1}.png`,
+                  data: new Uint8Array(await part.arrayBuffer()),
+                })),
+              ),
+            );
+            downloadBlob(
+              new Blob([archive.buffer as ArrayBuffer], { type: "application/zip" }),
+              filenameFor(options.filename, "zip", media.name),
+            );
+            toast.success(`${slides} slides downloaded`);
           } else {
             download(dataUrl, filenameFor(options.filename, "png", media.name));
             toast.success("Image downloaded");
@@ -1619,6 +2006,12 @@ export function Clyp() {
       cuts,
       zooms,
       fades,
+      marks,
+      picture,
+      slides,
+      still,
+      styleOptions.clickRipples,
+      template,
     ],
   );
 
@@ -1672,6 +2065,9 @@ export function Clyp() {
     if (!video || !source) return;
 
     let frame = 0;
+    let drew = false;
+    // The layer mounts with the video, so the one here is the one to reset.
+    const marksLayer = marksLayerRef.current;
     const apply = () => {
       frame = requestAnimationFrame(apply);
 
@@ -1694,6 +2090,37 @@ export function Clyp() {
       if (video.style.transform !== transform) video.style.transform = transform;
       if (video.style.transformOrigin !== origin) {
         video.style.transformOrigin = origin;
+      }
+
+      // The marks ride the picture's own transform and fade, so a blur stays
+      // on what it hides while the picture grows under it.
+      const layer = marksLayerRef.current;
+      if (layer) {
+        if (layer.style.transform !== transform) layer.style.transform = transform;
+        if (layer.style.transformOrigin !== origin) {
+          layer.style.transformOrigin = origin;
+        }
+        if (layer.style.opacity !== opacity) layer.style.opacity = opacity;
+      }
+
+      // Cleared only when something was drawn, so a clip with no clicks on
+      // screen costs no canvas work at all.
+      const canvas = rippleCanvasRef.current;
+      const clicks = ripplesOnRef.current ? motionRef.current?.clicks : null;
+      const shown = clicks ? ripplesAt(clicks, video.currentTime) : [];
+      const pen = canvas?.getContext("2d");
+      if (canvas && pen && (shown.length > 0 || drew)) {
+        pen.clearRect(0, 0, canvas.width, canvas.height);
+        for (const ripple of shown) {
+          drawRipple(
+            pen,
+            ripple.x * canvas.width,
+            ripple.y * canvas.height,
+            canvas.width,
+            ripple.progress,
+          );
+        }
+        drew = shown.length > 0;
       }
 
       // The marker of a following region shows where the action is, written
@@ -1724,6 +2151,10 @@ export function Clyp() {
       cancelAnimationFrame(frame);
       video.style.transform = "";
       video.style.transformOrigin = "";
+      if (marksLayer) {
+        marksLayer.style.transform = "";
+        marksLayer.style.transformOrigin = "";
+      }
     };
   }, [source, speed]);
 
@@ -1863,6 +2294,8 @@ export function Clyp() {
     setSpeed(1);
     setZooms([]);
     setSelectedZoom(null);
+    setMarks([]);
+    setSelectedMark(null);
     removeSoundtrack();
     setZoom(1);
     setZoomMode("fit");
@@ -2090,6 +2523,7 @@ export function Clyp() {
                     the image, not on the ref. */}
                 <div
                   ref={screenshotRef}
+                  data-instant={sizeOverride ? "" : undefined}
                   className="artwork-ease relative w-max overflow-hidden transition-[border-radius]"
                   style={{
                     borderRadius: `${styleOptions.outerRadius}px`,
@@ -2123,7 +2557,7 @@ export function Clyp() {
                         to run from or to, and giving it one would clip a
                         caption or bar switching on while the frame caught up. */}
                     <div
-                      className="artwork-ease flex items-center justify-center transition-[padding,width,height]"
+                      className="artwork-ease relative flex items-center justify-center transition-[padding,width,height]"
                       style={{
                         padding: `${styleOptions.padding}px`,
                         ...(shaped && {
@@ -2152,6 +2586,11 @@ export function Clyp() {
                               position="above"
                             />
                           )}
+                          <Device
+                            device={styleOptions.device}
+                            width={picture.width}
+                            shadow={styleOptions.shadow}
+                          >
                           <div className="relative">
                             {styleOptions.windowChrome !== "none" && (
                               <WindowNavbar
@@ -2160,11 +2599,7 @@ export function Clyp() {
                                 dark={styleOptions.windowNavbarDark}
                                 url={styleOptions.windowUrl}
                                 style={{
-                                  borderRadius: cornerRadius(
-                                    styleOptions.imageRadius,
-                                    styleOptions.imageCorners,
-                                    "top",
-                                  ),
+                                  borderRadius: cornerRadius(radius, corners, "top"),
                                 }}
                               />
                             )}
@@ -2193,7 +2628,7 @@ export function Clyp() {
                               <div
                                 ref={clipBoxRef}
                                 className={cn(
-                                  styleOptions.shadow,
+                                  mediaShadow,
                                   "artwork-ease relative overflow-hidden transition-[border-radius,box-shadow]",
                                 )}
                                 style={{ borderRadius: mediaRadius }}
@@ -2209,6 +2644,38 @@ export function Clyp() {
                                   onClick={togglePlayback}
                                   className="block h-auto max-w-full cursor-pointer select-none"
                                 />
+                                <MarksLayer
+                                  ref={marksLayerRef}
+                                  marks={marks}
+                                  selected={selectedMark}
+                                  tool={markTool}
+                                  color={markColor}
+                                  picture={picture}
+                                  canvasZoom={zoom}
+                                  onAdd={addMark}
+                                  onChange={updateMark}
+                                  onSelect={setSelectedMark}
+                                  onGesture={handleMarkGesture}
+                                >
+                                  {/* Drawn by the zoom loop, in the layer so
+                                      it rides the same transform. Left out of
+                                      every raster: the encode draws its own
+                                      from the same function, and a still has
+                                      no time for a ripple to be at. */}
+                                  {styleOptions.clickRipples && (
+                                    <canvas
+                                      ref={rippleCanvasRef}
+                                      {...{ [EXPORT_IGNORE]: "" }}
+                                      aria-hidden="true"
+                                      width={Math.min(picture.width, 1280)}
+                                      height={Math.round(
+                                        (picture.height * Math.min(picture.width, 1280)) /
+                                          picture.width,
+                                      )}
+                                      className="pointer-events-none absolute inset-0 size-full"
+                                    />
+                                  )}
+                                </MarksLayer>
                                 {selectedRegion && (
                                   <ZoomFocusMarker
                                     ref={liveMarkerRef}
@@ -2237,21 +2704,38 @@ export function Clyp() {
                                 )}
                               </div>
                             ) : (
-                              /* eslint-disable-next-line @next/next/no-img-element -- the
-                          source is a client-side data URL, which next/image cannot
-                          optimize and html-to-image cannot serialize. */
-                              <img
-                                src={media.src}
-                                alt="Your screenshot"
-                                className={cn(
-                                  styleOptions.shadow,
-                                  "artwork-ease block h-auto max-w-full select-none transition-[border-radius,box-shadow]",
-                                )}
-                                style={{ borderRadius: mediaRadius }}
-                                draggable={false}
-                              />
+                              <div className="relative">
+                                {/* eslint-disable-next-line @next/next/no-img-element -- the
+                                    source is a client-side data URL, which
+                                    next/image cannot optimize and
+                                    html-to-image cannot serialize. */}
+                                <img
+                                  src={media.src}
+                                  alt="Your screenshot"
+                                  className={cn(
+                                    mediaShadow,
+                                    "artwork-ease block h-auto max-w-full select-none transition-[border-radius,box-shadow]",
+                                  )}
+                                  style={{ borderRadius: mediaRadius }}
+                                  draggable={false}
+                                />
+                                <MarksLayer
+                                  marks={marks}
+                                  selected={selectedMark}
+                                  tool={markTool}
+                                  color={markColor}
+                                  picture={picture}
+                                  canvasZoom={zoom}
+                                  radius={mediaRadius}
+                                  onAdd={addMark}
+                                  onChange={updateMark}
+                                  onSelect={setSelectedMark}
+                                  onGesture={handleMarkGesture}
+                                />
+                              </div>
                             )}
                           </div>
+                          </Device>
                           {caption && styleOptions.captionPosition === "below" && (
                             <Caption
                               text={caption}
@@ -2264,9 +2748,33 @@ export function Clyp() {
                       ) : (
                         <UploadCard onUpload={loadMedia} />
                       )}
+                      {media && badge && (
+                        <HandleBadge
+                          text={badge}
+                          size={styleOptions.badgeSize}
+                          dark={styleOptions.badgeDark}
+                          position={styleOptions.badgePosition}
+                        />
+                      )}
                     </div>
                   </GradientBackground>
                 </div>
+
+                {/* Outside the export ref, so a guide can never be serialized
+                    into a frame, and inside the zoom transform, so it sits on
+                    the frame at any zoom. Its lines are divided by the zoom to
+                    stay one weight on screen. Its own colours, since it sits
+                    over arbitrary artwork. */}
+                {showGuides && media && template && (template.safe || slides > 1) && (
+                  <Guides
+                    width={template.width}
+                    height={template.height}
+                    slides={slides}
+                    safe={template.safe}
+                    line={1.5 / zoom}
+                    radius={styleOptions.outerRadius}
+                  />
+                )}
               </div>
 
               {/* Outside the export ref on purpose, so it can never be
@@ -2386,7 +2894,29 @@ export function Clyp() {
             onReset={() => setResetStyleOpen(true)}
             canReset={canResetStyle}
             disabled={!media}
-          />
+            kind={media?.kind}
+            onMatchPicture={matchPicture}
+            showGuides={showGuides}
+            onShowGuidesChange={setShowGuides}
+            motionReady={motion !== null}
+            motionProgress={motionProgress}
+            onReadMotion={() => setMotionAsk({ kind: "ripples" })}
+            looks={looks}
+            onSaveLook={() => setSaveLookOpen(true)}
+            onApplyLook={handleApplyLook}
+            onDeleteLook={setDeleteLook}
+          >
+            <MarkControls
+              marks={marks}
+              selected={selectedMarkValue}
+              tool={markTool}
+              color={markColor}
+              onToolChange={setMarkTool}
+              onColorChange={setMarkColor}
+              onChange={updateMark}
+              onRemove={() => selectedMark && setRemoveMarkId(selectedMark)}
+            />
+          </StyleControls>
         </ScrollFade>
       </section>
 
@@ -2420,11 +2950,9 @@ export function Clyp() {
         format={videoFormat}
         onFormatChange={setVideoFormat}
         progress={progress}
-        defaultFilename={filenameFor(
-          undefined,
-          exportsVideo ? "mp4" : "png",
-          media?.name,
-        )}
+        defaultName={filenameFor(undefined, "png", media?.name).slice(0, -4)}
+        template={template}
+        slides={slides}
         onCancel={exportsVideo ? handleCancelExport : undefined}
       />
 
@@ -2456,7 +2984,7 @@ export function Clyp() {
           if (!open) setMotionAsk(null);
         }}
         title="Read the clip's motion?"
-        description={`${motionAsk?.kind === "suggest" ? "To suggest zooms" : "To follow the action"}, clyp looks at where the picture changes from one frame to the next, once for the whole clip. That happens on this device and nothing leaves it. It takes ${motionWait}, and you can keep editing while it runs.`}
+        description={`${motionAsk?.kind === "suggest" ? "To suggest zooms" : motionAsk?.kind === "ripples" ? "To show each click" : "To follow the action"}, clyp looks at where the picture changes from one frame to the next, once for the whole clip. That happens on this device and nothing leaves it. It takes ${motionWait}, and you can keep editing while it runs.`}
         confirmLabel="Read the motion"
         confirmVariant="default"
         onConfirm={confirmMotion}
@@ -2533,6 +3061,81 @@ export function Clyp() {
         onConfirm={removeFade}
       />
 
+      {/* A mark can be what hides a password, so taking one away confirms
+          like every other remove. Undo brings it back as well. */}
+      <ConfirmDialog
+        open={removeMarkId !== null}
+        onOpenChange={(open) => {
+          if (!open) setRemoveMarkId(null);
+        }}
+        title="Remove this mark?"
+        description="It comes off the picture and out of every export. Undo brings it back."
+        confirmLabel="Remove"
+        onConfirm={removeMark}
+      />
+
+      <ConfirmDialog
+        open={deleteLook !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteLook(null);
+        }}
+        title={deleteLook ? `Delete ${deleteLook.name}?` : "Delete this look?"}
+        description="The look is gone from this browser. The current style is not changed."
+        confirmLabel="Delete"
+        onConfirm={confirmDeleteLook}
+      />
+
+      <Dialog
+        open={saveLookOpen}
+        onOpenChange={(open) => {
+          setSaveLookOpen(open);
+          if (!open) setLookName("");
+        }}
+      >
+        <DialogContent className="sm:max-w-[400px]">
+          <DialogHeader>
+            <DialogTitle>Save this look</DialogTitle>
+            <DialogDescription className="text-xs">
+              The background, frame, window, handle and shadow. The caption
+              and the address stay with each picture.
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              saveLook();
+            }}
+            className="contents"
+          >
+            <DialogBody className="flex flex-col gap-2 pb-4">
+              <FieldLabel htmlFor="look-name">Name</FieldLabel>
+              <Input
+                id="look-name"
+                value={lookName}
+                onChange={(event) => setLookName(event.target.value)}
+                placeholder={nextLookName(looks)}
+                spellCheck={false}
+                autoFocus
+                className="text-xs placeholder:text-xs"
+              />
+            </DialogBody>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="secondary"
+                size="lg"
+                onClick={() => setSaveLookOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" size="lg">
+                Save
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
       <ConfirmDialog
         open={clearOpen}
         onOpenChange={setClearOpen}
@@ -2541,6 +3144,90 @@ export function Clyp() {
         confirmLabel="Remove"
         onConfirm={handleClear}
       />
+    </div>
+  );
+}
+
+/** The device frame, or its children as they are when there is none. */
+function Device({
+  device,
+  width,
+  shadow,
+  children,
+}: {
+  device: StyleOptions["device"];
+  width: number;
+  shadow: string;
+  children: React.ReactNode;
+}) {
+  if (device === "none") return children;
+  return (
+    <DeviceFrame device={device} width={width} shadow={shadow}>
+      {children}
+    </DeviceFrame>
+  );
+}
+
+/**
+ * Where a platform's own interface will sit over the post, and where a
+ * carousel is cut into slides.
+ *
+ * Everything outside the safe zone is dimmed, since that is the part a reader
+ * should keep text out of. Positions are fractions of the template, so they
+ * land on the frame whatever size the frame is laid out at.
+ */
+function Guides({
+  width,
+  height,
+  slides,
+  safe,
+  line,
+  radius,
+}: {
+  width: number;
+  height: number;
+  slides: number;
+  safe?: { top: number; bottom: number; left: number; right: number };
+  line: number;
+  radius: number;
+}) {
+  const total = width * slides;
+  const edge = `${line}px dashed rgba(255,255,255,0.9)`;
+
+  return (
+    <div
+      aria-hidden="true"
+      // Above the background's own layers, which run to z-30 and are not
+      // contained by the frame, since the frame opens no stacking context.
+      className="pointer-events-none absolute inset-0 z-50 overflow-hidden"
+      style={{ borderRadius: radius }}
+    >
+      {safe &&
+        Array.from({ length: slides }, (_, i) => (
+          <div
+            key={i}
+            className="absolute"
+            style={{
+              left: `${((i * width + safe.left) / total) * 100}%`,
+              width: `${((width - safe.left - safe.right) / total) * 100}%`,
+              top: `${(safe.top / height) * 100}%`,
+              height: `${((height - safe.top - safe.bottom) / height) * 100}%`,
+              border: edge,
+              boxShadow: "0 0 0 100vmax rgba(0,0,0,0.28)",
+            }}
+          />
+        ))}
+      {Array.from({ length: slides - 1 }, (_, i) => (
+        <div
+          key={`seam-${i}`}
+          className="absolute inset-y-0"
+          style={{
+            left: `${((i + 1) / slides) * 100}%`,
+            borderLeft: edge,
+            filter: "drop-shadow(0 0 1px rgba(0,0,0,0.6))",
+          }}
+        />
+      ))}
     </div>
   );
 }

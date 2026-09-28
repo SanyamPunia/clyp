@@ -1,7 +1,9 @@
 import type { BackgroundKind } from "@/lib/gradients";
 import type {
+  BadgePosition,
   CaptionPosition,
   Corners,
+  Device,
   WindowChrome,
 } from "@/lib/style-options";
 
@@ -61,6 +63,13 @@ export interface StyleOptions {
   padding: number;
   /** A target shape for the whole frame, or `auto` to fit the artwork. */
   aspect: string;
+  /**
+   * A platform size from `lib/templates.ts`, or `none`. When set it decides
+   * the shape in place of `aspect`, and the export writes its exact pixels.
+   */
+  template: string;
+  /** How many carousel slides the frame spans. 1 for anything else. */
+  slides: number;
   /** Corner radius in px. */
   outerRadius: number;
   imageRadius: number;
@@ -72,6 +81,8 @@ export interface StyleOptions {
   /** The address a browser bar shows. Empty leaves the field blank. */
   windowUrl: string;
   windowNavbarDark: boolean;
+  /** A phone or laptop drawn around the media. */
+  device: Device;
   /** A line of text beside the artwork. Empty means none. */
   caption: string;
   captionPosition: CaptionPosition;
@@ -79,6 +90,15 @@ export interface StyleOptions {
   captionSize: number;
   /** Dark text, for a caption over a light background. */
   captionDark: boolean;
+  /** A handle shown in a corner of the frame, such as `@clyp`. Empty means none. */
+  badge: string;
+  badgePosition: BadgePosition;
+  /** Badge font size in px. The frame is in media pixels, so this is too. */
+  badgeSize: number;
+  /** A light pill with dark text, for a pale background. */
+  badgeDark: boolean;
+  /** Video only. A ring at each click the motion pass found. */
+  clickRipples: boolean;
   showNoiseOverlay: boolean;
   /** Grain strength, 0 to 100. */
   noiseIntensity: number;
@@ -92,6 +112,11 @@ export interface StyleOptions {
 
 export interface ExportOptions {
   quality: number;
+  /**
+   * Several templates at once, by id, written as PNGs into one ZIP. Absent or
+   * empty is one file at the current size.
+   */
+  sizes?: string[];
   filename?: string;
   /** Video only. Carry the clip's own sound into the export. */
   audio?: boolean;

@@ -4,12 +4,14 @@ import { useEffect, useState } from "react";
 import {
   CopyIcon,
   DownloadIcon,
+  FileArchiveIcon,
   FileImageIcon,
   FileVideoIcon,
   Loader2Icon,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogBody,
@@ -38,7 +40,21 @@ import {
   canEncodeSize,
   formatSpeed,
 } from "@/lib/video-export";
+import {
+  type Template,
+  enlargement,
+  outputFor,
+  platforms,
+  templateName,
+  templates,
+} from "@/lib/templates";
 import type { ExportOptions, MediaKind } from "@/types/screenshot";
+
+/** What "Several sizes" starts with ticked: the four most people post to. */
+const DEFAULT_SIZES = ["ig-portrait", "ig-story", "x-post", "li-landscape"];
+
+/** Past this, the stretch to reach a template is visible as softness. */
+const SOFT_ENLARGEMENT = 1.05;
 
 const QUALITY_OPTIONS = [
   { value: 1, label: "1x", hint: "Standard" },
@@ -71,8 +87,15 @@ interface ExportModalProps {
   onFormatChange?: (format: "mp4" | "png") => void;
   /** 0 to 1 while a video encodes, null while a PNG renders. */
   progress?: number | null;
-  /** What the filename field falls back to, shown as its placeholder. */
-  defaultFilename: string;
+  /**
+   * What the filename field falls back to, without an extension, since the
+   * extension follows what the dialog is set to write.
+   */
+  defaultName: string;
+  /** The platform size the frame is set to, or null for a scale. */
+  template?: Template | null;
+  /** How many carousel slides the frame spans. */
+  slides?: number;
   /** Present only when the export can be interrupted, which is a video. */
   onCancel?: () => void;
 }
@@ -94,7 +117,9 @@ export function ExportModal({
   format = "mp4",
   onFormatChange,
   progress = null,
-  defaultFilename,
+  defaultName,
+  template = null,
+  slides = 1,
   onCancel,
 }: ExportModalProps) {
   const [options, setOptions] = useState<ExportOptions>({
@@ -114,9 +139,22 @@ export function ExportModal({
     answers: Record<number, boolean>;
   } | null>(null);
 
+  /** One file at the current size, or several templates in one ZIP. */
+  const [mode, setMode] = useState<"one" | "sizes">("one");
+  const [picked, setPicked] = useState<string[]>(() =>
+    template && !DEFAULT_SIZES.includes(template.id)
+      ? [template.id, ...DEFAULT_SIZES]
+      : DEFAULT_SIZES,
+  );
+
   const isCopy = action === "copy";
-  /** Whether a Download offers the clip or the frame. Copy never does. */
-  const choosesFormat = kind === "video" && !isCopy;
+  const carousel = slides > 1;
+  /**
+   * Whether a Download offers the clip or the frame. Copy never does, and a
+   * carousel never does: its slides are stills, and a clip split into slides
+   * would be one encode per slide.
+   */
+  const choosesFormat = kind === "video" && !isCopy && !carousel;
   // Copy goes through the clipboard, which has no MP4 flavour, so a clip
   // copies its styled poster frame. A Download set to PNG asks for the same
   // thing deliberately. Only an encode is a video export.
@@ -130,23 +168,37 @@ export function ExportModal({
   // Read out as numbers, so the effect depends on the size rather than on the
   // identity of an object the parent rebuilds every render.
   const { width: frameWidth, height: frameHeight } = frameSize;
+  // A template writes its own pixels, so it has one size to ask about rather
+  // than one per scale. Key 0 stands for it in the answers.
+  const exact = template ? outputFor(template, slides) : null;
+  const exactWidth = exact?.width ?? 0;
+  const exactHeight = exact?.height ?? 0;
+  const probedAt = exact
+    ? `${exactWidth}x${exactHeight}`
+    : `${frameWidth}x${frameHeight}`;
 
   useEffect(() => {
     if (!open || kind !== "video" || !frameWidth) return;
 
+    const asks: [number, { width: number; height: number }][] = exactWidth
+      ? [[0, { width: exactWidth, height: exactHeight }]]
+      : QUALITY_OPTIONS.map(({ value }) => [
+          value,
+          outputSize({ width: frameWidth, height: frameHeight }, value),
+        ]);
+
     let cancelled = false;
     Promise.all(
-      QUALITY_OPTIONS.map(async ({ value }) => {
-        const size = outputSize(
-          { width: frameWidth, height: frameHeight },
-          value,
-        );
-        return [value, await canEncodeSize(size.width, size.height)] as const;
-      }),
+      asks.map(
+        async ([key, size]) =>
+          [key, await canEncodeSize(size.width, size.height)] as const,
+      ),
     ).then((pairs) => {
       if (!cancelled) {
         setEncodable({
-          at: `${frameWidth}x${frameHeight}`,
+          at: exactWidth
+            ? `${exactWidth}x${exactHeight}`
+            : `${frameWidth}x${frameHeight}`,
           answers: Object.fromEntries(pairs),
         });
       }
@@ -155,20 +207,19 @@ export function ExportModal({
     return () => {
       cancelled = true;
     };
-  }, [open, kind, frameWidth, frameHeight]);
+  }, [open, kind, frameWidth, frameHeight, exactWidth, exactHeight]);
 
   // A scale a video cannot be encoded at is offered as a disabled tile rather
   // than hidden, so the ceiling is visible instead of the control silently
   // having fewer options than it does for an image.
-  const answered =
-    encodable?.at === `${frameWidth}x${frameHeight}` ? encodable.answers : {};
+  const answered = encodable?.at === probedAt ? encodable.answers : {};
   const fits = (scale: number) => !isVideo || (answered[scale] ?? true);
 
   const usable = QUALITY_OPTIONS.map((o) => o.value).filter(fits);
   // Nothing fitting is possible, on a frame past what the encoder will take at
   // any scale. `Math.max` of nothing is `-Infinity`, so the fallback holds the
   // chosen value and the footer refuses instead.
-  const stuck = usable.length === 0;
+  const stuck = exact ? !fits(0) : usable.length === 0;
   const quality = fits(options.quality)
     ? options.quality
     // Stuck falls to the smallest rather than holding the choice, so the size
@@ -178,7 +229,14 @@ export function ExportModal({
       ? Math.min(...QUALITY_OPTIONS.map((o) => o.value))
       : Math.max(...usable);
 
-  const refused = QUALITY_OPTIONS.map((o) => o.value).filter((v) => !fits(v));
+  const refused = exact
+    ? []
+    : QUALITY_OPTIONS.map((o) => o.value).filter((v) => !fits(v));
+  /** Several sizes is only ever stills, one per template, into one ZIP. */
+  const offersSizes = !isCopy && !isVideo;
+  const several = offersSizes && mode === "sizes";
+  const zipped = several || (carousel && !isCopy);
+  const stretch = template ? enlargement(frameSize, template, slides) : 1;
   // The clip's own sound is only carried at 1x. See `SPEED_OPTIONS`.
   const clipSound = hasClipAudio && speed === 1;
   // Summing two sources holds three buffers of the export's own length, so a
@@ -188,18 +246,31 @@ export function ExportModal({
   );
   const tooLongToMix = bothSounds && seconds > MAX_MIX_SECONDS;
   const fps = options.fps ?? DEFAULT_FPS;
-  const output = outputSize(frameSize, quality);
-  const bytes = isVideo
-    ? estimateVideoBytes(output.width, output.height, seconds, fps)
-    : estimateBytes(output.width, output.height, hasGrain);
+  const output = exact ?? outputSize(frameSize, quality);
+  const bytes = several
+    ? picked.reduce((sum, id) => {
+        const t = templates.find((x) => x.id === id);
+        return t ? sum + estimateBytes(t.width, t.height, hasGrain) : sum;
+      }, 0)
+    : isVideo
+      ? estimateVideoBytes(output.width, output.height, seconds, fps)
+      : estimateBytes(output.width, output.height, hasGrain);
+  const extension = zipped ? "zip" : isVideo ? "mp4" : "png";
+  const tooLong = Boolean(
+    template?.maxSeconds && isVideo && seconds > template.maxSeconds,
+  );
 
   const title = isCopy
     ? "Copy to clipboard"
-    : isVideo
-      ? "Download clip"
-      : choosesFormat
-        ? "Download frame"
-        : "Download image";
+    : several
+      ? "Download several sizes"
+      : carousel
+        ? "Download carousel"
+        : isVideo
+          ? "Download clip"
+          : choosesFormat
+            ? "Download frame"
+            : "Download image";
 
   return (
     <Dialog
@@ -279,6 +350,118 @@ export function ExportModal({
             </div>
           )}
 
+          {/* Stills only. A template decides one size, and this is the way to
+              get the same frame at several of them without choosing each in
+              turn and exporting it. */}
+          {offersSizes && (
+            <div className="flex flex-col gap-2">
+              <FieldLabel>Output</FieldLabel>
+              <SegmentedGroup
+                value={mode}
+                onValueChange={(value) => setMode(value as "one" | "sizes")}
+                className="grid-cols-2"
+              >
+                <SegmentedOption
+                  id="output-one"
+                  value="one"
+                  selected={mode === "one"}
+                  disabled={pending}
+                  className="flex-col gap-0.5 py-2"
+                >
+                  <span className="text-sm font-medium">One size</span>
+                  <span className="text-xs text-muted-foreground">
+                    {carousel ? `${slides} slides` : "PNG"}
+                  </span>
+                </SegmentedOption>
+                <SegmentedOption
+                  id="output-sizes"
+                  value="sizes"
+                  selected={mode === "sizes"}
+                  disabled={pending}
+                  className="flex-col gap-0.5 py-2"
+                >
+                  <span className="text-sm font-medium">Several sizes</span>
+                  <span className="text-xs text-muted-foreground">ZIP</span>
+                </SegmentedOption>
+              </SegmentedGroup>
+            </div>
+          )}
+
+          {several ? (
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center justify-between gap-2">
+                <FieldLabel>Sizes</FieldLabel>
+                <span className="text-[13px] tabular-nums text-muted-foreground">
+                  {picked.length} selected
+                </span>
+              </div>
+              {platforms.map((platform) => (
+                <div key={platform.id} className="flex flex-col gap-1.5">
+                  <p className="text-xs text-muted-foreground">{platform.label}</p>
+                  {templates
+                    .filter((t) => t.platform === platform.id)
+                    .map((t) => (
+                      <label
+                        key={t.id}
+                        htmlFor={`size-${t.id}`}
+                        className="flex cursor-pointer items-center gap-2 text-[13px]"
+                      >
+                        <Checkbox
+                          id={`size-${t.id}`}
+                          checked={picked.includes(t.id)}
+                          disabled={pending}
+                          onCheckedChange={(checked) =>
+                            setPicked((current) =>
+                              checked
+                                ? [...current, t.id]
+                                : current.filter((id) => id !== t.id),
+                            )
+                          }
+                        />
+                        <span className="flex-1">{t.label}</span>
+                        <Dimensions
+                          width={t.width}
+                          height={t.height}
+                          className="text-xs text-muted-foreground"
+                        />
+                      </label>
+                    ))}
+                </div>
+              ))}
+              <p className="text-xs text-muted-foreground">
+                Each size takes its own shape around the same artwork.
+              </p>
+            </div>
+          ) : exact && template ? (
+            /* A template has one size, so there is nothing to pick. The row
+               says what it is and where it was set. */
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between gap-2">
+                <FieldLabel>Size</FieldLabel>
+                <Dimensions
+                  width={exact.width}
+                  height={exact.height}
+                  className="text-[13px] text-muted-foreground"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {carousel
+                  ? `${templateName(template)}, split into ${slides} slides of ${template.width} by ${template.height}.`
+                  : `${templateName(template)}, set in the Frame section.`}
+              </p>
+              {stretch > SOFT_ENLARGEMENT && (
+                <p className="text-xs text-muted-foreground">
+                  {`The frame is smaller than this size, so it is enlarged ${stretch.toFixed(1)}x and may look soft. A larger capture avoids it.`}
+                </p>
+              )}
+              {stuck && (
+                <p className="text-xs text-destructive">
+                  This browser cannot encode a clip at this size.
+                </p>
+              )}
+            </div>
+          ) : (
+            <>
           {/* Each value sits with the control that decides it. One line
               carrying dimensions, rate, length and size was four facts of equal
               weight behind three dots, which is a spec sheet rather than a
@@ -337,6 +520,8 @@ export function ExportModal({
               </p>
             )}
           </div>
+            </>
+          )}
 
           {/* A ceiling rather than a rate: a source already at 30 exports at
               30 either way, so 60 means nothing is dropped. */}
@@ -439,6 +624,12 @@ export function ExportModal({
             </p>
           )}
 
+          {tooLong && template?.maxSeconds && (
+            <p className="text-xs text-muted-foreground">
+              {`${templateName(template)} takes clips up to ${formatDuration(template.maxSeconds)}. This one is ${formatDuration(seconds)}, so it will be cut or refused there.`}
+            </p>
+          )}
+
           {!isCopy && (
             <div className="flex flex-col gap-2">
               <FieldLabel htmlFor="filename">Filename</FieldLabel>
@@ -449,7 +640,7 @@ export function ExportModal({
                   setOptions({ ...options, filename: e.target.value })
                 }
                 className="text-xs placeholder:text-xs"
-                placeholder={defaultFilename}
+                placeholder={`${defaultName}.${extension}`}
                 spellCheck={false}
                 disabled={pending}
               />
@@ -492,14 +683,24 @@ export function ExportModal({
               re-encoded as an MP4. */}
           {output.width > 0 && (
             <p className="flex items-center gap-1.5 whitespace-nowrap text-[13px] text-muted-foreground sm:mr-auto">
-              {isVideo ? (
+              {zipped ? (
+                <FileArchiveIcon className="size-3.5 shrink-0" aria-hidden="true" />
+              ) : isVideo ? (
                 <FileVideoIcon className="size-3.5 shrink-0" aria-hidden="true" />
               ) : (
                 <FileImageIcon className="size-3.5 shrink-0" aria-hidden="true" />
               )}
               <span className="font-medium text-foreground">
-                {isVideo ? "MP4" : "PNG"}
+                {zipped ? "ZIP" : isVideo ? "MP4" : "PNG"}
               </span>
+              {zipped && (
+                <>
+                  <Dot />
+                  <span className="tabular-nums">
+                    {several ? picked.length : slides} files
+                  </span>
+                </>
+              )}
               <Dot />
               <span className="tabular-nums">~{formatBytes(bytes)}</span>
             </p>
@@ -518,8 +719,20 @@ export function ExportModal({
           </Button>
           <Button
             size="lg"
-            onClick={() => onExport({ ...options, quality, fps })}
-            disabled={pending || stuck || tooLongToMix}
+            onClick={() =>
+              onExport({
+                ...options,
+                quality,
+                fps,
+                sizes: several ? picked : undefined,
+              })
+            }
+            disabled={
+              pending ||
+              (stuck && !several) ||
+              tooLongToMix ||
+              (several && picked.length === 0)
+            }
           >
             {pending && (
               <Loader2Icon className="size-4 animate-spin" aria-hidden="true" />

@@ -15,6 +15,8 @@
 import type { Cut } from "@/lib/clip-cuts";
 import type { FadeRegion } from "@/lib/clip-fade";
 import type { ZoomRegion } from "@/lib/clip-zoom";
+import type { Look } from "@/lib/looks";
+import type { Mark } from "@/lib/marks";
 import type { MediaKind, StyleOptions, Trim } from "@/types/screenshot";
 
 const DB_NAME = "clyp";
@@ -23,7 +25,9 @@ const STORE = "draft";
 const MEDIA_KEY = "image";
 const EDITS_KEY = "edits";
 const MOTION_KEY = "motion";
+const MARKS_KEY = "marks";
 const STYLE_KEY = "clyp:style";
+const LOOKS_KEY = "clyp:looks";
 
 function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -160,6 +164,60 @@ export async function writeMotion(motion: StoredMotion): Promise<void> {
 
 export async function deleteMotion(): Promise<void> {
   await withStore("readwrite", (store) => store.delete(MOTION_KEY));
+}
+
+/**
+ * The marks drawn on the picture, under a key of their own.
+ *
+ * An image has no edits record, and marks belong to images as much as to
+ * clips, so they do not ride the edits key. `of` names the picture by its name
+ * and size, so marks made on one screenshot never land on another.
+ */
+export interface StoredMarks {
+  of: { name?: string; width: number; height: number };
+  marks: Mark[];
+}
+
+export async function readMarks(): Promise<StoredMarks | null> {
+  return withStore<StoredMarks>("readonly", (store) => store.get(MARKS_KEY));
+}
+
+export async function writeMarks(marks: StoredMarks): Promise<void> {
+  await withStore("readwrite", (store) => store.put(marks, MARKS_KEY));
+}
+
+export async function deleteMarks(): Promise<void> {
+  await withStore("readwrite", (store) => store.delete(MARKS_KEY));
+}
+
+/**
+ * Saved looks, beside the style in localStorage. A look is a style, a few
+ * hundred bytes, and a list of them is a convenience for this browser rather
+ * than something a draft needs.
+ */
+export function readLooks(): Look[] {
+  try {
+    const raw = localStorage.getItem(LOOKS_KEY);
+    const parsed = raw ? (JSON.parse(raw) as unknown) : [];
+    return Array.isArray(parsed)
+      ? parsed.filter(
+          (l): l is Look =>
+            typeof l?.id === "string" &&
+            typeof l?.name === "string" &&
+            typeof l?.style === "object",
+        )
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+export function writeLooks(looks: Look[]): void {
+  try {
+    localStorage.setItem(LOOKS_KEY, JSON.stringify(looks));
+  } catch {
+    // Nothing to do. The looks just do not outlive this page.
+  }
 }
 
 /**

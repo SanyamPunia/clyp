@@ -64,6 +64,31 @@ export const windowChromeOptions: { value: WindowChrome; label: string }[] = [
   { value: "browser", label: "Browser" },
 ];
 
+export type Device = "none" | "phone" | "laptop";
+
+/**
+ * A device drawn around the media. A phone suits a tall capture and a laptop
+ * a wide one. Both are drawn in CSS inside the frame, so both exports bake them
+ * through the same raster as the title bar.
+ */
+export const deviceOptions: { value: Device; label: string }[] = [
+  { value: "none", label: "None" },
+  { value: "phone", label: "Phone" },
+  { value: "laptop", label: "Laptop" },
+];
+
+export type BadgePosition = "top-left" | "top-right" | "bottom-left" | "bottom-right";
+
+export const badgePositionOptions: { value: BadgePosition; label: string }[] = [
+  { value: "top-left", label: "Top left" },
+  { value: "top-right", label: "Top right" },
+  { value: "bottom-left", label: "Bottom left" },
+  { value: "bottom-right", label: "Bottom right" },
+];
+
+/** The badge's size range in px, in media pixels like the caption's. */
+export const BADGE_SIZE = { min: 12, max: 72, step: 2 };
+
 export type CaptionPosition = "above" | "below";
 
 export const captionPositionOptions: {

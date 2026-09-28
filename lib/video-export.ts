@@ -19,8 +19,9 @@ import type { Cut } from "@/lib/clip-cuts";
 import type { FadeRegion } from "@/lib/clip-fade";
 import type { ZoomRegion } from "@/lib/clip-zoom";
 import type { MotionTrack } from "@/lib/motion";
-import { rasterize } from "@/lib/raster";
+import { type RasterSize, rasterize, rasterizeMarks } from "@/lib/raster";
 import {
+  type BlurRegion,
   type Box,
   type MixedAudio,
   type Radii,
@@ -42,8 +43,11 @@ export interface VideoExportRequest {
   box: HTMLElement;
   /** The original file. */
   source: Blob;
-  /** The export scale, the same number the PNG export passes as `pixelRatio`. */
-  scale: number;
+  /**
+   * The export's size, the same value the PNG export passes to `rasterize`: a
+   * scale of the frame, or a template's exact pixels.
+   */
+  size: RasterSize;
   /** The clip's in and out points. */
   trim: Trim;
   /** Stretches removed from the middle of it. */
@@ -64,6 +68,20 @@ export interface VideoExportRequest {
   music?: boolean;
   /** The output's frame rate ceiling. */
   fps?: number;
+  /**
+   * The marks on the picture. The layer is rasterized once at the picture's
+   * own size and drawn over every frame through that frame's zoom, and the
+   * blurs are applied to each decoded frame, since what is under them moves.
+   */
+  marks?: {
+    layer: HTMLElement;
+    picture: { width: number; height: number };
+    /** Whether anything other than a blur is drawn, so the layer is worth a raster. */
+    drawn: boolean;
+    blurs: BlurRegion[];
+  };
+  /** The motion pass's clicks, when each is to be drawn as a ripple. */
+  ripples?: Float32Array | null;
   onProgress?: (fraction: number) => void;
   signal?: AbortSignal;
 }
@@ -153,7 +171,7 @@ export async function exportVideo({
   frame,
   box: clip,
   source,
-  scale,
+  size,
   trim,
   cuts = [],
   speed = 1,
@@ -164,14 +182,29 @@ export async function exportVideo({
   soundtrack,
   music = true,
   fps = DEFAULT_FPS,
+  marks,
+  ripples = null,
   onProgress,
   signal,
 }: VideoExportRequest): Promise<Blob> {
   // Only when something fades. With no fade the alpha is 1 throughout and the
   // media's still is covered exactly as before, so leaving it in keeps every
   // existing export byte-identical.
-  const dataUrl = await rasterize(frame, scale, { dropMedia: fades.length > 0 });
+  const dataUrl = await rasterize(frame, size, { dropMedia: fades.length > 0 });
   const chrome = await createImageBitmap(await (await fetch(dataUrl)).blob());
+  const overlay = marks?.drawn
+    ? await createImageBitmap(
+        await (
+          await fetch(
+            await rasterizeMarks(
+              marks.layer,
+              marks.picture.width,
+              marks.picture.height,
+            ),
+          )
+        ).blob(),
+      )
+    : null;
   // The raster cannot be interrupted, so the earliest a cancel during it can
   // be heard is here, before any encoder is opened.
   if (signal?.aborted) throw aborted();
@@ -211,6 +244,9 @@ export async function exportVideo({
       audio: clipSound && !mixed,
       mixed: mixed ? planar(mixed) : null,
       fps,
+      overlay,
+      blurs: marks?.blurs ?? [],
+      ripples: ripples && ripples.length ? ripples : null,
     },
     onProgress,
     signal,
@@ -265,6 +301,7 @@ function encodeInWorker(
     // mix is the export's own length in floats, and neither is needed here
     // once the worker has it.
     const transfer: Transferable[] = [message.chrome];
+    if (message.overlay) transfer.push(message.overlay);
     if (message.mixed) transfer.push(message.mixed.data.buffer as ArrayBuffer);
     worker.postMessage(message, transfer);
   });
