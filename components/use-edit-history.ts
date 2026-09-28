@@ -99,16 +99,22 @@ export function useEditHistory<T>({
 
   const step = useCallback(
     (from: typeof past, to: typeof future) => {
-      const entry = from.current[from.current.length - 1];
+      const live = { key: JSON.stringify(latest.current), value: latest.current };
+      // An edit still inside its settle window has no entry of its own yet,
+      // so undoing it goes back to the committed state, which is the one
+      // right before it. Popping an entry here skipped that state and undid
+      // the edit before as well: a mark deleted and undone at once came back
+      // without the change made just ahead of it.
+      const settling = from === past && live.key !== committed.current.key;
+      const entry = settling
+        ? committed.current
+        : from.current[from.current.length - 1];
       if (!entry) return;
 
-      from.current = from.current.slice(0, -1);
+      if (!settling) from.current = from.current.slice(0, -1);
       // The live state rather than the last committed one, so an edit still
       // inside its settle window is not lost by pressing undo during it.
-      to.current = [
-        ...to.current,
-        { key: JSON.stringify(latest.current), value: latest.current },
-      ];
+      to.current = [...to.current, live];
       absorb.current = true;
       committed.current = entry;
       restore(entry.value);
