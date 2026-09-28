@@ -16,6 +16,7 @@
 
 import { mixAudio } from "@/lib/audio-mix";
 import type { Cut } from "@/lib/clip-cuts";
+import type { Split } from "@/lib/clip-pieces";
 import type { FadeRegion } from "@/lib/clip-fade";
 import type { ZoomRegion } from "@/lib/clip-zoom";
 import type { MotionTrack } from "@/lib/motion";
@@ -52,6 +53,8 @@ export interface VideoExportRequest {
   trim: Trim;
   /** Stretches removed from the middle of it. */
   cuts?: Cut[];
+  /** Joins between touching pieces, for the transitions they carry. */
+  splits?: Split[];
   /** The playback rate. */
   speed?: number;
   /** Stretches of the clip that close in on a point of the picture. */
@@ -174,6 +177,7 @@ export async function exportVideo({
   size,
   trim,
   cuts = [],
+  splits = [],
   speed = 1,
   zooms = [],
   fades = [],
@@ -237,6 +241,7 @@ export async function exportVideo({
       source,
       trim,
       cuts,
+      splits,
       speed,
       zooms,
       fades,

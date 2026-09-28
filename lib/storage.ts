@@ -15,6 +15,7 @@
 import type { Cut } from "@/lib/clip-cuts";
 import type { FadeRegion } from "@/lib/clip-fade";
 import type { ZoomRegion } from "@/lib/clip-zoom";
+import type { Split } from "@/lib/clip-pieces";
 import type { Look } from "@/lib/looks";
 import type { Mark } from "@/lib/marks";
 import type { MediaKind, StyleOptions, Trim } from "@/types/screenshot";
@@ -118,6 +119,11 @@ export interface StoredEdits {
   trim: Trim;
   /** Stretches removed from the middle. Absent in a record written before cuts. */
   cuts?: Cut[];
+  /**
+   * Split points. Absent in a record written before pieces existed, and bare
+   * numbers in one written before a split could carry a transition.
+   */
+  splits?: (Split | number)[];
   speed: number;
   zooms: ZoomRegion[];
   /** Fades. Absent in a record written before they existed. */

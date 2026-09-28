@@ -78,12 +78,30 @@ import {
   MIN_CUT,
   MIN_KEPT,
   afterCuts,
+  keptSegments,
   leavesEnough,
   keptSeconds,
   newCutId,
+  outputAt,
   placeCut,
   tidyCuts,
 } from "@/lib/clip-cuts";
+import {
+  type PieceEdit,
+  type Split,
+  pieceAt,
+  pieces as piecesOf,
+  removePiece,
+  splitAt,
+  tidySplits,
+} from "@/lib/clip-pieces";
+import {
+  TRANSITION_BLUR,
+  hasDissolve,
+  joinsOf,
+  tidyTransition,
+  transitionAt,
+} from "@/lib/clip-transitions";
 import { useEditHistory } from "@/components/use-edit-history";
 import {
   type FadeRegion,
@@ -363,6 +381,17 @@ export function Clyp() {
   const [cuts, setCuts] = useState<Cut[]>([]);
   const [selectedCut, setSelectedCut] = useState<string | null>(null);
   /**
+   * Split points, on the source's axis like the cuts. With them the kept clip
+   * is in pieces, which can be picked, moved into the room around them and
+   * deleted. A deleted piece becomes a cut, so a split is the only new state.
+   */
+  const [splits, setSplits] = useState<Split[]>([]);
+  /** The selected piece, by its start in source seconds. */
+  const [selectedPiece, setSelectedPiece] = useState<number | null>(null);
+  /** The selected join between two touching pieces, by its split's time. */
+  const [selectedJoin, setSelectedJoin] = useState<number | null>(null);
+  const [removePieceOpen, setRemovePieceOpen] = useState(false);
+  /**
    * Stretches where the picture arrives or leaves, on the source's axis like
    * the cuts and the zooms.
    */
@@ -520,6 +549,8 @@ export function Clyp() {
    * those two callbacks are neighbours of.
    */
   const resetHistoryRef = useRef<(() => void) | null>(null);
+  /** Undo, for a toast raised by a handler declared above the history. */
+  const undoRef = useRef<(() => void) | null>(null);
   /** The clip's box: what holds still, carries the radius, and is measured. */
   const clipBoxRef = useRef<HTMLDivElement>(null);
   const veilRef = useRef<HTMLDivElement>(null);
@@ -528,6 +559,13 @@ export function Clyp() {
   // otherwise close over the regions it mounted with. Written in an effect.
   const zoomsRef = useRef(zooms);
   const fadesRef = useRef(fades);
+  // The loop reads the joins' transitions off the live trim and cuts.
+  const trimRef = useRef(trim);
+  const cutsRef = useRef(cuts);
+  const splitsRef = useRef(splits);
+  /** A dip's colour over the picture, and a dissolve's held frame. */
+  const dipRef = useRef<HTMLDivElement>(null);
+  const heldRef = useRef<HTMLCanvasElement>(null);
   const motionRef = useRef(motion);
   const selectedZoomRef = useRef(selectedZoom);
   /** The read in flight, so a clip change can stop it. */
@@ -683,7 +721,10 @@ export function Clyp() {
     motionRef.current = motion;
     selectedZoomRef.current = selectedZoom;
     ripplesOnRef.current = styleOptions.clickRipples;
-  }, [zooms, fades, motion, selectedZoom, styleOptions.clickRipples]);
+    trimRef.current = trim;
+    cutsRef.current = cuts;
+    splitsRef.current = splits;
+  }, [zooms, fades, motion, selectedZoom, styleOptions.clickRipples, trim, cuts, splits]);
 
   /**
    * Takes over from the loader in `lib/media.ts`, which has already read and
@@ -702,6 +743,9 @@ export function Clyp() {
     setSpeed(1);
     setCuts([]);
     setSelectedCut(null);
+    setSplits([]);
+    setSelectedPiece(null);
+    setSelectedJoin(null);
     setFades([]);
     setSelectedFade(null);
     setZooms([]);
@@ -746,14 +790,33 @@ export function Clyp() {
     setCuts(
       tidyCuts(
         (edits.cuts ?? []).map((c) => ({
-          ...c,
+          id: c.id,
           start: grid(c.start),
           end: grid(c.end),
+          ...(tidyTransition(c.transition) && {
+            transition: tidyTransition(c.transition),
+          }),
         })),
         { start, end },
       ),
     );
     setSelectedCut(null);
+    // A record from before a split could carry a transition holds bare
+    // numbers, read here as splits with none.
+    setSplits(
+      (edits.splits ?? []).map((split) =>
+        typeof split === "number"
+          ? { at: grid(split) }
+          : {
+              at: grid(split.at),
+              ...(tidyTransition(split.transition) && {
+                transition: tidyTransition(split.transition),
+              }),
+            },
+      ),
+    );
+    setSelectedPiece(null);
+    setSelectedJoin(null);
     setFades(
       (edits.fades ?? [])
         .map((f) => ({ ...f, start: grid(f.start), end: grid(f.end) }))
@@ -888,6 +951,8 @@ export function Clyp() {
       if (id) {
         setSelectedCut(null);
         setSelectedFade(null);
+        setSelectedPiece(null);
+        setSelectedJoin(null);
       }
       const video = videoRef.current;
       const region = zooms.find((r) => r.id === id);
@@ -961,8 +1026,103 @@ export function Clyp() {
     if (id) {
       setSelectedZoom(null);
       setSelectedFade(null);
+      setSelectedPiece(null);
+      setSelectedJoin(null);
     }
   }, []);
+
+  /** One selection across the lanes, so a piece takes it from the rest. */
+  const selectPiece = useCallback((start: number | null) => {
+    setSelectedPiece(start);
+    if (start !== null) {
+      setSelectedZoom(null);
+      setSelectedCut(null);
+      setSelectedFade(null);
+      setSelectedJoin(null);
+    }
+  }, []);
+
+  /** A join between two touching pieces, where a split's transition is set. */
+  const selectJoin = useCallback((at: number | null) => {
+    setSelectedJoin(at);
+    if (at !== null) {
+      setSelectedZoom(null);
+      setSelectedCut(null);
+      setSelectedFade(null);
+      setSelectedPiece(null);
+    }
+  }, []);
+
+  const updateSplit = useCallback((next: Split) => {
+    setSplits((previous) =>
+      previous.map((s) => (Math.abs(s.at - next.at) < 1e-6 ? next : s)),
+    );
+  }, []);
+
+  /**
+   * Joins two touching pieces back into one. Nothing is lost but the join's
+   * transition, and undo brings that back, so it does not ask.
+   */
+  const removeSplit = useCallback((at: number) => {
+    setSplits((previous) => previous.filter((s) => Math.abs(s.at - at) >= 1e-6));
+    setSelectedJoin(null);
+  }, []);
+
+  /**
+   * Splits the kept clip at the playhead. Refused with a reason when the
+   * playhead is in a cut or too close to an edge, since a piece under the
+   * minimum could not be deleted as a cut.
+   */
+  const splitAtPlayhead = useCallback(() => {
+    const video = videoRef.current;
+    if (!video || !trim) return;
+    const at = Math.round(video.currentTime * EDIT_FPS) / EDIT_FPS;
+    const next = splitAt(trim, cuts, splits, at);
+    if (!next) {
+      toast.error("Too close to the edge of a piece to split there");
+      return;
+    }
+    setSplits(next);
+    const piece = pieceAt(piecesOf(trim, cuts, next), at);
+    if (piece) selectPiece(piece.start);
+  }, [cuts, selectPiece, splits, trim]);
+
+  /** A piece moved, from the lane's drag or its arrow keys. */
+  const handlePiecesChange = useCallback((edit: PieceEdit, selected: number) => {
+    setTrim(edit.trim);
+    setCuts(edit.cuts);
+    setSplits(edit.splits);
+    setSelectedPiece(selected);
+  }, []);
+
+  /**
+   * Takes the selected piece out, which is a cut over it. The splits at its
+   * edges now sit on a cut's edge, where they divide nothing, so they go too.
+   */
+  const deletePiece = useCallback(
+    (quiet = false) => {
+      if (!trim || selectedPiece === null) return;
+      const piece = piecesOf(trim, cuts, splits).find(
+        (p) => Math.abs(p.start - selectedPiece) < 1e-6,
+      );
+      if (!piece) return;
+      const next = removePiece(trim, cuts, piece, newCutId());
+      if (!next) {
+        toast.error("At least a fifth of a second of the clip has to stay");
+        return;
+      }
+      setCuts(next);
+      setSplits(tidySplits(trim, next, splits));
+      setSelectedPiece(null);
+      setRemovePieceOpen(false);
+      const video = videoRef.current;
+      if (video) video.currentTime = afterCuts(trim, next, video.currentTime);
+      if (!quiet) {
+        toast("Piece deleted", { action: { label: "Undo", onClick: () => undoRef.current?.() } });
+      }
+    },
+    [cuts, selectedPiece, splits, trim],
+  );
 
   const removeCut = useCallback(() => {
     setCuts((previous) => previous.filter((c) => c.id !== selectedCut));
@@ -1014,6 +1174,8 @@ export function Clyp() {
     if (id) {
       setSelectedZoom(null);
       setSelectedCut(null);
+      setSelectedPiece(null);
+      setSelectedJoin(null);
     }
   }, []);
 
@@ -1129,6 +1291,7 @@ export function Clyp() {
       zooms,
       fades,
       marks,
+      splits,
       placement: soundtrack
         ? {
             offset: soundtrack.offset,
@@ -1137,7 +1300,7 @@ export function Clyp() {
           }
         : null,
     }),
-    [trim, cuts, speed, zooms, fades, marks, soundtrack],
+    [trim, cuts, speed, zooms, fades, marks, splits, soundtrack],
   );
 
   const restoreEdits = useCallback((next: typeof editState) => {
@@ -1147,6 +1310,9 @@ export function Clyp() {
     setZooms(next.zooms);
     setFades(next.fades);
     setMarks(next.marks);
+    setSplits(next.splits);
+    setSelectedPiece(null);
+    setSelectedJoin(null);
     // A selection is a view of the state rather than part of it, and the
     // region it named may be the one coming back or going away.
     setSelectedZoom(null);
@@ -1170,7 +1336,8 @@ export function Clyp() {
 
   useEffect(() => {
     resetHistoryRef.current = history.reset;
-  }, [history.reset]);
+    undoRef.current = history.undo;
+  }, [history.reset, history.undo]);
 
   const addMark = useCallback((mark: Mark) => {
     setMarks((previous) => [...previous, mark]);
@@ -1601,6 +1768,7 @@ export function Clyp() {
       },
       trim,
       cuts,
+      splits,
       speed,
       zooms,
       fades,
@@ -1620,6 +1788,7 @@ export function Clyp() {
     dimensions,
     trim,
     cuts,
+    splits,
     speed,
     zooms,
     fades,
@@ -1801,6 +1970,42 @@ export function Clyp() {
         deleteSelectedMark();
         return;
       }
+      // The same for a piece of the clip, which undo also brings back.
+      if (
+        (e.key === "Delete" || e.key === "Backspace") &&
+        selectedPiece !== null &&
+        !typing &&
+        !e.defaultPrevented
+      ) {
+        e.preventDefault();
+        deletePiece();
+        return;
+      }
+      // And for a join between touching pieces, which joins them back.
+      if (
+        (e.key === "Delete" || e.key === "Backspace") &&
+        selectedJoin !== null &&
+        !typing &&
+        !e.defaultPrevented
+      ) {
+        e.preventDefault();
+        removeSplit(selectedJoin);
+        return;
+      }
+      // S splits at the playhead, the key most editors give it. A plain key,
+      // so only outside a field and never with a modifier held.
+      if (
+        e.key.toLowerCase() === "s" &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        !typing &&
+        media.kind === "video"
+      ) {
+        e.preventDefault();
+        splitAtPlayhead();
+        return;
+      }
 
       const mod = e.metaKey || e.ctrlKey;
       if (!mod) return;
@@ -1838,6 +2043,11 @@ export function Clyp() {
     markTool,
     selectedMark,
     deleteSelectedMark,
+    selectedPiece,
+    deletePiece,
+    selectedJoin,
+    removeSplit,
+    splitAtPlayhead,
     openExportModal,
     downloadBlocked,
     undo,
@@ -1914,6 +2124,7 @@ export function Clyp() {
             size: template ? outputFor(template) : options.quality,
             trim,
             cuts,
+            splits,
             speed,
             fades,
             zooms,
@@ -2009,6 +2220,7 @@ export function Clyp() {
       marks,
       picture,
       slides,
+      splits,
       still,
       styleOptions.clickRipples,
       template,
@@ -2071,9 +2283,54 @@ export function Clyp() {
     const apply = () => {
       frame = requestAnimationFrame(apply);
 
-      const state = aimingRef.current
+      const zoomed = aimingRef.current
         ? null
         : zoomAt(zoomsRef.current, video.currentTime, speed, motionRef.current);
+
+      // A join's transition, on the output's clock, from the same arithmetic
+      // the encode uses. A zoom transition pushes in on top of any region.
+      const range = trimRef.current;
+      const joins = range
+        ? joinsOf(range, cutsRef.current, speed, splitsRef.current)
+        : [];
+      const out = range
+        ? outputAt(keptSegments(range, cutsRef.current), video.currentTime) / speed
+        : 0;
+      const move = transitionAt(joins, out);
+      const state =
+        move.scale !== 1
+          ? {
+              scale: (zoomed?.scale ?? 1) * move.scale,
+              focus: zoomed?.focus ?? { x: 0.5, y: 0.5 },
+            }
+          : zoomed;
+
+      const blur = move.blur
+        ? `blur(${move.blur * TRANSITION_BLUR * video.offsetWidth}px)`
+        : "";
+      if (video.style.filter !== blur) video.style.filter = blur;
+
+      const dip = dipRef.current;
+      if (dip) {
+        const alpha = `${move.veil?.alpha ?? 0}`;
+        if (dip.style.opacity !== alpha) dip.style.opacity = alpha;
+        if (move.veil) dip.style.backgroundColor = move.veil.color;
+      }
+
+      // A dissolve fades the last frame before the join out over the part
+      // after it. The frame is kept by drawing the picture into a canvas on
+      // every frame outside a dissolve, so on the first frame past the join
+      // it still holds the frame before it. Only while playing: a paused
+      // playhead has no frame before it to have held.
+      const held = heldRef.current;
+      if (held) {
+        const showing = !video.paused && move.dissolve > 0;
+        if (hasDissolve(joins) && !video.paused && move.dissolve === 0) {
+          held.getContext("2d")?.drawImage(video, 0, 0, held.width, held.height);
+        }
+        const opacity = `${showing ? move.dissolve : 0}`;
+        if (held.style.opacity !== opacity) held.style.opacity = opacity;
+      }
       // The fade rides on the same loop. Written only on a change, like the
       // transform, so a still preview costs no style writes at all. A
       // whole-frame fade veils the composite instead of dimming the picture,
@@ -2151,6 +2408,7 @@ export function Clyp() {
       cancelAnimationFrame(frame);
       video.style.transform = "";
       video.style.transformOrigin = "";
+      video.style.filter = "";
       if (marksLayer) {
         marksLayer.style.transform = "";
         marksLayer.style.transformOrigin = "";
@@ -2289,6 +2547,9 @@ export function Clyp() {
     setTrim(null);
     setCuts([]);
     setSelectedCut(null);
+    setSplits([]);
+    setSelectedPiece(null);
+    setSelectedJoin(null);
     setFades([]);
     setSelectedFade(null);
     setSpeed(1);
@@ -2676,6 +2937,29 @@ export function Clyp() {
                                     />
                                   )}
                                 </MarksLayer>
+                                {/* A join's dissolve and dip, over the picture
+                                    and its marks, positioned by the loop. Left
+                                    out of every raster: the encode draws its
+                                    own, and the chrome is baked once. */}
+                                <canvas
+                                  ref={heldRef}
+                                  {...{ [EXPORT_IGNORE]: "" }}
+                                  aria-hidden="true"
+                                  width={Math.min(picture.width, 960)}
+                                  height={Math.round(
+                                    (picture.height * Math.min(picture.width, 960)) /
+                                      picture.width,
+                                  )}
+                                  className="pointer-events-none absolute inset-0 size-full"
+                                  style={{ opacity: 0 }}
+                                />
+                                <div
+                                  ref={dipRef}
+                                  {...{ [EXPORT_IGNORE]: "" }}
+                                  aria-hidden="true"
+                                  className="pointer-events-none absolute inset-0"
+                                  style={{ opacity: 0 }}
+                                />
                                 {selectedRegion && (
                                   <ZoomFocusMarker
                                     ref={liveMarkerRef}
@@ -2848,6 +3132,17 @@ export function Clyp() {
               onCutChange={updateCut}
               onCutSelect={selectCut}
               onCutRemove={() => setRemoveCutOpen(true)}
+              splits={splits}
+              selectedPiece={selectedPiece}
+              onPieceSelect={selectPiece}
+              onPiecesChange={handlePiecesChange}
+              onSplit={splitAtPlayhead}
+              onPieceDelete={() => deletePiece()}
+              onPieceRemove={() => setRemovePieceOpen(true)}
+              selectedJoin={selectedJoin}
+              onJoinSelect={selectJoin}
+              onSplitChange={updateSplit}
+              onSplitRemove={removeSplit}
               fades={fades}
               selectedFade={selectedFade}
               onFadeAdd={addFade}
@@ -3059,6 +3354,17 @@ export function Clyp() {
         description="The picture plays at full strength through that stretch again."
         confirmLabel="Remove"
         onConfirm={removeFade}
+      />
+
+      {/* The button asks, where the Delete key does not: a press on a button
+          is the easier one to make by accident, and the key is deliberate. */}
+      <ConfirmDialog
+        open={removePieceOpen}
+        onOpenChange={setRemovePieceOpen}
+        title="Delete this piece?"
+        description="That part of the clip leaves the export and the pieces either side join up. Undo brings it back."
+        confirmLabel="Delete"
+        onConfirm={() => deletePiece(true)}
       />
 
       {/* A mark can be what hides a password, so taking one away confirms

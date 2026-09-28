@@ -16,8 +16,11 @@ import {
   PlusIcon,
   Redo2Icon,
   RepeatIcon,
+  BlendIcon,
   ScissorsIcon,
   SparklesIcon,
+  SquareSplitHorizontalIcon,
+  Trash2Icon,
   SunDimIcon,
   SquareIcon,
   StepBackIcon,
@@ -30,6 +33,13 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Tooltip,
   TooltipContent,
@@ -51,11 +61,27 @@ import {
   afterCuts,
   cutAt,
   keptSeconds,
-  keptSegments,
   longestCut,
   nearestKept,
+  newCutId,
   roomForCut,
 } from "@/lib/clip-cuts";
+import {
+  type Piece,
+  type PieceEdit,
+  type Split,
+  movePiece,
+  pieceAt,
+  pieces as piecesOf,
+  tidySplits,
+} from "@/lib/clip-pieces";
+import {
+  DEFAULT_TRANSITION_DURATION,
+  TRANSITION_DURATIONS,
+  type Transition,
+  type TransitionKind,
+  transitionKinds,
+} from "@/lib/clip-transitions";
 import {
   type ZoomRegion,
   type ZoomSuggestion,
@@ -103,6 +129,9 @@ const FRAME = 1 / EDIT_FPS;
 const COARSE_STEP = 1;
 
 const snap = (seconds: number) => Math.round(seconds / FRAME) * FRAME;
+
+/** The transition select's own value for a straight cut, since a select needs a string. */
+const NO_TRANSITION = "none";
 
 /*
  * The fade's ramp, in a 0 to 100 box the block stretches to.
@@ -219,6 +248,31 @@ interface TrimBarProps {
   cuts: Cut[];
   selectedCut: string | null;
   onCutAdd: () => void;
+  /**
+   * Split points on the source's axis. With a cut or a split in the clip the
+   * kept blocks are pieces: a press selects one, a drag on the selected one
+   * moves it into the room around it, and Delete takes it out.
+   */
+  splits: Split[];
+  /** The selected piece's start, or null. */
+  selectedPiece: number | null;
+  /**
+   * The selected join between two touching pieces, by its split's time. It is
+   * where a split's transition is set, the way a cut's is set on the cut.
+   */
+  selectedJoin: number | null;
+  onJoinSelect: (at: number | null) => void;
+  onSplitChange: (split: Split) => void;
+  /** Joins two touching pieces back into one. */
+  onSplitRemove: (at: number) => void;
+  onPieceSelect: (start: number | null) => void;
+  /** A piece moved: the edit that results, and where the piece now starts. */
+  onPiecesChange: (edit: PieceEdit, selected: number) => void;
+  onSplit: () => void;
+  /** Deletes the selected piece at once, for the keyboard. Undo covers it. */
+  onPieceDelete: () => void;
+  /** Asks to delete the selected piece, for the button. The owner confirms. */
+  onPieceRemove: () => void;
   /** Stretches where the picture arrives or leaves, on their own lane. */
   fades: FadeRegion[];
   selectedFade: string | null;
@@ -307,6 +361,17 @@ export function TrimBar({
   cuts,
   selectedCut,
   onCutAdd,
+  splits,
+  selectedPiece,
+  onPieceSelect,
+  onPiecesChange,
+  onSplit,
+  onPieceDelete,
+  onPieceRemove,
+  selectedJoin,
+  onJoinSelect,
+  onSplitChange,
+  onSplitRemove,
   fades,
   selectedFade,
   onFadeAdd,
@@ -645,10 +710,55 @@ export function TrimBar({
       // so a second cut could not be placed. A press on a cut stops
       // propagating, so this only ever fires away from one.
       onCutSelect(null);
+      onJoinSelect(null);
 
       // Paused for the drag. Playback fights a scrub for the same clock, and
       // what comes out is the video stuttering rather than being moved.
       onPlayback(false);
+
+      // With the clip in pieces, a press selects the one under it, and a drag
+      // that starts on the piece already selected moves it rather than
+      // scrubbing. Selecting first is what keeps a scrub a scrub: nothing
+      // moves on a press that did not mean to pick the piece up.
+      const list = piecesOf(rangeRef.current, cutsRef.current, splits);
+      const pressed =
+        list.length > 1 ? pieceAt(list, timeAt(event.clientX)) : null;
+      onPieceSelect(pressed?.start ?? null);
+
+      if (pressed && Math.abs(pressed.start - (selectedPiece ?? NaN)) < 1e-6) {
+        event.preventDefault();
+        const origin = timeAt(event.clientX);
+        const base = {
+          trim: rangeRef.current,
+          cuts: cutsRef.current,
+          splits,
+        };
+        const move = (moved: PointerEvent) => {
+          const by = snap(timeAt(moved.clientX) - origin);
+          const next = movePiece(
+            base.trim,
+            base.cuts,
+            base.splits,
+            pressed,
+            by,
+            duration,
+            newCutId,
+          );
+          onPiecesChange(next, next.piece.start);
+          // The frame the piece now opens on, since where it starts is what
+          // a move is deciding.
+          onSeek(next.piece.start);
+        };
+        const release = () => {
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", release);
+          window.removeEventListener("pointercancel", release);
+        };
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", release);
+        window.addEventListener("pointercancel", release);
+        return;
+      }
 
       const to = (clientX: number) => {
         const { start, end } = rangeRef.current;
@@ -675,7 +785,19 @@ export function TrimBar({
       window.addEventListener("pointerup", release);
       window.addEventListener("pointercancel", release);
     },
-    [disabled, onCutSelect, onPlayback, onSeek, timeAt],
+    [
+      disabled,
+      duration,
+      onCutSelect,
+      onJoinSelect,
+      onPieceSelect,
+      onPiecesChange,
+      onPlayback,
+      onSeek,
+      selectedPiece,
+      splits,
+      timeAt,
+    ],
   );
 
   /**
@@ -1312,7 +1434,19 @@ export function TrimBar({
   // readout stays on the source's clock rather than the output's, since that
   // is the axis the handles cut on, so the speed is not applied here.
   const kept = keptSeconds(trim, cuts);
-  const segments = keptSegments(trim, cuts);
+  // The kept clip as pieces. `split` is whether it is in more than one, which
+  // is when a piece is something to pick.
+  const laneItems: Piece[] = piecesOf(trim, cuts, splits);
+  const split = laneItems.length > 1;
+  const selectedSplit =
+    selectedJoin === null
+      ? null
+      : (tidySplits(trim, cuts, splits).find(
+          (s) => Math.abs(s.at - selectedJoin) < 1e-6,
+        ) ?? null);
+  const selectedPieceValue = split
+    ? (laneItems.find((p) => Math.abs(p.start - (selectedPiece ?? NaN)) < 1e-6) ?? null)
+    : null;
   const trimmed = trim.start > 0 || trim.end < duration || cuts.length > 0;
 
   return (
@@ -1471,16 +1605,123 @@ export function TrimBar({
                   out point, so a cut in the middle is a real gap with the rail
                   showing through it. Nothing has to paint over the block, and
                   no colour has to be matched to the surface behind the lane. */}
-              {segments.map((segment) => (
-                <div
-                  key={segment.start}
-                  className="absolute inset-y-0 rounded-md bg-track-active"
-                  style={{
-                    left: `calc(${at(segment.start / duration)} + ${INSET}px)`,
-                    width: at((segment.end - segment.start) / duration),
-                  }}
-                />
-              ))}
+              {/* Two pieces that touch at a split are drawn a hairline apart,
+                  so the split reads as a division of the block rather than as
+                  nothing. A piece is a lane instance once there is more than
+                  one: selectable, movable, and removable from the keyboard.
+                  The selected one is ringed in the selection tone, since
+                  brand is the playhead's. */}
+              {laneItems.map((piece, index) => {
+                const touches =
+                  index < laneItems.length - 1 &&
+                  Math.abs(laneItems[index + 1].start - piece.end) < 1e-6;
+                const selected =
+                  split && Math.abs(piece.start - (selectedPiece ?? NaN)) < 1e-6;
+                return (
+                  <div
+                    key={piece.start}
+                    role={split ? "button" : undefined}
+                    tabIndex={split ? 0 : undefined}
+                    aria-label={
+                      split
+                        ? `Piece, ${formatPrecise(piece.start, duration)} to ${formatPrecise(piece.end, duration)}`
+                        : undefined
+                    }
+                    aria-pressed={split ? selected : undefined}
+                    onKeyDown={
+                      split
+                        ? laneKeys({
+                            part: "body",
+                            shift: (by) =>
+                              movePiece(
+                                trim,
+                                cuts,
+                                splits,
+                                piece,
+                                by,
+                                duration,
+                                newCutId,
+                              ),
+                            apply: (next) => onPiecesChange(next, next.piece.start),
+                            at: (next) => next.piece.start,
+                            onRemove: onPieceDelete,
+                            onToggle: () =>
+                              onPieceSelect(selected ? null : piece.start),
+                          })
+                        : undefined
+                    }
+                    onFocus={split ? () => onPieceSelect(piece.start) : undefined}
+                    className={cn(
+                      "absolute inset-y-0 rounded-md bg-track-active outline-none",
+                      "focus-visible:ring-[3px] focus-visible:ring-ring/50",
+                      selected && "cursor-move ring-2 ring-selected ring-inset",
+                    )}
+                    style={{
+                      left: `calc(${at(piece.start / duration)} + ${INSET}px)`,
+                      width: `calc(${at((piece.end - piece.start) / duration)} - ${touches ? 2 : 0}px)`,
+                    }}
+                  />
+                );
+              })}
+
+              {/* Where two pieces touch, the hairline between them is a join
+                  that can take a transition of its own. It is given a
+                  handle's width of hit area, since the hairline itself is 2px,
+                  and a press on it selects the join rather than scrubbing. */}
+              {laneItems.slice(1).map((piece, i) => {
+                if (Math.abs(laneItems[i].end - piece.start) >= 1e-6) return null;
+                const join = tidySplits(trim, cuts, splits).find(
+                  (s) => Math.abs(s.at - piece.start) < 1e-6,
+                );
+                const selected =
+                  selectedJoin !== null && Math.abs(selectedJoin - piece.start) < 1e-6;
+                const toggle = () => onJoinSelect(selected ? null : piece.start);
+                return (
+                  <Tooltip key={`join-${piece.start}`}>
+                  <TooltipTrigger asChild>
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Join at ${formatPrecise(piece.start, duration)}`}
+                    aria-pressed={selected}
+                    onPointerDown={(event) => {
+                      if (disabled) return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onPlayback(false);
+                      toggle();
+                      onSeek(piece.start);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter" && event.key !== " ") return;
+                      event.preventDefault();
+                      toggle();
+                    }}
+                    className="group absolute inset-y-0 z-10 flex cursor-pointer justify-center rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                    style={{
+                      left: `calc(${centre(piece.start / duration)} - ${INSET + 1}px)`,
+                      width: HANDLE,
+                    }}
+                  >
+                    <span
+                      aria-hidden="true"
+                      className={cn(
+                        "h-full w-0.5 rounded-full transition-colors duration-150",
+                        selected ? "bg-selected" : "group-hover:bg-stroke-strong",
+                      )}
+                    />
+                    {join?.transition && (
+                      <BlendIcon
+                        className="absolute top-0.5 size-3 text-muted-foreground"
+                        aria-hidden="true"
+                      />
+                    )}
+                  </div>
+                  </TooltipTrigger>
+                  <TooltipContent>Transition at this join</TooltipContent>
+                  </Tooltip>
+                );
+              })}
 
               {/* The gap the blocks above leave is the cut. Nothing here
                   paints a fill: what is left to draw is a hit area for the
@@ -1516,6 +1757,13 @@ export function TrimBar({
                     >
                       {selected && (
                         <div className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-stroke" />
+                      )}
+                      {/* A join that does more than cut says so where it is. */}
+                      {cut.transition && (
+                        <BlendIcon
+                          className="absolute top-0.5 left-1/2 size-3 -translate-x-1/2 text-muted-foreground"
+                          aria-hidden="true"
+                        />
                       )}
                     </div>
                     {/* Reachable by keyboard only while the cut is selected.
@@ -2023,6 +2271,9 @@ export function TrimBar({
                   <Transport label="Cut at the playhead" onClick={onCutAdd}>
                     <ScissorsIcon className="size-4" aria-hidden="true" />
                   </Transport>
+                  <Transport label="Split at the playhead (S)" onClick={onSplit}>
+                    <SquareSplitHorizontalIcon className="size-4" aria-hidden="true" />
+                  </Transport>
                   <Transport label="Add a fade" onClick={onFadeAdd}>
                     <SunDimIcon className="size-4" aria-hidden="true" />
                   </Transport>
@@ -2186,7 +2437,63 @@ export function TrimBar({
                     <span className="px-1 text-[11px] tabular-nums text-muted-foreground">
                       {formatPrecise(selectedRange.end - selectedRange.start, duration)}
                     </span>
+                    <TransitionPicker
+                      value={selectedRange.transition}
+                      onChange={(transition) =>
+                        onCutChange(withTransition(selectedRange, transition))
+                      }
+                    />
                     <Transport label="Remove the cut" onClick={onCutRemove}>
+                      <XIcon className="size-4" aria-hidden="true" />
+                    </Transport>
+                  </div>
+                )}
+
+                {selectedPieceValue && (
+                  <div
+                    role="group"
+                    aria-label="Piece"
+                    className="flex shrink-0 items-center gap-0.5 rounded-full bg-track p-0.5"
+                  >
+                    <SquareSplitHorizontalIcon
+                      className="mx-1.5 size-3.5 shrink-0 text-muted-foreground"
+                      aria-hidden="true"
+                    />
+                    <span className="px-1 text-[11px] tabular-nums text-muted-foreground">
+                      {formatPrecise(
+                        selectedPieceValue.end - selectedPieceValue.start,
+                        duration,
+                      )}
+                    </span>
+                    <Transport label="Delete this piece (Delete)" onClick={onPieceRemove}>
+                      <Trash2Icon className="size-4" aria-hidden="true" />
+                    </Transport>
+                  </div>
+                )}
+
+                {selectedSplit && (
+                  <div
+                    role="group"
+                    aria-label="Join"
+                    className="flex shrink-0 items-center gap-0.5 rounded-full bg-track p-0.5"
+                  >
+                    <SquareSplitHorizontalIcon
+                      className="mx-1.5 size-3.5 shrink-0 text-muted-foreground"
+                      aria-hidden="true"
+                    />
+                    <span className="px-1 text-[11px] tabular-nums text-muted-foreground">
+                      {formatPrecise(selectedSplit.at, duration)}
+                    </span>
+                    <TransitionPicker
+                      value={selectedSplit.transition}
+                      onChange={(transition) =>
+                        onSplitChange(withTransition(selectedSplit, transition))
+                      }
+                    />
+                    <Transport
+                      label="Join the pieces back (Delete)"
+                      onClick={() => onSplitRemove(selectedSplit.at)}
+                    >
                       <XIcon className="size-4" aria-hidden="true" />
                     </Transport>
                   </div>
@@ -2489,6 +2796,81 @@ function ticks(duration: number, width: number): Tick[] {
  * the roving tab stop with it: the group is one stop and the arrows move
  * inside it, the way every other set of related choices in the panel behaves.
  */
+/**
+ * A cut's or a split's transition set to one, or taken off. Written without
+ * the key rather than as `undefined`, so a straight join stores as one.
+ */
+function withTransition<T extends { transition?: Transition }>(
+  item: T,
+  transition: Transition | undefined,
+): T {
+  const rest = { ...item };
+  delete rest.transition;
+  return transition ? { ...rest, transition } : rest;
+}
+
+/**
+ * How the two sides of a join run into each other, for a cut's join and a
+ * split's alike, so the two cannot offer different choices. A select rather
+ * than chips, because five named kinds as chips would run the row past the
+ * panel. The length chips appear once there is something to time.
+ */
+function TransitionPicker({
+  value,
+  onChange,
+}: {
+  value?: Transition;
+  onChange: (transition: Transition | undefined) => void;
+}) {
+  return (
+    <>
+      <Select
+        value={value?.kind ?? NO_TRANSITION}
+        onValueChange={(kind) =>
+          onChange(
+            kind === NO_TRANSITION
+              ? undefined
+              : {
+                  kind: kind as TransitionKind,
+                  duration: value?.duration ?? DEFAULT_TRANSITION_DURATION,
+                },
+          )
+        }
+      >
+        <SelectTrigger
+          size="sm"
+          aria-label="Transition at this join"
+          className="w-auto gap-1.5 border-transparent bg-transparent shadow-none"
+        >
+          <BlendIcon className="size-3.5 text-muted-foreground" aria-hidden="true" />
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={NO_TRANSITION}>Straight cut</SelectItem>
+          {transitionKinds.map((kind) => (
+            <SelectItem key={kind.value} value={kind.value}>
+              {kind.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {value && (
+        <ChipGroup label="Transition length">
+          {TRANSITION_DURATIONS.map((length) => (
+            <Chip
+              key={length}
+              active={value.duration === length}
+              onClick={() => onChange({ ...value, duration: length })}
+            >
+              {`${length}s`}
+            </Chip>
+          ))}
+        </ChipGroup>
+      )}
+    </>
+  );
+}
+
 function ChipGroup({
   label,
   children,

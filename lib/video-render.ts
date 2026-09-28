@@ -35,7 +35,14 @@ import {
 import { type ZoomRegion, sourceRect, zoomAt } from "@/lib/clip-zoom";
 import { type Cut, keptSeconds, keptSegments, outputAt } from "@/lib/clip-cuts";
 import { type FadeRegion, fadeAt } from "@/lib/clip-fade";
+import {
+  TRANSITION_BLUR,
+  hasDissolve,
+  joinsOf,
+  transitionAt,
+} from "@/lib/clip-transitions";
 import { normalized, project } from "@/lib/marks";
+import type { Split } from "@/lib/clip-pieces";
 import type { MotionTrack } from "@/lib/motion";
 import { drawRipple, ripplesAt } from "@/lib/ripples";
 import type { Trim } from "@/types/screenshot";
@@ -85,6 +92,8 @@ export interface RenderRequest {
   trim: Trim;
   /** Stretches removed from the middle. The loop decodes around them. */
   cuts: Cut[];
+  /** Joins between touching pieces, for their transitions. */
+  splits: Split[];
   /** The playback rate. 2 writes the clip in half its own time. */
   speed: number;
   /** Stretches of the clip that close in on a point of the picture. */
@@ -146,6 +155,7 @@ export async function renderVideo({
   source,
   trim,
   cuts,
+  splits,
   speed,
   zooms,
   fades,
@@ -181,6 +191,16 @@ export async function renderVideo({
   // The output's own length. Everything written is on this clock, which runs
   // `speed` times faster than the source's.
   const length = keptSeconds(trim, cuts) / speed;
+  // Each join's transition on the output's clock, from the same arithmetic the
+  // preview's loop uses.
+  const joins = joinsOf(trim, cuts, speed, splits);
+  // A dissolve fades the last frame before its join out over the part after
+  // it. The picture is copied here on every frame outside a dissolve, so the
+  // first frame past a join still finds the one before it.
+  const held = hasDissolve(joins)
+    ? new OffscreenCanvas(Math.max(Math.round(box.width), 1), Math.max(Math.round(box.height), 1))
+    : null;
+  const heldCtx = held?.getContext("2d") ?? null;
 
   const output = new Output({
     format: new Mp4OutputFormat({ fastStart: "in-memory" }),
@@ -261,8 +281,20 @@ export async function renderVideo({
         ctx.clip();
         // A zoom is the same draw from a smaller source rectangle. The chrome
         // stays baked, and the rectangle comes from the same arithmetic the
-        // preview's transform does, on the source's own clock.
-        const zoom = zoomAt(zooms, sample.timestamp, speed, motion);
+        // preview's transform does, on the source's own clock. A zoom
+        // transition pushes in on top of any region.
+        const move = transitionAt(joins, at);
+        const region = zoomAt(zooms, sample.timestamp, speed, motion);
+        const zoom =
+          move.scale !== 1
+            ? {
+                scale: (region?.scale ?? 1) * move.scale,
+                focus: region?.focus ?? { x: 0.5, y: 0.5 },
+              }
+            : region;
+        if (move.blur) {
+          ctx.filter = `blur(${move.blur * TRANSITION_BLUR * box.width}px)`;
+        }
         if (zoom) {
           const rect = sourceRect(
             zoom,
@@ -283,6 +315,7 @@ export async function renderVideo({
         } else {
           sample.draw(ctx, box.x, box.y, box.width, box.height);
         }
+        ctx.filter = "none";
 
         // The marks ride the same zoom as the picture, through the same
         // arithmetic the preview's transform uses, so a blur stays on what it
@@ -347,6 +380,37 @@ export async function renderVideo({
             const at = view.at(ripple);
             drawRipple(ctx, at.x, at.y, view.unit, ripple.progress);
           }
+        }
+
+        if (held && heldCtx) {
+          if (move.dissolve > 0) {
+            ctx.save();
+            ctx.globalAlpha = move.dissolve;
+            ctx.drawImage(held, box.x, box.y, box.width, box.height);
+            ctx.restore();
+          } else {
+            heldCtx.drawImage(
+              canvas,
+              box.x,
+              box.y,
+              box.width,
+              box.height,
+              0,
+              0,
+              held.width,
+              held.height,
+            );
+          }
+        }
+
+        // A dip is a flat colour over the picture, inside its own corners, so
+        // the frame round it holds while the picture goes to black or white.
+        if (move.veil) {
+          ctx.save();
+          ctx.globalAlpha = move.veil.alpha;
+          ctx.fillStyle = move.veil.color;
+          ctx.fillRect(box.x, box.y, box.width, box.height);
+          ctx.restore();
         }
         ctx.restore();
 
