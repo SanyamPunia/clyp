@@ -19,6 +19,7 @@
  * Everything here is pure, and the arithmetic is the whole of it.
  */
 
+import type { Transition } from "@/lib/clip-transitions";
 import type { Trim } from "@/types/screenshot";
 
 export interface Cut {
@@ -26,6 +27,11 @@ export interface Cut {
   /** Source seconds. The stretch this removes. */
   start: number;
   end: number;
+  /**
+   * How the two sides of the join this cut makes run into each other. Absent
+   * is a straight cut. When two cuts merge, the first one's survives.
+   */
+  transition?: Transition;
 }
 
 /** One kept stretch of the source, and where it lands on the output. */
