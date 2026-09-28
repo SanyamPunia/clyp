@@ -77,7 +77,18 @@ describe("the registry", () => {
       const colours =
         preset.kind === "linear"
           ? preset.stops.map((s) => s.color)
-          : [preset.base, ...preset.layers.map((l) => l.color)];
+          : preset.kind === "mesh"
+            ? [preset.base, ...preset.layers.map((l) => l.color)]
+            : [
+                ...preset.base.map((s) => s.color),
+                ...preset.layers.flatMap((l) =>
+                  l.shape === "band"
+                    ? // A band is a layer over the base, so it may leave
+                      // parts of itself clear. Only its colours are checked.
+                      l.stops.map((s) => s.color).filter((c) => c !== "transparent")
+                    : [l.color],
+                ),
+              ];
       for (const colour of colours) {
         expect(colour, `${preset.id}: ${colour}`).toMatch(/^#[0-9a-f]{6}$/i);
       }
@@ -108,6 +119,50 @@ describe("the registry", () => {
     }
   });
 
+  it("gives a scene an opaque base that spans the whole height", () => {
+    // The base is what keeps a scene opaque under a cross-fade, whatever its
+    // layers leave clear, so it may not have a gap at either end.
+    for (const preset of gradientPresets) {
+      if (preset.kind !== "scene") continue;
+      expect(preset.base[0].at, preset.id).toBe(0);
+      expect(preset.base[preset.base.length - 1].at, preset.id).toBe(100);
+      for (let i = 1; i < preset.base.length; i++) {
+        expect(preset.base[i].at, preset.id).toBeGreaterThanOrEqual(
+          preset.base[i - 1].at,
+        );
+      }
+    }
+  });
+
+  it("keeps a scene's shapes sized and its bands in order", () => {
+    for (const preset of gradientPresets) {
+      if (preset.kind !== "scene") continue;
+      for (const layer of preset.layers) {
+        if (layer.shape === "band") {
+          expect(layer.stops.length, preset.id).toBeGreaterThanOrEqual(2);
+          for (let i = 1; i < layer.stops.length; i++) {
+            expect(layer.stops[i].at, preset.id).toBeGreaterThanOrEqual(
+              layer.stops[i - 1].at,
+            );
+          }
+        } else {
+          const size = layer.shape === "disc" ? [layer.r] : [layer.w, layer.h];
+          for (const n of size) expect(n, preset.id).toBeGreaterThan(0);
+          expect(layer.hold ?? 0, preset.id).toBeLessThan(100);
+        }
+      }
+    }
+  });
+
+  it("suggests grain only in the range the slider offers", () => {
+    for (const family of gradientFamilies) {
+      if (family.grain === undefined) continue;
+      expect(family.grain, family.id).toBeGreaterThanOrEqual(5);
+      expect(family.grain, family.id).toBeLessThanOrEqual(100);
+      expect(family.grain % 5, family.id).toBe(0);
+    }
+  });
+
   it("only answers to an angle when it is linear", () => {
     for (const preset of gradientPresets) {
       expect(supportsAngle(preset)).toBe(preset.kind === "linear");
@@ -116,6 +171,25 @@ describe("the registry", () => {
 });
 
 describe("gradientToCss", () => {
+  it("draws a scene's layers over its base", () => {
+    const scene = gradientPresets.find((p) => p.kind === "scene");
+    if (!scene || scene.kind !== "scene") throw new Error("No scene preset");
+    const css = gradientToCss(scene);
+    // The base is the last layer, so it is the one painted underneath.
+    expect(css.endsWith(`linear-gradient(180deg, ${scene.base
+      .map((s) => `${s.color} ${s.at}%`)
+      .join(", ")})`)).toBe(true);
+    expect(gradientToCss(scene, 45)).toBe(gradientToCss(scene, 300));
+  });
+
+  it("keeps a disc round on any box and gives it a hard edge", () => {
+    const moon = gradientPresets.find((p) => p.id === "horizon-pink-dunes");
+    if (!moon || moon.kind !== "scene") throw new Error("No dunes preset");
+    // `circle` rather than two radii, since two percentages of a tall box
+    // would draw an oval.
+    expect(gradientToCss(moon)).toContain("radial-gradient(circle at 50% 47%");
+  });
+
   it("takes the angle it is handed over the preset's own", () => {
     const linear = gradientPresets.find((p) => p.kind === "linear")!;
     expect(gradientToCss(linear, 45)).toContain("linear-gradient(45deg");
