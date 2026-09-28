@@ -14,7 +14,7 @@ backend and no accounts.
 | Framework | Next.js 16, App Router, Turbopack |
 | React | 19 |
 | Styling | Tailwind CSS 4, single stylesheet at `app/globals.css` |
-| Components | shadcn/ui (new-york), Radix primitives |
+| Components | shadcn/ui (new-york), Radix primitives. Select and Checkbox are the newest. |
 | Icons | lucide-react, `*Icon`-suffixed imports |
 | Fonts | Inter via `next/font/google`, one face for the whole app |
 | Theme | Dark only. No light mode, no theme switcher. |
@@ -34,10 +34,11 @@ eslint-plugin-react that throws on ESLint 10.
 ```
 app/          routes, root layout, providers, the one stylesheet
 components/   feature components (canvas, controls, drop zone, upload card,
-              trim bar)
+              trim bar, marks, device frame, handle badge)
 components/ui shared primitives, shadcn-generated or hand-added
 e2e/          browser specs and their fixtures
 lib/          pure modules, no React, and their specs beside them
+public/platforms  platform logos from svgl (svgl.app), one SVG per platform
 types/        shared types
 ```
 
@@ -65,6 +66,20 @@ The panels carry the only borders. Sections inside the right panel are
 separated by hairline dividers (`divide-y divide-stroke`), never by nested
 cards, so there is one border weight on screen.
 
+**Every section in the right panel folds to its title, accordion style.**
+`Section` in `style-controls.tsx` is the one place this lives, so a section
+added later folds without anyone remembering to make it. The header is a plain
+row with no fill, open or hovered: the title on the left, the section's meta
+and a chevron at the far right, and hover brightens the chevron. It is the
+one button with no press scale: the chevron turning is the feedback, and a
+full-width row shrinking on click reads as a jolt. The ghost
+button's `aria-expanded` wash is switched off, since it is for a trigger
+holding a menu open rather than for a header. Sections fold independently, so
+a reader drawing marks can keep the background open beside them. The body
+stays mounted and folds by `grid-template-rows` with `inert`, the trim bar's
+pattern, and its clip has a margin of slack so focus rings are not cut. Open
+or closed is view state and is not stored, like the trim bar's fold.
+
 ## Color
 
 The app is **dark only**. There is no `dark:` variant and no `.dark` class:
@@ -84,8 +99,12 @@ the point.
 
 The exceptions are all inside the exported artwork rather than app chrome:
 the title bar and browser bar in `window-navbar.tsx`, the caption's text
-colours in `clyp.tsx`, and the gradient hexes in `lib/gradients.ts`. None of
-them follows the app theme, because the exported PNG has no theme.
+colours in `clyp.tsx`, the gradient hexes in `lib/gradients.ts`, the mark
+colours in `lib/marks.ts`, the ring in `lib/ripples.ts`, the device in
+`device-frame.tsx` and the pill in `handle-badge.tsx`. None of them follows the
+app theme, because the exported PNG has no theme. The template guides in
+`clyp.tsx` carry fixed colours for the zoom marker's reason: they sit over
+arbitrary artwork.
 
 ## Background
 
@@ -126,6 +145,25 @@ padding and 255 over the picture, so only the artwork is opaque. The same
 export on `solid` reads 255 through the padding and 0 only outside the frame's
 own radius.
 
+### Matching the picture
+
+**Match the picture**, on the Custom tab, sets the two custom stops from the
+picture's own colours through `paletteFrom` in `lib/palette.ts`. The picture
+(or the clip's current frame) is drawn into a 64px canvas first, since a few
+thousand pixels say as much about its colours as a few million.
+
+- **Colours are read by hue, not averaged.** The average of a blue header and
+  an orange button is a brown nobody would pick. Every coloured pixel votes for
+  one of twelve hues, weighted by how coloured it is, and the gradient runs
+  from the strongest hue to the strongest one at least 40 degrees from it.
+- **The lightness is placed, not taken.** A screenshot's accent is usually a
+  button colour, too loud to fill a frame, and its page is near white or near
+  black, too flat. The start sits at 60% lightness and the end at 36%.
+- A picture with almost no colour gets a slightly cool neutral, light or dark
+  to match how light the picture is.
+- Every colour out of it is a six-digit hex, which is what the registry
+  requires of every layer.
+
 ### Gradients
 
 A preset stores its stops as data. The picker swatch and the exported canvas
@@ -135,12 +173,41 @@ both derive their CSS from that data, so the two cannot drift.
   re-renders it at any direction.
 - `kind: "mesh"` carries layered radial gradients over a `base` color and
   ignores the angle.
+- `kind: "scene"` is a picture built from layers over a vertical `base`: a
+  `blob` is an ellipse with its own two radii, a `disc` is a circle, and a
+  `band` is a linear layer whose stops may be `transparent`. Each shape takes a
+  `hold`, the part of its radius that stays solid, so the same layer is a glow
+  at 0 and a dune with a crisp edge at 96. A band with two stops at nearly one
+  position is a hard line, which is how a horizon, a door's walls and a print's
+  paper border are drawn. It ignores the angle.
+  - **A disc is `circle`, never two radii.** CSS takes no percentage for a
+    circle's own size, so its radius is a percent of the ray to the farthest
+    corner, and that is what keeps a moon round on a tall frame. Two percentage
+    radii would draw it as an oval on anything but a square.
+  - **The base is opaque and spans 0 to 100**, which the spec checks. It is
+    what keeps a scene opaque under the cross-fade whatever its layers leave
+    clear, the same job a mesh's base does.
 - `gradientToCss(preset, angle?)` produces the `background-image` value. Every
   consumer goes through it.
 - **A family holds a multiple of eight presets, so the picker lays out as even
   rows.** It is eight columns wide, and a ninth in one family leaves a ragged
-  last row. Each family currently holds thirty-two, which is four rows.
-  `lib/gradients.test.ts` fails on any other count.
+  last row. The first four families hold thirty-two each, four rows, and the
+  five scene families sixteen each, two rows. `lib/gradients.test.ts` fails on
+  any count that is not a multiple of eight.
+- **A family can carry the grain it is made to be seen with.** Defocus is 70,
+  Glow 40, Horizon 30, Spectral 55 and Print 90: a defocused photograph and a
+  stippled print are mostly their grain, and without it they read as plain
+  blur. Picking one of their presets switches grain on at that amount, but only
+  while grain is off, so a strength someone chose is never moved.
+- **The scene families were drawn against references**, which is why they are
+  data and not generated at run time. Defocus is a defocused photograph, Glow
+  is light through colour (waves and lenses on black), Horizon a still scene
+  with a hard horizon, Spectral bands of colour pulled out of a specimen, and
+  Print a stippled print on cream paper. A wave is a chain of overlapping
+  ovals along a path, resampled so neighbours overlap by most of their width:
+  spaced out, the first build read as a string of beads. Spectral's
+  references also have vertical smear streaks, which a gradient cannot draw,
+  so it carries the bands and the grain and not the streaks.
 - **No two presets share a label.** A swatch shows no text, so the label is its
   tooltip and its screen-reader name. Where a colour name is wanted in two
   families, the mesh one carries the suffix: `Ember` and `Ember Mesh`.
@@ -248,6 +315,26 @@ needed no new branch in `handleExport`. The choice sits first in the dialog,
 since a still has no frame rate, no length, no sound and nothing to cancel,
 and every one of those rows goes with it.
 
+**Every PNG path goes through `still` in `clyp.tsx`**: one size, a carousel,
+several sizes and a copy. It is `rasterize` then `bakeBlurs`, so a blur mark
+can never be missing from one kind of still. `rasterize` takes a `RasterSize`,
+which is a scale or a template's exact pixels. Exact pixels keep `pixelRatio`
+at 1 and size the canvas to the target, so `html-to-image` draws the frame's
+SVG straight into it and text rasterizes at the target size.
+
+**Several sizes is the same frame at each template in turn, in one ZIP.**
+`sizeOverride` lays the frame out at one template after another through
+`flushSync`, and each raster is taken while it holds. The override also sets
+`data-instant` on the frame, which zeroes `.artwork-ease`: the raster reads
+computed styles as they are, and a box still easing towards a new shape would
+be baked halfway there. The canvas goes back to its own size when the batch
+ends, whether or not it succeeded. A clip's several sizes are stills of its
+current frame, since one encode per size is not a batch anyone waits for.
+
+`lib/zip.ts` writes the archive, stored rather than deflated: PNGs are
+deflated already, and a stored entry needs only a CRC and two headers, which
+is short enough to own rather than take a dependency for.
+
 The size readout is measured, not guessed. `lib/export-size.ts` carries the
 sample tables both fits came from. Re-measure rather than adjusting a
 coefficient by eye.
@@ -290,6 +377,19 @@ is `whitespace-nowrap`, because at 420px the buttons leave it about 130px and
   which gave sound more visual weight than scale and made the switch the
   brightest thing in the body. It is now a `FieldLabel` and a `Switch` on one
   row, which is what every other toggle in the app is.
+- **An Output row comes first for any still: One size or Several sizes.**
+  Several sizes swaps the Scale row for a checklist of every template, grouped
+  by platform, starting with the four most posts go to. The footer then reads
+  `ZIP`, the file count and the summed estimate.
+- **A template replaces the Scale tiles with its size.** It has one output, so
+  there is nothing to choose. The row names the template and says it was set in
+  the Frame section, and a clip probes the encoder at that one size. When the
+  frame is smaller than the template by more than 5%, a line says it is
+  enlarged and may look soft, since that is the one way a template makes an
+  export worse than a scale would.
+- **A template with a length limit says so when the clip is past it.** X
+  takes 2:20, an Instagram Story 60s and a YouTube Short 3:00. The line names
+  both lengths and does not block the export.
 - **Copy is worded for what the reader gets, not for the codec.** "Re-encoded
   as AAC alongside the video" became a line that only appears when a soundtrack
   is placed, naming the file it will play instead of the clip's own sound.
@@ -708,10 +808,11 @@ and 180 frames, unchanged.
 
 ## Undo
 
-`components/use-edit-history.ts` is the history, and it covers the clip's
-edits: the trim, the cuts, the speed, the zoom regions and a soundtrack's
-placement. Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z, plus two buttons beside the
-playhead clock.
+`components/use-edit-history.ts` is the history, and it covers the edits: the
+trim, the cuts, the speed, the zoom regions, a soundtrack's placement and the
+marks. Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z, plus two buttons beside the playhead
+clock. It runs for an image too, since marks are edits on a still, and there
+the keys are the only way in.
 
 **The history watches the state rather than being pushed to.** Every edit
 already lives in `clyp.tsx` as ordinary state, and threading a `pushUndo()`
@@ -738,6 +839,11 @@ state as one value and notices when it changes.
 - **Undo pushes the live state onto the redo stack, not the last committed
   one**, so an edit still inside its settle window is not lost by pressing undo
   during it.
+- **Undo inside the settle window goes back to the committed state, not past
+  it.** An edit still settling has no entry of its own, so the state right
+  before it is the committed one. Popping an entry there skipped that state and
+  undid the edit before as well, which surfaced as a mark deleted and undone at
+  once coming back without the one drawn just ahead of it.
 - The buttons sit beside the clock rather than in the transport pill: that pill
   is playback and these are the edits. Measured after adding them, the pill's
   centre still holds the row's centre exactly from 1920px down to 380px, with
@@ -792,8 +898,11 @@ stop each.**
 - A restored zoom's level is clamped to one the picker offers, since a
   radiogroup with nothing checked would have no tab stop at all.
 
-Measured with a clip loaded: 51 tab stops for the whole page, against 109
-before this. Four of them are the background picker: one a family, on the
+Measured with a clip loaded: 77 tab stops for the whole page with every
+section open, against 109 before this. Each of the nine background families
+is two of them, its header and its one swatch stop. The
+Marks, Handle, Clicks and Saved looks sections added seven, each a radiogroup
+or a single control, and each of the nine section headers is one. Four of them are the background picker: one a family, on the
 header that folds it, with its swatches behind the arrow keys.
 
 ### Shortcuts
@@ -1447,6 +1556,11 @@ settles well inside, and the Blob is never touched.
   asked for again. Three floats a frame, under half a megabyte for the longest
   clip allowed, matched to the clip the same way the edits are.
 
+**The marks have a key of their own, `marks`.** An image has no edits record,
+and marks belong to images as much as to clips, so they do not ride the edits
+key. The record names the picture by its name and size, and a restore applies
+it only on a match, from inside the media's restore before `restored` flips.
+
 Reading happens on the client only, inside a promise rather than the effect
 body. Seeding state from storage during render would break hydration, because
 neither store exists on the server. Nothing is written until the restore has
@@ -1537,6 +1651,198 @@ Verified on a 1280x720 clip: 1408x1408 at 1:1, 1408x1760 at 4:5, 1561x878 at
 On a 886x1918 clip the other branch runs and the width grows instead: 2076x2076
 at 1:1 and 3691x2076 at 16:9. The exports match, a 1408x1408 MP4 and a
 1028x1285 PNG.
+
+## Templates
+
+`lib/templates.ts` is the registry of platform sizes, and `template` in
+`StyleOptions` is one of its ids or `none`. A template is a target shape plus
+an exact output size. The shape comes from the size, so the two cannot drift:
+the frame grows to it through the same `aspectBox` a plain shape uses, and
+the export then writes exactly those pixels rather than the frame times a
+scale. While one is set, the Shape row is disabled.
+
+- **The sizes were checked on 2026-09-28**, against each platform's help page
+  where one could be read (LinkedIn, YouTube, Product Hunt, Open Graph) and
+  against Sprout Social and Buffer elsewhere. The file's header lists every
+  place the sources disagreed and which way it went. Re-check before changing
+  a number.
+- **Every size is even**, because H.264 needs it, and `lib/templates.test.ts`
+  fails on an odd one. The spec found Bluesky's 1200x675, which is 1200x676
+  here, and LinkedIn's own 1200x627 is its ad size of 1200x628.
+- **The safe zone is a guide on the canvas, never part of the file.** A Story,
+  a Reel, a TikTok and a Short each carry the pixels the platform's own
+  interface covers, as Meta's March 2026 percentages where Meta publishes them.
+  `Guides` in `clyp.tsx` dims everything outside it and dashes its edge. It
+  sits outside the export ref and inside the zoom transform, so it lands on the
+  frame at any zoom, and its lines are divided by the zoom to stay one weight.
+  - **It carries `z-50`.** The frame opens no stacking context, so the
+    background's own layers, which run to `z-30`, painted over the first build
+    of the guides and nothing showed. Found in a screenshot, not in a spec,
+    since the DOM had every guide in the right place.
+- The Frame section's Size readout is the template's own size, through
+  `Dimensions` like every other size.
+- **Every row in the Size dropdown carries its platform's logo, and so does the
+  trigger.** `PlatformIcon` renders the logos from svgl, checked in under
+  `public/platforms/` so nothing is fetched from svgl at run time. They are
+  files through `next/image`, which serves an `.svg` unoptimized, rather than
+  inline SVG, because the Instagram, Facebook and TikTok marks carry gradient
+  ids and one logo in the list and the trigger at once would put two copies of
+  an id on the page. X, TikTok and Threads are svgl's dark variants. The web
+  takes the lucide globe and Any size the frame icon, so every row lines up.
+  The logo sits inside the item's text, which is what the trigger renders.
+  - A brand logo is the one place an icon here does not come from lucide,
+    which ships no brand marks. The logos keep their own colours, the same
+    exception the artwork's colours are.
+
+Verified through the export: Instagram Portrait writes a 1080x1350 PNG, an
+Instagram Story encodes a 1080x1920 MP4, and the top edge of a Story's file
+reads the same pixel with the guides on and off.
+
+## Carousel
+
+`slides` in `StyleOptions` is how many carousel slides the frame spans, from 1
+to 20, which is Instagram's limit. Only a template marked `carousel` takes more
+than one, so a stored count can never split a Story: `slideCount` answers 1
+for anything else.
+
+**A carousel is one frame, as wide as all its slides, cut at the seams on
+export.** The artwork is laid out once across the whole strip, so a wide
+screenshot crosses from one slide to the next unbroken, which is the point of
+a seamless carousel. `slideRects` gives each slide's rectangle, `slice` in
+`lib/raster.ts` cuts the one raster into a PNG each, and they go out as one
+ZIP named `<name>-1.png` onward. The guides draw each seam.
+
+- **A carousel's slides are stills.** A clip set to one exports its current
+  frame, since a clip split into slides would be one encode per slide, and the
+  modal's Format row goes with it.
+- Copy puts the whole strip on the clipboard, which holds one image.
+
+Verified: three Portrait slides write a ZIP of three 1080x1350 PNGs.
+
+## Marks
+
+`lib/marks.ts` is the model and `components/marks-layer.tsx` draws and edits
+them. A mark is a blur or a block to redact, or a box, an arrow or a line of
+text to point. They live in `clyp.tsx` beside the other edits.
+
+**Every mark is in fractions of the picture, like a zoom's focus.** It means
+the same thing at any canvas zoom, any export size and under a clip's own
+zoom. What is not a position is a fraction of the picture's width: a stroke is
+0.5% of it and never under 3px, a blur's radius 1.2% and never under 8px, a
+text's size one of three steps. So a mark on a 2560px capture is as heavy as
+the same mark on a 1280px one.
+
+- **The layer is the picture's own box.** It sits in the clip box for a video
+  and in a wrapper round the image for a still, so a fraction of it is a
+  fraction of the picture and nothing is measured to place a mark. Handles and
+  the selection outline are divided by the canvas zoom and carry
+  `EXPORT_IGNORE`.
+- **A blur is two things: a `backdrop-filter` on screen, and a filter over the
+  finished pixels in the file.** `html-to-image` cannot serialize a backdrop
+  filter into its SVG, so the element carries `EXPORT_IGNORE` and says where it
+  is through `MARK_BLUR`. `bakeBlurs` measures each one off the live DOM against
+  the frame, the same two ratios the video composite uses, clips it to the
+  picture's box, and draws the raster back through `ctx.filter` with a margin
+  of three radii, so the region's edge blurs against real pixels. Its source is
+  the raster as it was, so two blurs that overlap do not compound.
+- **A clip's marks ride its zoom.** The zoom loop gives the layer the same
+  transform and opacity as the video. The encode rasterizes the layer once, at
+  the picture's own size with its transform set back to none, and draws that
+  through each frame's zoom window. Blurs are drawn per frame instead, since
+  what is under them moves: each is the frame drawn again through a filter,
+  clipped to the region, from only the region and its margin, because
+  filtering the whole frame per blur is most of a frame's budget. `project` is
+  the one mapping from picture fractions to output pixels, and its spec checks
+  it against `sourceRect`, so the two cannot disagree.
+- **The tool decides what a press draws, and Select draws nothing**, so a press
+  on a clip still plays it. The bare layer takes presses only while a tool is
+  out or a mark is selected, and a press on it with no tool lets go of the
+  selection. Escape puts the tool down.
+- **A drag on a mark pauses a clip and leaves it paused**, the rule every other
+  drag on the picture follows.
+- **Delete or Backspace removes the selected mark at once, from anywhere on the
+  page**, not only while the mark has focus. A mark is selected the moment it
+  is drawn, and reaching for Tab first to delete it is not what anyone does. It
+  does not confirm, by request: Cmd+Z brings it back and the toast carries an
+  Undo. A field being typed in keeps its own Backspace, and a lane that already
+  answered the key for its own zoom or cut keeps it, which the page handler
+  reads as `defaultPrevented`. The key lives in `clyp.tsx`, not the layer.
+- **The panel's Remove this mark still confirms.** A mark can be what hides a
+  password, and a press on a button is the easier one to make by accident.
+- Arrows move a focused mark by 1% of the picture, Shift by 5%. Focusing a mark
+  selects it, so the panel shows its settings.
+- An arrow's shaft stops two strokes short of its point, so the square end
+  never pokes out past the head.
+
+Verified through the export: a black block reads 0,0,0 at the picture's
+centre in a PNG and in every frame of an MP4. Over 4px black and white stripes,
+a blur reads 127 at its centre, while a row outside it still reaches 0 and 255.
+A blur on a clip encodes and leaves each band its own colour.
+
+## Click ripples
+
+`clickRipples` in `StyleOptions` draws a ring at every click the motion pass
+found, for a clip. A screen recording shows the cursor arriving and never the
+press, so a viewer cannot tell a click from a hover. `lib/motion.ts` already
+finds the clicks for suggested zooms, so this needs no new analysis.
+
+- **One drawing function, two canvases.** `drawRipple` in `lib/ripples.ts`
+  takes a point and a unit in its canvas's own pixels. The preview draws on a
+  canvas in the marks layer, so it rides the zoom, and the encode draws through
+  `project`. The ring is white with a dark edge and lasts 0.6 source seconds.
+- **The preview canvas is left out of every raster.** The encode draws its own,
+  and a still has no time for a ripple to be at.
+- **It needs the clip's motion.** The Clicks section says so while the track is
+  missing and offers the same confirmed read the follow toggle does, with its
+  first clause changed to say what for.
+
+Verified through the export, with a stored track holding one click at the
+centre at one second: 0.15s after it the centre of the green band is washed
+towards white, and in the blue second nothing is drawn.
+
+## Handle
+
+`badge` in `StyleOptions` is a handle in a corner of the frame, such as
+`@clyp`, so a post that is reshared still says whose it is. `HandleBadge` sits
+in the padded box the artwork centres in, so it lands in the padding and a
+target shape moves it with the frame. It is a translucent pill for the
+caption's reason: it sits over an arbitrary gradient. The rows under the text
+follow it, the way the caption's do. Its size is in media pixels, 12 to 72.
+
+## Device frames
+
+`device` in `StyleOptions` draws a phone or a laptop round the media, in CSS
+inside the frame, so both exports bake it through the same raster as the title
+bar. Every measure is a fraction of the media's width, for the title bar's
+reason. The device decides the screen's corners, a phone's own radius all
+round and a laptop's square inside its bezel, and the shadow moves from the
+media to the device.
+
+**There is no notch or island.** A video export draws the decoded frames over
+the whole screen box, so anything drawn over the screen would vanish from a
+clip and stay in a still, and the two would disagree about the phone.
+
+Verified: a phone frame makes the exported PNG wider and taller than the same
+export without it.
+
+## Saved looks
+
+A look is a named style, from `lib/looks.ts`, kept in localStorage under
+`clyp:looks` beside the style. The Saved looks section is first in the panel,
+since putting one back is the fastest way to style the next capture.
+
+- **A look is the whole style less what is about one picture.** The caption and
+  the browser bar's address are written for the picture they sit on, so
+  applying a look keeps the current ones. The handle is in, since it is the
+  same on every post.
+- **Applying is merged, not replaced**, so a look saved before a control
+  existed leaves that control where it is.
+- **Applying does not ask, and its toast carries an Undo.** It is one press and
+  cheap to reverse, and the style has no undo of its own. The look the style
+  already is carries a check and is disabled, since pressing it changes
+  nothing. Deleting one confirms.
+
+Verified: a look saved on a solid background comes back after a reset.
 
 ## Window chrome
 
@@ -1700,6 +2006,11 @@ that took the wrong selection.
   enough that determinism is worth the wall clock.
 - **A spec asserts a file or a behaviour, never a screenshot.** There is no
   visual baseline to churn.
+
+`e2e/features.spec.ts` covers templates, carousels, several sizes, marks,
+ripples, the handle, devices, saved looks and matching the picture. It reads
+a ZIP back with a parser of its own, which is short because the app only
+writes stored entries, and reads a PNG's size off its header.
 
 The specs rot when an accessible name changes, which is the point: five
 throwaway scripts broke the moment `Cut` became an icon and the chips became
