@@ -97,6 +97,10 @@ component: change the mapping in `globals.css` instead. The one exception is
 `bg-gray-1200 text-gray-100` on the primary button, where the contrast pair is
 the point.
 
+The transition previews' stand-in clips and dip colours are tokens of their
+own, `clip-a`, `clip-b`, `clip-dark` and `clip-light`, since they are app
+chrome and need colours no surface token has.
+
 The exceptions are all inside the exported artwork rather than app chrome:
 the title bar and browser bar in `window-navbar.tsx`, the caption's text
 colours in `clyp.tsx`, the gradient hexes in `lib/gradients.ts`, the mark
@@ -701,10 +705,12 @@ have to agree about where a second is.
 - **A scrub clamps a frame short of the out point.** Landing exactly on it
   reads to the loop as the clip ending, which snaps the playhead back to the
   start under the hand.
-- **The lane is `cursor-grab` and the handles are `cursor-ew-resize`**, which is
-  the second place in this app the shared cursor-pointer rule gives way. The
-  two cursors say which gesture each part answers: drag the middle, resize the
-  edges. A press on a handle stops propagating, so it never also scrubs.
+- **The bare lane is `cursor-pointer` and the handles are `cursor-ew-resize`.**
+  A press on the lane places the playhead, and a handle is dragged sideways.
+  The lane was `cursor-grab`, which promised that the whole bar could be
+  dragged, and once the clip was in pieces that promise was wrong. See
+  Pieces for the rest. A press on a handle stops propagating, so it never also
+  scrubs.
 - **The bar folds to its transport row.** A chevron beside the length readout
   hides the lane, the axis, the soundtrack and the speed pill, for more canvas
   once the cut is settled. The folded part stays mounted and is hidden by
@@ -822,10 +828,33 @@ with the edits and in the undo history.
   is ignored, so a trim or a cut dragged across one needs no repair.
   `MIN_PIECE` is `MIN_CUT`, so every piece can be deleted as a cut, and a
   split that would leave a piece under it is refused with a toast.
-- **A press selects the piece under it, and a drag on the selected one moves
-  it.** Selecting first keeps a scrub a scrub: nothing moves on a press that
-  did not mean to pick a piece up. Pieces are lane instances only while there
-  is more than one, so a clip in one piece has nothing new to tab past.
+- **A piece behaves like a clip in an editor.** A press selects it at once. A
+  drag moves it, and a click that did not drag puts the playhead where it
+  landed, which is where the next split goes. Nothing has to be selected
+  first for either. The first build moved a piece only on a drag that started
+  on the piece already selected, and scrubbed otherwise, so with the clip in
+  pieces the playhead could not be dragged across the timeline at all: a
+  press on the selected piece picked the piece up instead.
+- **Each edge of a piece resizes it.** Shortening leaves a gap, which is a
+  cut, and lengthening takes the room beside it up to its neighbour, through
+  `resizePiece`, which shares `editFrom` with `movePiece` so a move and a
+  resize cannot disagree about what a gap or a touch becomes. A grip shows on
+  hover and stays on the selected piece. With the clip in pieces the outer
+  edges are the trim, so the trim handles are hidden rather than stacked on
+  the same pixel, and so are a cut's edge marks, since the pieces either side
+  resize it. A cut against the in or out point leaves one piece and keeps
+  its marks.
+- **The playhead can always be picked up**, by a knob at the top of its line
+  or by the line itself, whatever is under it. The ruler scrubs too, so there
+  is always a surface for the playhead that nothing else claims. The knob is
+  a slider with the arrow keys, and the loop writes its value like the clock.
+- **Every cursor says what a press does.** A piece is `cursor-grab`, an edge
+  and the playhead `cursor-ew-resize`, and the bare lane and the ruler
+  `cursor-pointer`, since a press there places the playhead. The lane used to
+  be `cursor-grab` everywhere, which promised a drag of the whole bar.
+- Pieces are lane instances only while there is more than one, so a clip in
+  one piece has nothing new to tab past. The lane press scrubs then, as it
+  always did.
 - **A piece moves into the room beside it and keeps its length.** The room is
   up to the piece before and the piece after, or the file's own ends, so the
   first piece can move into what the trim took off. `movePiece` moves it in
@@ -877,14 +906,26 @@ loop and the worker's encode loop both read `transitionAt`, so they agree.
   off the pieces with whichever transition it carries, so `joinsOf` reads a
   gap and a touch the same way, and `movePiece` carries a join's transition
   across when a move closes a gap onto a neighbour or opens one.
-- **A touching join is a lane instance of its own.** The hairline between the
-  two pieces gets a handle's width of hit area and a tooltip, and a press on
-  it selects the join rather than scrubbing. Its controls take the same
+- **A touching join is a lane instance of its own.** It is a small dot on the
+  lane's bottom edge, with a tooltip, and a press on it selects the join. A
+  dot rather than the whole hairline, so a press higher up reaches the
+  pieces' own edges. At the bottom rather than the top, since a split leaves
+  the playhead standing on the join and its knob is at the top: the first
+  build put the dot there and the knob swallowed every press on it. Its controls take the same
   `TransitionPicker` a cut's do, so the two cannot offer different choices,
   with an X that joins the pieces back. Delete does the same, without asking:
   nothing is lost but the transition, and undo brings that back.
 - It is picked as a select, since five named kinds as chips would run the row
   past the panel. A join with one shows a small blend mark on the lane.
+- **Each choice previews itself on hover or keyboard focus.** A tooltip beside
+  the menu plays `TransitionPreview`: a small frame that runs one stand-in
+  clip into the next and back through that transition, with a line under it.
+  A transition is judged by how it moves, and a name alone makes a reader
+  export to find out. The motion is CSS keyframes in `globals.css` played
+  `alternate`, so it shows the transition both ways without a jump at the
+  loop, with the swap between the clips on a step at the halfway point: the
+  same shape the real ones have, where four centre on the join and a dissolve
+  starts at it. Under reduced motion it holds on the first clip.
 - A split stored as a bare number, from a record written before a split could
   carry a transition, is read back as a split with none.
 - A stored transition of a kind or length this build does not offer is read
