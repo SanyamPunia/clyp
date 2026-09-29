@@ -71,8 +71,8 @@ import {
   type PieceEdit,
   type Split,
   movePiece,
-  pieceAt,
   pieces as piecesOf,
+  resizePiece,
   tidySplits,
 } from "@/lib/clip-pieces";
 import {
@@ -129,6 +129,9 @@ const FRAME = 1 / EDIT_FPS;
 const COARSE_STEP = 1;
 
 const snap = (seconds: number) => Math.round(seconds / FRAME) * FRAME;
+
+/** How far a press on a piece must travel, in px, before it is a drag. */
+const DRAG_START = 4;
 
 /** The transition select's own value for a straight cut, since a select needs a string. */
 const NO_TRANSITION = "none";
@@ -420,6 +423,8 @@ export function TrimBar({
   const regionRef = useRef<HTMLDivElement>(null);
   const playheadRef = useRef<HTMLDivElement>(null);
   const clockRef = useRef<HTMLSpanElement>(null);
+  /** The playhead's knob, whose value the loop writes like the clock's text. */
+  const knobRef = useRef<HTMLSpanElement>(null);
   // The lane's usable span in px, kept in a ref because the playhead is
   // written every frame and must not render anything.
   const spanRef = useRef(0);
@@ -532,6 +537,11 @@ export function TrimBar({
       const clock = clockRef.current;
       const text = formatPrecise(time, duration);
       if (clock && clock.textContent !== text) clock.textContent = text;
+      const knob = knobRef.current;
+      if (knob && knob.getAttribute("aria-valuetext") !== text) {
+        knob.setAttribute("aria-valuetext", text);
+        knob.setAttribute("aria-valuenow", time.toFixed(3));
+      }
     };
 
     frame = requestAnimationFrame(draw);
@@ -700,65 +710,15 @@ export function TrimBar({
    * loop above reads the scrub as the clip ending and snaps back to the start
    * under the hand.
    */
-  const scrub = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      if (disabled) return;
-
-      // A press on the bare lane puts the selected cut away, the same as a
-      // press on the bare zoom lane. Without it there is no way back to the
-      // Cut button, which the selected cut's own controls take the slot of,
-      // so a second cut could not be placed. A press on a cut stops
-      // propagating, so this only ever fires away from one.
-      onCutSelect(null);
-      onJoinSelect(null);
+  const scrubFrom = useCallback(
+    (event: React.PointerEvent) => {
+      if (disabled || event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
 
       // Paused for the drag. Playback fights a scrub for the same clock, and
       // what comes out is the video stuttering rather than being moved.
       onPlayback(false);
-
-      // With the clip in pieces, a press selects the one under it, and a drag
-      // that starts on the piece already selected moves it rather than
-      // scrubbing. Selecting first is what keeps a scrub a scrub: nothing
-      // moves on a press that did not mean to pick the piece up.
-      const list = piecesOf(rangeRef.current, cutsRef.current, splits);
-      const pressed =
-        list.length > 1 ? pieceAt(list, timeAt(event.clientX)) : null;
-      onPieceSelect(pressed?.start ?? null);
-
-      if (pressed && Math.abs(pressed.start - (selectedPiece ?? NaN)) < 1e-6) {
-        event.preventDefault();
-        const origin = timeAt(event.clientX);
-        const base = {
-          trim: rangeRef.current,
-          cuts: cutsRef.current,
-          splits,
-        };
-        const move = (moved: PointerEvent) => {
-          const by = snap(timeAt(moved.clientX) - origin);
-          const next = movePiece(
-            base.trim,
-            base.cuts,
-            base.splits,
-            pressed,
-            by,
-            duration,
-            newCutId,
-          );
-          onPiecesChange(next, next.piece.start);
-          // The frame the piece now opens on, since where it starts is what
-          // a move is deciding.
-          onSeek(next.piece.start);
-        };
-        const release = () => {
-          window.removeEventListener("pointermove", move);
-          window.removeEventListener("pointerup", release);
-          window.removeEventListener("pointercancel", release);
-        };
-        window.addEventListener("pointermove", move);
-        window.addEventListener("pointerup", release);
-        window.addEventListener("pointercancel", release);
-        return;
-      }
 
       const to = (clientX: number) => {
         const { start, end } = rangeRef.current;
@@ -785,6 +745,84 @@ export function TrimBar({
       window.addEventListener("pointerup", release);
       window.addEventListener("pointercancel", release);
     },
+    [disabled, onPlayback, onSeek, timeAt],
+  );
+
+  /**
+   * A press on the bare lane: puts every selection away and scrubs.
+   *
+   * Without the deselect there is no way back to the Cut button, which the
+   * selected cut's own controls take the slot of, so a second cut could not
+   * be placed. A press on a cut, a piece or a join stops propagating, so this
+   * only ever fires away from one.
+   */
+  const scrub = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (disabled) return;
+      onCutSelect(null);
+      onJoinSelect(null);
+      onPieceSelect(null);
+      scrubFrom(event);
+    },
+    [disabled, onCutSelect, onJoinSelect, onPieceSelect, scrubFrom],
+  );
+
+  /**
+   * A press on a piece, the way a clip behaves in an editor. It selects the
+   * piece at once. A drag moves it into the room beside it, and a click that
+   * did not drag puts the playhead where it landed, which is where a split
+   * goes next. Nothing has to be selected first for either.
+   */
+  const pressPiece = useCallback(
+    (piece: Piece) => (event: React.PointerEvent<HTMLDivElement>) => {
+      if (disabled || event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      onCutSelect(null);
+      onJoinSelect(null);
+      onPieceSelect(piece.start);
+      onPlayback(false);
+
+      const originX = event.clientX;
+      const origin = timeAt(event.clientX);
+      const base = { trim: rangeRef.current, cuts: cutsRef.current, splits };
+      let moved = false;
+
+      const move = (ev: PointerEvent) => {
+        // A few pixels of give, so a click with a shaky hand is still a click.
+        if (!moved && Math.abs(ev.clientX - originX) < DRAG_START) return;
+        moved = true;
+        const next = movePiece(
+          base.trim,
+          base.cuts,
+          base.splits,
+          piece,
+          snap(timeAt(ev.clientX) - origin),
+          duration,
+          newCutId,
+        );
+        onPiecesChange(next, next.piece.start);
+        onSeek(next.piece.start);
+      };
+      const release = (ev: PointerEvent) => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", release);
+        window.removeEventListener("pointercancel", release);
+        if (moved) return;
+        const { start, end } = rangeRef.current;
+        onSeek(
+          clamp(
+            nearestKept(rangeRef.current, cutsRef.current, snap(timeAt(ev.clientX))),
+            start,
+            end - FRAME,
+          ),
+        );
+      };
+
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", release);
+      window.addEventListener("pointercancel", release);
+    },
     [
       disabled,
       duration,
@@ -794,11 +832,94 @@ export function TrimBar({
       onPiecesChange,
       onPlayback,
       onSeek,
-      selectedPiece,
       splits,
       timeAt,
     ],
   );
+
+  /**
+   * Drags one edge of a piece, the way a clip is resized in an editor. The
+   * playhead follows the edge, since the frame under it is what decides where
+   * the piece should start or stop.
+   */
+  const resizeEdge = useCallback(
+    (piece: Piece, edge: "start" | "end") =>
+      (event: React.PointerEvent<HTMLDivElement>) => {
+        if (disabled || event.button !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onCutSelect(null);
+        onJoinSelect(null);
+        onPieceSelect(piece.start);
+        onPlayback(false);
+
+        const base = { trim: rangeRef.current, cuts: cutsRef.current, splits };
+        const move = (ev: PointerEvent) => {
+          const next = resizePiece(
+            base.trim,
+            base.cuts,
+            base.splits,
+            piece,
+            edge,
+            snap(timeAt(ev.clientX)),
+            duration,
+            newCutId,
+          );
+          onPiecesChange(next, next.piece.start);
+          onSeek(
+            edge === "start"
+              ? next.piece.start
+              : Math.max(next.piece.end - FRAME, next.piece.start),
+          );
+        };
+        const release = () => {
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", release);
+          window.removeEventListener("pointercancel", release);
+        };
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", release);
+        window.addEventListener("pointercancel", release);
+      },
+    [
+      disabled,
+      duration,
+      onCutSelect,
+      onJoinSelect,
+      onPieceSelect,
+      onPiecesChange,
+      onPlayback,
+      onSeek,
+      splits,
+      timeAt,
+    ],
+  );
+
+  /**
+   * The playhead's own keys: a frame a press, a second with Shift. A plain
+   * handler rather than a memoised one, since it reads the element's clock
+   * when the key lands.
+   */
+  const nudgePlayhead = (event: React.KeyboardEvent) => {
+      const by =
+        event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : 0;
+      if (!by) return;
+      event.preventDefault();
+      onPlayback(false);
+      const now = video.current?.currentTime ?? rangeRef.current.start;
+      const { start, end } = rangeRef.current;
+      onSeek(
+        clamp(
+          nearestKept(
+            rangeRef.current,
+            cutsRef.current,
+            now + by * (event.shiftKey ? COARSE_STEP : FRAME),
+          ),
+          start,
+          end - FRAME,
+        ),
+      );
+  };
 
   /**
    * Moves the sound inside the region, leaving the region where it is.
@@ -1592,8 +1713,9 @@ export function TrimBar({
                 which is what a keyboard needs here. */}
             <div
               ref={laneRef}
+              data-lane="video"
               onPointerDown={scrub}
-              className="relative h-9 cursor-grab touch-none active:cursor-grabbing"
+              className="relative h-9 cursor-pointer touch-none"
             >
               {/* What is cut. A rail rather than a second tone across the same bar:
                   two fills a few steps apart over one flat lane read as one lane, so
@@ -1628,6 +1750,7 @@ export function TrimBar({
                         : undefined
                     }
                     aria-pressed={split ? selected : undefined}
+                    onPointerDown={split ? pressPiece(piece) : undefined}
                     onKeyDown={
                       split
                         ? laneKeys({
@@ -1652,15 +1775,71 @@ export function TrimBar({
                     }
                     onFocus={split ? () => onPieceSelect(piece.start) : undefined}
                     className={cn(
-                      "absolute inset-y-0 rounded-md bg-track-active outline-none",
+                      "group absolute inset-y-0 rounded-md bg-track-active outline-none",
                       "focus-visible:ring-[3px] focus-visible:ring-ring/50",
-                      selected && "cursor-move ring-2 ring-selected ring-inset",
+                      split && "cursor-grab active:cursor-grabbing",
+                      selected && "ring-2 ring-selected ring-inset",
                     )}
                     style={{
                       left: `calc(${at(piece.start / duration)} + ${INSET}px)`,
                       width: `calc(${at((piece.end - piece.start) / duration)} - ${touches ? 2 : 0}px)`,
                     }}
-                  />
+                  >
+                    {/* Each edge resizes the piece, the way a clip's does in
+                        an editor. A grip shows on hover and stays on the
+                        selected piece, so where to grab is never a guess. In
+                        the tab order only while the piece is selected, the
+                        rule every lane instance's edges follow. */}
+                    {split &&
+                      (["start", "end"] as const).map((edge) => {
+                        const value = edge === "start" ? piece.start : piece.end;
+                        return (
+                          <div
+                            key={edge}
+                            role="slider"
+                            tabIndex={selected ? 0 : -1}
+                            aria-label={edge === "start" ? "Piece start" : "Piece end"}
+                            aria-valuemin={0}
+                            aria-valuemax={duration}
+                            aria-valuenow={Number(value.toFixed(3))}
+                            aria-valuetext={formatPrecise(value, duration)}
+                            onPointerDown={resizeEdge(piece, edge)}
+                            onKeyDown={laneKeys({
+                              part: edge === "start" ? "head" : "tail",
+                              shift: (by) =>
+                                resizePiece(
+                                  trim,
+                                  cuts,
+                                  splits,
+                                  piece,
+                                  edge,
+                                  value + by,
+                                  duration,
+                                  newCutId,
+                                ),
+                              apply: (next) => onPiecesChange(next, next.piece.start),
+                              at: (next) =>
+                                edge === "start" ? next.piece.start : next.piece.end,
+                            })}
+                            className={cn(
+                              "absolute inset-y-0 z-10 flex w-2.5 cursor-ew-resize touch-none items-center justify-center rounded-md outline-none",
+                              "focus-visible:ring-[3px] focus-visible:ring-ring/50",
+                              edge === "start" ? "left-0" : "right-0",
+                            )}
+                          >
+                            <span
+                              aria-hidden="true"
+                              className={cn(
+                                "h-4 w-1 rounded-full transition-colors duration-150",
+                                selected
+                                  ? "bg-foreground"
+                                  : "bg-transparent group-hover:bg-stroke-strong",
+                              )}
+                            />
+                          </div>
+                        );
+                      })}
+                  </div>
                 );
               })}
 
@@ -1697,23 +1876,33 @@ export function TrimBar({
                       event.preventDefault();
                       toggle();
                     }}
-                    className="group absolute inset-y-0 z-10 flex cursor-pointer justify-center rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                    className="absolute -bottom-1.5 z-20 grid size-3.5 cursor-pointer place-items-center rounded-full outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
                     style={{
-                      left: `calc(${centre(piece.start / duration)} - ${INSET + 1}px)`,
-                      width: HANDLE,
+                      left: `calc(${centre(piece.start / duration)} - 8px)`,
                     }}
                   >
-                    <span
-                      aria-hidden="true"
-                      className={cn(
-                        "h-full w-0.5 rounded-full transition-colors duration-150",
-                        selected ? "bg-selected" : "group-hover:bg-stroke-strong",
-                      )}
-                    />
-                    {join?.transition && (
+                    {/* A dot on the join's bottom edge rather than the whole
+                        height of the hairline, so a press higher up reaches
+                        the pieces' own edges and resizes them. At the bottom
+                        rather than the top, since a split leaves the playhead
+                        standing on the join, and its knob is at the top. */}
+                    {join?.transition ? (
                       <BlendIcon
-                        className="absolute top-0.5 size-3 text-muted-foreground"
+                        className={cn(
+                          "size-3.5 rounded-full bg-panel",
+                          selected ? "text-foreground" : "text-muted-foreground",
+                        )}
                         aria-hidden="true"
+                      />
+                    ) : (
+                      <span
+                        aria-hidden="true"
+                        className={cn(
+                          "size-2 rounded-full border transition-colors duration-150",
+                          selected
+                            ? "border-selected bg-selected"
+                            : "border-stroke-strong bg-panel hover:bg-stroke-strong",
+                        )}
                       />
                     )}
                   </div>
@@ -1766,6 +1955,12 @@ export function TrimBar({
                         />
                       )}
                     </div>
+                    {/* In pieces, the pieces' own grips resize either side of
+                        a cut, so the cut's edge marks would be a second handle
+                        on the same pixel. They stay for a cut against the in
+                        or out point, which leaves the clip in one piece. */}
+                    {!split && (
+                    <>
                     {/* Reachable by keyboard only while the cut is selected.
                         Every edge of every instance in the tab order would be
                         a long walk to the controls past them, and a cut's
@@ -1798,18 +1993,51 @@ export function TrimBar({
                         at: (next) => next.end,
                       })}
                     />
+                    </>
+                    )}
                   </div>
                 );
               })}
 
               {/* Brand is spent once on this surface, and this is it: the playhead
                   has to be told apart from the two handles at a glance. */}
+              {/* The playhead can always be picked up, by its knob or its
+                  line, wherever it is and whatever is under it. Before this it
+                  moved only with a press on the lane, and a press on a piece is
+                  the piece's, so with the clip in pieces it could not be moved
+                  at all. The loop positions this box, so React sets nothing. */}
               <div
                 ref={playheadRef}
-                aria-hidden="true"
-                className="absolute inset-y-1.5 left-1 w-0.5 rounded-full bg-brand"
-              />
+                className="pointer-events-none absolute -top-2 bottom-0 left-1 z-30 w-0.5"
+              >
+                <span
+                  aria-hidden="true"
+                  className="absolute inset-x-0 top-2 bottom-1.5 rounded-full bg-brand"
+                />
+                <span
+                  aria-hidden="true"
+                  onPointerDown={scrubFrom}
+                  className="pointer-events-auto absolute top-2 bottom-2 -left-1.5 w-3.5 cursor-ew-resize touch-none"
+                />
+                <span
+                  ref={knobRef}
+                  role="slider"
+                  tabIndex={0}
+                  aria-label="Playhead"
+                  aria-valuemin={0}
+                  aria-valuemax={duration}
+                  aria-valuenow={0}
+                  onPointerDown={scrubFrom}
+                  onKeyDown={nudgePlayhead}
+                  className="pointer-events-auto absolute top-0 left-1/2 size-3 -translate-x-1/2 cursor-ew-resize touch-none rounded-full bg-brand shadow-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                />
+              </div>
 
+              {/* In pieces, the first and last pieces' own edges are the trim,
+                  so there is one set of handles at each end rather than two
+                  stacked on the same pixel. */}
+              {!split && (
+              <>
               <Handle
                 label="Trim start"
                 value={trim.start}
@@ -1826,6 +2054,8 @@ export function TrimBar({
                 onPointerDown={dragHandle("end")}
                 onKeyDown={nudge("end")}
               />
+              </>
+              )}
             </div>
 
             {/* Zoom regions, under the picture's lane and on its axis. A press on
@@ -2192,7 +2422,14 @@ export function TrimBar({
                 an 11px label. At `h-4` the numbers painted outside their own box, so
                 the margin below could not see them and the control under the axis sat
                 against the labels however much it was given. */}
-            <div aria-hidden="true" className="relative mt-1.5 h-5">
+            {/* The ruler scrubs too, the way a timeline's does, so there is
+                always a surface for moving the playhead that nothing else
+                claims. */}
+            <div
+              aria-hidden="true"
+              onPointerDown={scrubFrom}
+              className="relative mt-1.5 h-5 cursor-pointer touch-none"
+            >
               {ticks(duration, laneWidth).map(({ at, major, label }) => (
                 <div
                   key={at}
