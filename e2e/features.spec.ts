@@ -462,6 +462,100 @@ test.describe("pieces", () => {
   });
 });
 
+test.describe("the timeline, by pointer", () => {
+  const lane = (page: Page) => page.locator('[data-lane="video"]').first();
+  const now = (page: Page) =>
+    page.evaluate(() => document.querySelector("video")?.currentTime ?? -1);
+  /** The lane's x for a source time, from its own box. */
+  async function xAt(page: Page, seconds: number) {
+    const box = (await lane(page).boundingBox())!;
+    return { x: box.x + 6 + ((box.width - 12) * seconds) / 6, y: box.y + box.height / 2 };
+  }
+
+  test("the playhead is grabbed and dragged across a clip in pieces", async ({
+    page,
+  }) => {
+    await openEditor(page);
+    await loadClip(page);
+    await seek(page, 3);
+    await page.keyboard.press("s");
+    await seek(page, 1);
+
+    const knob = (await page.getByRole("slider", { name: "Playhead" }).boundingBox())!;
+    const to = await xAt(page, 4.8);
+    await page.mouse.move(knob.x + knob.width / 2, knob.y + knob.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(to.x, knob.y + knob.height / 2, { steps: 10 });
+    await page.mouse.up();
+    await expect.poll(() => now(page)).toBeGreaterThan(4.6);
+    expect(await now(page)).toBeLessThan(5);
+  });
+
+  test("a click on a piece puts the playhead there and selects it", async ({
+    page,
+  }) => {
+    await openEditor(page);
+    await loadClip(page);
+    await seek(page, 3);
+    await page.keyboard.press("s");
+
+    const at = await xAt(page, 1.5);
+    await page.mouse.click(at.x, at.y);
+    await expect.poll(() => now(page)).toBeCloseTo(1.5, 0);
+    await expect(page.getByRole("button", { name: /^Piece, 0\.000/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  test("a piece is dragged without selecting it first", async ({ page }) => {
+    await openEditor(page);
+    await loadClip(page);
+    await seek(page, 2);
+    await page.keyboard.press("s");
+    await seek(page, 3);
+    await page.keyboard.press("s");
+    await pressLane(page, 2.5 / 6);
+    await page.keyboard.press("Delete");
+    // Put the selection away, so the drag below starts on an unselected piece.
+    await page.keyboard.press("Escape");
+
+    const from = await xAt(page, 4.5);
+    const to = await xAt(page, 4);
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(to.x, to.y, { steps: 10 });
+    await page.mouse.up();
+    await expect(page.getByRole("button", { name: /^Piece, 2\.5/ })).toBeVisible();
+  });
+
+  test("a piece's edge is dragged to make it shorter", async ({ page }) => {
+    await openEditor(page);
+    await loadClip(page);
+    await seek(page, 3);
+    await page.keyboard.press("s");
+    await pressLane(page, 1.5 / 6);
+
+    const edge = (await page.getByRole("slider", { name: "Piece end" }).first().boundingBox())!;
+    const to = await xAt(page, 2);
+    await page.mouse.move(edge.x + edge.width / 2, edge.y + edge.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(to.x, edge.y + edge.height / 2, { steps: 10 });
+    await page.mouse.up();
+    // What the edge came in by is now removed.
+    await expect(page.getByRole("button", { name: /^Cut, 2\.0/ })).toBeVisible();
+  });
+
+  test("the ruler scrubs", async ({ page }) => {
+    await openEditor(page);
+    await loadClip(page);
+    const ruler = page.locator('[data-lane="video"]').locator("xpath=../../..").locator("div.h-5.cursor-pointer").first();
+    const box = (await ruler.boundingBox())!;
+    await page.mouse.click(box.x + 6 + (box.width - 12) / 2, box.y + box.height / 2);
+    await expect.poll(() => now(page)).toBeCloseTo(3, 0);
+  });
+});
+
 test.describe("transitions", () => {
   async function cutBlueWith(page: Page, kind: string) {
     await seek(page, 2);

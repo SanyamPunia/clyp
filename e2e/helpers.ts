@@ -142,7 +142,7 @@ export const cutLabels = (page: Page) =>
 
 /** A press on the bare lane, which seeks and puts any selection away. */
 export async function pressLane(page: Page, fraction: number) {
-  const lane = page.locator("div.h-9.cursor-grab").first();
+  const lane = page.locator('[data-lane="video"]').first();
   const box = await lane.boundingBox();
   if (!box) throw new Error("The lane has no box");
   await page.mouse.click(box.x + box.width * fraction, box.y + box.height / 2);

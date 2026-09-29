@@ -78,12 +78,12 @@ test.describe("cuts", () => {
     expect(await keptReadout(page)).toBe("4.000s of 6.000s");
   });
 
-  test("cannot be dragged until nothing is left", async ({ page }) => {
+  test("its sides cannot be dragged until nothing is left", async ({ page }) => {
     await openEditor(page);
     await loadClip(page);
     await addCut(page, 2);
 
-    const lane = page.locator("div.h-9.cursor-grab").first();
+    const lane = page.locator('[data-lane="video"]').first();
     const box = (await lane.boundingBox())!;
     const y = box.y + box.height / 2;
     const dragTo = async (from: number, to: number) => {
@@ -98,9 +98,10 @@ test.describe("cuts", () => {
     await dragTo(2 / CLIP_SECONDS, -0.4);
     await dragTo(3 / CLIP_SECONDS, 1.4);
 
-    // The edge slides to the limit and stops, leaving exactly the minimum.
-    expect(await cutLabels(page)).toEqual(["Cut, 0.000s to 5.800s"]);
-    expect(await keptReadout(page)).toBe("0.200s of 6.000s");
+    // Each side is a piece's own edge now, and a piece stops at the shortest
+    // one, so what is left is the minimum on each side of the cut.
+    expect(await cutLabels(page)).toEqual(["Cut, 0.200s to 5.800s"]);
+    expect(await keptReadout(page)).toBe("0.400s of 6.000s");
   });
 });
 
