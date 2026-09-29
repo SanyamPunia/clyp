@@ -190,53 +190,35 @@ export function roomToMove(
 }
 
 /**
- * Moves one piece along the source by `by` seconds, clamped to the room
- * around it, and returns the edit that results.
+ * The edit a list of pieces stands for, after one of them has changed.
  *
  * The pieces are the edit: the trim is the first piece's start to the last
  * one's end, every gap between two pieces is a cut, and two pieces that touch
- * meet at a split. So moving a piece is moving it in that list and reading the
- * edit back off, which is what lets the first piece move into what the trim
- * had taken off.
+ * meet at a split. So a move or a resize changes the list and the edit is read
+ * back off it, which is what lets the first piece reach into what the trim had
+ * taken off.
  *
- * A join keeps its transition whether it is a gap or a touch after the move,
- * so closing a gap onto a neighbour does not lose it, and neither does opening
+ * A join keeps its transition whether it is a gap or a touch afterwards, so
+ * closing a gap onto a neighbour does not lose it, and neither does opening
  * one. A gap keeps the id of the cut that was in the same place, too.
  */
-export function movePiece(
+function editFrom(
   trim: Trim,
   cuts: readonly Cut[],
   splits: readonly Split[],
-  piece: Piece,
-  by: number,
-  duration: number,
+  list: readonly Piece[],
+  next: readonly Piece[],
   newId: () => string,
-): PieceMove {
-  const list = pieces(trim, cuts, splits);
-  const index = list.findIndex(
-    (p) => Math.abs(p.start - piece.start) < 1e-6 && Math.abs(p.end - piece.end) < 1e-6,
-  );
-  if (index < 0) {
-    return { trim, cuts: [...cuts], splits: tidySplits(trim, cuts, splits), piece };
-  }
-
-  const room = roomToMove(list, index, duration);
-  const shift = Math.min(Math.max(by, -room.back), room.forward);
-  const moved = list.map((p, i) =>
-    i === index ? { start: p.start + shift, end: p.end + shift } : p,
-  );
-
-  // What sat after each piece before the move: the cut, if there was a gap,
-  // and the join's transition either way.
+): PieceEdit {
   const tidy = tidyCuts(cuts, trim);
   const joins = joinsBetween(trim, cuts, splits);
   const cutAfter = list.map((p) => tidy.find((c) => Math.abs(c.start - p.end) < 1e-6));
 
   const nextCuts: Cut[] = [];
   const nextSplits: Split[] = [];
-  for (let i = 0; i < moved.length - 1; i++) {
-    const end = moved[i].end;
-    const start = moved[i + 1].start;
+  for (let i = 0; i < next.length - 1; i++) {
+    const end = next[i].end;
+    const start = next[i + 1].start;
     const transition = joins[i]?.transition;
     if (start - end > 1e-6) {
       const old = cutAfter[i];
@@ -251,6 +233,73 @@ export function movePiece(
     }
   }
 
-  const nextTrim = { start: moved[0].start, end: moved[moved.length - 1].end };
-  return { trim: nextTrim, cuts: nextCuts, splits: nextSplits, piece: moved[index] };
+  return {
+    trim: { start: next[0].start, end: next[next.length - 1].end },
+    cuts: nextCuts,
+    splits: nextSplits,
+  };
+}
+
+const same = (a: Piece, b: Piece) =>
+  Math.abs(a.start - b.start) < 1e-6 && Math.abs(a.end - b.end) < 1e-6;
+
+/**
+ * Moves one piece along the source by `by` seconds, clamped to the room
+ * around it, and returns the edit that results. The piece keeps its length.
+ */
+export function movePiece(
+  trim: Trim,
+  cuts: readonly Cut[],
+  splits: readonly Split[],
+  piece: Piece,
+  by: number,
+  duration: number,
+  newId: () => string,
+): PieceMove {
+  const list = pieces(trim, cuts, splits);
+  const index = list.findIndex((p) => same(p, piece));
+  if (index < 0) {
+    return { trim, cuts: [...cuts], splits: tidySplits(trim, cuts, splits), piece };
+  }
+
+  const room = roomToMove(list, index, duration);
+  const shift = Math.min(Math.max(by, -room.back), room.forward);
+  const next = list.map((p, i) =>
+    i === index ? { start: p.start + shift, end: p.end + shift } : p,
+  );
+  return { ...editFrom(trim, cuts, splits, list, next, newId), piece: next[index] };
+}
+
+/**
+ * Moves one edge of a piece to `to`, the way an editor resizes a clip.
+ *
+ * Shortening it leaves a gap, which is a cut. Lengthening it takes the room
+ * beside it, up to its neighbour or the file's own end, and no further. It
+ * never goes under `MIN_PIECE`, so the piece stays one that can be deleted.
+ */
+export function resizePiece(
+  trim: Trim,
+  cuts: readonly Cut[],
+  splits: readonly Split[],
+  piece: Piece,
+  edge: "start" | "end",
+  to: number,
+  duration: number,
+  newId: () => string,
+): PieceMove {
+  const list = pieces(trim, cuts, splits);
+  const index = list.findIndex((p) => same(p, piece));
+  if (index < 0) {
+    return { trim, cuts: [...cuts], splits: tidySplits(trim, cuts, splits), piece };
+  }
+
+  const lo = index > 0 ? list[index - 1].end : 0;
+  const hi = index < list.length - 1 ? list[index + 1].start : duration;
+  const current = list[index];
+  const resized =
+    edge === "start"
+      ? { start: Math.min(Math.max(to, lo), current.end - MIN_PIECE), end: current.end }
+      : { start: current.start, end: Math.max(Math.min(to, hi), current.start + MIN_PIECE) };
+  const next = list.map((p, i) => (i === index ? resized : p));
+  return { ...editFrom(trim, cuts, splits, list, next, newId), piece: resized };
 }

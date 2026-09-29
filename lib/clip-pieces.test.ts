@@ -8,6 +8,7 @@ import {
   pieceAt,
   pieces,
   removePiece,
+  resizePiece,
   roomToMove,
   splitAt,
   tidySplits,
@@ -172,5 +173,40 @@ describe("movePiece", () => {
     const list = pieces(trim, cuts, []);
     expect(roomToMove(list, 0, 6)).toEqual({ back: 0, forward: 1 });
     expect(roomToMove(list, 1, 6)).toEqual({ back: 1, forward: 0 });
+  });
+});
+
+describe("resizePiece", () => {
+  const id = () => "new";
+
+  it("shortens a piece from its end and leaves a gap", () => {
+    const next = resizePiece(trim, [], [{ at: 3 }], { start: 0, end: 3 }, "end", 2, 6, id);
+    expect(next.cuts).toEqual([{ id: "new", start: 2, end: 3 }]);
+    expect(next.piece).toEqual({ start: 0, end: 2 });
+  });
+
+  it("lengthens a piece into the room beside it and stops at the neighbour", () => {
+    const cuts = [{ id: "gap", start: 2, end: 3 }];
+    const next = resizePiece(trim, cuts, [], { start: 0, end: 2 }, "end", 9, 6, id);
+    expect(next.piece).toEqual({ start: 0, end: 3 });
+    expect(next.cuts).toEqual([]);
+    expect(next.splits).toEqual([{ at: 3 }]);
+  });
+
+  it("moves the trim when the first piece's start moves", () => {
+    const trimmed = { start: 1, end: 6 };
+    const next = resizePiece(trimmed, [], [{ at: 3 }], { start: 1, end: 3 }, "start", 0, 6, id);
+    expect(next.trim).toEqual({ start: 0, end: 6 });
+  });
+
+  it("never goes under the shortest piece", () => {
+    const next = resizePiece(trim, [], [{ at: 3 }], { start: 0, end: 3 }, "end", 0, 6, id);
+    expect(next.piece.end - next.piece.start).toBeCloseTo(MIN_PIECE, 10);
+  });
+
+  it("keeps a join's transition when a resize opens a gap there", () => {
+    const dip = { kind: "black" as const, duration: 0.5 };
+    const next = resizePiece(trim, [], [{ at: 3, transition: dip }], { start: 3, end: 6 }, "start", 4, 6, id);
+    expect(next.cuts).toEqual([{ id: "new", start: 3, end: 4, transition: dip }]);
   });
 });
