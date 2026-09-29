@@ -32,6 +32,7 @@ import {
   ZoomInIcon,
 } from "lucide-react";
 
+import { TransitionPreview } from "@/components/transition-preview";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -3082,13 +3083,35 @@ function TransitionPicker({
           <BlendIcon className="size-3.5 text-muted-foreground" aria-hidden="true" />
           <SelectValue />
         </SelectTrigger>
+        {/* Each choice shows what it looks like on hover or keyboard focus,
+            beside the menu, so a transition can be judged before it is picked
+            rather than after an export. */}
         <SelectContent>
-          <SelectItem value={NO_TRANSITION}>Straight cut</SelectItem>
-          {transitionKinds.map((kind) => (
-            <SelectItem key={kind.value} value={kind.value}>
-              {kind.label}
-            </SelectItem>
-          ))}
+          {[{ value: NO_TRANSITION, label: "Straight cut" }, ...transitionKinds].map(
+            (kind) => (
+              <Tooltip key={kind.value} delayDuration={0}>
+                <TooltipTrigger asChild>
+                  <SelectItem value={kind.value}>{kind.label}</SelectItem>
+                </TooltipTrigger>
+                {/* The menu's own surface rather than the tooltip's light
+                    fill, so the preview reads as part of the menu it
+                    describes. */}
+                <TooltipContent
+                  side="right"
+                  sideOffset={10}
+                  className="border border-stroke bg-popover px-2 py-1.5 text-popover-foreground shadow-md"
+                >
+                  <TransitionPreview
+                    kind={
+                      kind.value === NO_TRANSITION
+                        ? "none"
+                        : (kind.value as TransitionKind)
+                    }
+                  />
+                </TooltipContent>
+              </Tooltip>
+            ),
+          )}
         </SelectContent>
       </Select>
       {value && (
