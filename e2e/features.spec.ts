@@ -72,6 +72,39 @@ async function pixel(page: Page, bytes: Buffer, fx: number, fy: number) {
   );
 }
 
+/**
+ * The spread of an exported PNG's luminance over a box in its top padding,
+ * above the picture, which is where only the background paints.
+ */
+async function paddingSpread(page: Page, bytes: Buffer) {
+  return page.evaluate(
+    async ({ data }) => {
+      const bitmap = await createImageBitmap(
+        new Blob([new Uint8Array(data)], { type: "image/png" }),
+      );
+      const canvas = document.createElement("canvas");
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      const ctx = canvas.getContext("2d")!;
+      ctx.drawImage(bitmap, 0, 0);
+      const w = Math.floor(bitmap.width * 0.4);
+      const px = ctx.getImageData(Math.floor(bitmap.width * 0.3), 16, w, 24).data;
+      let min = 255;
+      let max = 0;
+      const sum = [0, 0, 0];
+      for (let i = 0; i < px.length; i += 4) {
+        const l = 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2];
+        min = Math.min(min, l);
+        max = Math.max(max, l);
+        for (let c = 0; c < 3; c++) sum[c] += px[i + c];
+      }
+      const n = px.length / 4;
+      return { spread: max - min, mean: sum.map((v) => Math.round(v / n)) };
+    },
+    { data: [...bytes] },
+  );
+}
+
 /** Where a point of the picture sits in the frame, as fractions of the frame. */
 async function inFrame(page: Page, fx: number, fy: number) {
   return page.evaluate(
@@ -745,6 +778,34 @@ test.describe("the rest of the frame", () => {
     await amount.press("ArrowLeft");
     await page.getByRole("button", { name: "Solar Wave" }).click();
     await expect(page.getByText("65%")).toBeVisible();
+  });
+
+  test("a generated background reaches the file as the canvas shows it", async ({
+    page,
+  }) => {
+    // Paper, halftone and fluted presets are SVG images inside the frame,
+    // and a paper's surface is a filter inside that image. The raster has to
+    // carry all three, or the export is a flat colour under a textured
+    // preview.
+    await openEditor(page);
+    await loadImage(page);
+
+    await page.getByRole("button", { name: "Kraft" }).click();
+    const paper = await paddingSpread(page, await exportFile(page));
+    // The sheet's colour, with tooth over it rather than a flat fill.
+    expect(paper.mean[0]).toBeGreaterThan(paper.mean[2]);
+    expect(paper.spread).toBeGreaterThan(8);
+
+    await page.getByRole("button", { name: "Pop Dot" }).click();
+    const dots = await paddingSpread(page, await exportFile(page));
+    // Ink and bare paper side by side.
+    expect(dots.spread).toBeGreaterThan(100);
+
+    await page.getByRole("button", { name: "Cathedral" }).click();
+    const columns = await paddingSpread(page, await exportFile(page));
+    // The arch peaks at the top of the middle columns, which is red against
+    // lavender either side of it.
+    expect(columns.mean[0]).toBeGreaterThan(columns.mean[1] + 20);
   });
 
   test("matching the picture takes its colour", async ({ page }) => {

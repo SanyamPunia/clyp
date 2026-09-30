@@ -11,6 +11,7 @@ import {
   gradientPresets,
   gradientToCss,
   resolveGradientCss,
+  type GradientPreset,
   solidToCss,
   supportsAngle,
 } from "@/lib/gradients";
@@ -24,6 +25,40 @@ const selection = (over: Partial<Parameters<typeof resolveGradientCss>[0]> = {})
   solidColor: DEFAULT_SOLID_COLOR,
   ...over,
 });
+
+/** Every colour a preset names, whatever its kind. */
+function coloursOf(preset: GradientPreset): string[] {
+  switch (preset.kind) {
+    case "linear":
+      return preset.stops.map((s) => s.color);
+    case "mesh":
+      return [preset.base, ...preset.layers.map((l) => l.color)];
+    case "scene":
+      return [
+        ...preset.base.map((s) => s.color),
+        ...preset.layers.flatMap((l) =>
+          l.shape === "band"
+            ? // A band is a layer over the base, so it may leave parts of
+              // itself clear. Only its colours are checked.
+              l.stops.map((s) => s.color).filter((c) => c !== "transparent")
+            : [l.color],
+        ),
+      ];
+    case "paper":
+      // The parts over the sheet are drawn at their own opacity, which the
+      // solid sheet under them keeps from ever showing through.
+      return [
+        preset.color,
+        ...[preset.mottle, preset.fibres, preset.speckles, preset.stains, preset.lines]
+          .filter((part) => part !== undefined)
+          .map((part) => part.color),
+      ];
+    case "halftone":
+      return [preset.paper, preset.ink, ...(preset.plates ?? [])];
+    case "fluted":
+      return preset.colors;
+  }
+}
 
 describe("the registry", () => {
   it("gives every family a whole number of picker rows", () => {
@@ -74,21 +109,7 @@ describe("the registry", () => {
     // Every generated layer must be fully opaque: GradientBackground keeps the
     // previous gradient painted underneath during the fade.
     for (const preset of gradientPresets) {
-      const colours =
-        preset.kind === "linear"
-          ? preset.stops.map((s) => s.color)
-          : preset.kind === "mesh"
-            ? [preset.base, ...preset.layers.map((l) => l.color)]
-            : [
-                ...preset.base.map((s) => s.color),
-                ...preset.layers.flatMap((l) =>
-                  l.shape === "band"
-                    ? // A band is a layer over the base, so it may leave
-                      // parts of itself clear. Only its colours are checked.
-                      l.stops.map((s) => s.color).filter((c) => c !== "transparent")
-                    : [l.color],
-                ),
-              ];
+      const colours = coloursOf(preset);
       for (const colour of colours) {
         expect(colour, `${preset.id}: ${colour}`).toMatch(/^#[0-9a-f]{6}$/i);
       }
@@ -210,6 +231,23 @@ describe("gradientToCss", () => {
       css.lastIndexOf("linear-gradient"),
     );
     expect(css).toContain(mesh.base);
+  });
+
+  it("paints a generated preset over a solid layer of its own ground", () => {
+    // The SVG may take a moment to decode, and the ground under it is what
+    // keeps the layer opaque meanwhile.
+    for (const preset of gradientPresets) {
+      if (preset.kind !== "paper" && preset.kind !== "halftone" && preset.kind !== "fluted") continue;
+      const ground =
+        preset.kind === "paper"
+          ? preset.color
+          : preset.kind === "halftone"
+            ? preset.paper
+            : preset.colors[0];
+      const css = gradientToCss(preset);
+      expect(css.startsWith('url("data:image/svg+xml,'), preset.id).toBe(true);
+      expect(css.endsWith(`linear-gradient(0deg, ${ground} 0%, ${ground} 100%)`), preset.id).toBe(true);
+    }
   });
 
   it("produces a value for every preset in the registry", () => {

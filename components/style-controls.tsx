@@ -286,9 +286,15 @@ export function StyleControls({
                 ? "A flat colour does not use an angle."
                 : options.background === "none"
                   ? "There is nothing behind the artwork to angle."
-                  : activePreset.kind === "scene"
-                    ? "This scene does not turn with an angle."
-                    : "Mesh gradients do not use an angle."}
+                  : activePreset.kind === "mesh"
+                    ? "Mesh gradients do not use an angle."
+                    : activePreset.kind === "paper"
+                      ? "A sheet of paper does not turn with an angle."
+                      : activePreset.kind === "halftone"
+                        ? "A halftone screen keeps its own angle."
+                        : activePreset.kind === "fluted"
+                          ? "Fluted glass stays upright."
+                          : "This scene does not turn with an angle."}
             </p>
           )}
 

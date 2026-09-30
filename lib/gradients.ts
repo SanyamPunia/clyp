@@ -9,12 +9,21 @@
  * angle control can re-render them at any direction. Mesh presets are layered
  * radial gradients over a base color and ignore the angle.
  *
+ * Paper, halftone and fluted presets are pictures a gradient cannot draw: a
+ * lit surface, dots and columns. They they are generated as SVG from their parameters. They still
+ * arrive as a `background-image`, through `svgBackground`, so nothing
+ * downstream knows they are not gradients.
+ *
  * A background is not always a gradient. A flat colour and no colour at all are
  * the two other things a post needs, and both go through the same
  * `background-image` the gradients do: a solid is written as a one-colour
  * gradient rather than as a `background-color`, so the cross-fade, the grain
  * layer and the export need to know nothing about which kind is showing.
  */
+
+import { flutedToCss, type FlutedGlass } from "@/lib/fluted";
+import { halftoneToCss, type HalftoneScreen } from "@/lib/halftone";
+import { paperToCss, type PaperStock } from "@/lib/paper";
 
 export type GradientFamily =
   | "atmosphere"
@@ -24,7 +33,10 @@ export type GradientFamily =
   | "defocus"
   | "glow"
   | "horizon"
-  | "spectral";
+  | "spectral"
+  | "paper"
+  | "halftone"
+  | "fluted";
 
 interface Stop {
   color: string;
@@ -118,7 +130,34 @@ interface SceneGradient {
   layers: SceneLayer[];
 }
 
-export type GradientPreset = LinearGradient | MeshGradient | SceneGradient;
+interface HalftonePreset extends HalftoneScreen {
+  kind: "halftone";
+  id: string;
+  label: string;
+  family: GradientFamily;
+}
+
+interface PaperPreset extends PaperStock {
+  kind: "paper";
+  id: string;
+  label: string;
+  family: GradientFamily;
+}
+
+interface FlutedPreset extends FlutedGlass {
+  kind: "fluted";
+  id: string;
+  label: string;
+  family: GradientFamily;
+}
+
+export type GradientPreset =
+  | LinearGradient
+  | MeshGradient
+  | SceneGradient
+  | PaperPreset
+  | HalftonePreset
+  | FlutedPreset;
 
 /**
  * A family holds a multiple of eight presets, so the picker lays out as even
@@ -3603,6 +3642,61 @@ export const gradientPresets: GradientPreset[] = [
     ],
     layers: [],
   },
+  // Paper stocks, drawn against photographs of sheets under raking light.
+  // The first six are those sheets.
+  { kind: "paper", id: "paper-cotton-rag", label: "Cotton Rag", family: "paper", color: "#d9d9d7", tooth: { size: 3, depth: 0.5 }, mottle: { color: "#c6c6c4", size: 220, amount: 0.5 }, seed: 2 },
+  { kind: "paper", id: "paper-kraft", label: "Kraft", family: "paper", color: "#cfc2a8", tooth: { size: 2.5, depth: 0.7 }, crumple: { size: 280, depth: 0.8 }, mottle: { color: "#bcae92", size: 90, amount: 0.35 }, seed: 4 },
+  { kind: "paper", id: "paper-cold-press", label: "Cold Press", family: "paper", color: "#ececea", tooth: { size: 4, depth: 0.45 }, folds: { x: [], y: [0.86], depth: 2 }, seed: 6 },
+  { kind: "paper", id: "paper-canvas", label: "Canvas", family: "paper", color: "#ece8de", weave: { size: 7, depth: 1, angle: -35 }, tooth: { size: 2.5, depth: 0.25 }, crumple: { size: 300, depth: 0.4 }, seed: 8 },
+  { kind: "paper", id: "paper-quarter-fold", label: "Quarter Fold", family: "paper", color: "#eeeeec", tooth: { size: 4, depth: 0.8 }, folds: { x: [0.5], y: [0.45], depth: 1 }, seed: 10 },
+  { kind: "paper", id: "paper-folded-letter", label: "Folded Letter", family: "paper", color: "#e9e9e7", tooth: { size: 3, depth: 0.25 }, crumple: { size: 110, depth: 0.3 }, folds: { x: [0.2, 0.78], y: [0.17, 0.74], depth: 1.4 }, speckles: { color: "#6a6a6a", count: 60, opacity: 0.5 }, stains: { color: "#9a9a98", count: 14, opacity: 0.35 }, seed: 12 },
+  { kind: "paper", id: "paper-newsstock", label: "Newsstock", family: "paper", color: "#e6e0d0", tooth: { size: 2, depth: 0.3 }, fibres: { color: "#8a8272", count: 900, opacity: 0.35 }, speckles: { color: "#5a5448", count: 160, opacity: 0.4 }, mottle: { color: "#dcd4c0", size: 120, amount: 0.4 }, seed: 14 },
+  { kind: "paper", id: "paper-graph", label: "Graph Paper", family: "paper", color: "#f6f6f2", tooth: { size: 3, depth: 0.3 }, lines: { kind: "grid", color: "#5a8ad0", spacing: 20, opacity: 0.35 }, seed: 16 },
+  { kind: "paper", id: "paper-ruled", label: "Ruled", family: "paper", color: "#fbfaf5", tooth: { size: 3, depth: 0.25 }, lines: { kind: "ruled", color: "#6a94d4", spacing: 40, opacity: 0.6 }, seed: 18 },
+  { kind: "paper", id: "paper-laid", label: "Laid", family: "paper", color: "#f0e8d6", tooth: { size: 2.5, depth: 0.3 }, lines: { kind: "laid", color: "#c8b898", spacing: 3, opacity: 0.25 }, mottle: { color: "#e6dcc4", size: 160, amount: 0.4 }, seed: 20 },
+  { kind: "paper", id: "paper-rice", label: "Rice Paper", family: "paper", color: "#f4f0e6", fibres: { color: "#c8bca4", count: 2400, opacity: 0.5 }, mottle: { color: "#e8e0cc", size: 100, amount: 0.3 }, tooth: { size: 2, depth: 0.2 }, seed: 22 },
+  { kind: "paper", id: "paper-recycled", label: "Recycled", family: "paper", color: "#d8d0c0", tooth: { size: 2.5, depth: 0.5 }, speckles: { color: "#4a4438", count: 700, opacity: 0.55 }, fibres: { color: "#7a7060", count: 500, opacity: 0.35 }, mottle: { color: "#ccc2ae", size: 80, amount: 0.4 }, seed: 24 },
+  { kind: "paper", id: "paper-parchment", label: "Parchment", family: "paper", color: "#ead9b4", mottle: { color: "#cfb47c", size: 220, amount: 0.5 }, crumple: { size: 240, depth: 0.5 }, stains: { color: "#a88a50", count: 10, opacity: 0.3 }, tooth: { size: 3, depth: 0.3 }, seed: 26 },
+  { kind: "paper", id: "paper-black-card", label: "Black Card", family: "paper", color: "#1b1b1d", tooth: { size: 3, depth: 0.9 }, mottle: { color: "#232326", size: 200, amount: 0.5 }, seed: 28 },
+  { kind: "paper", id: "paper-blue-card", label: "Blue Card", family: "paper", color: "#3b5b8c", tooth: { size: 3, depth: 0.6 }, crumple: { size: 260, depth: 0.3 }, seed: 30 },
+  { kind: "paper", id: "paper-vellum", label: "Vellum", family: "paper", color: "#e8eaec", crumple: { size: 180, depth: 0.45 }, mottle: { color: "#dde0e4", size: 140, amount: 0.5 }, tooth: { size: 2, depth: 0.15 }, seed: 32 },
+  // Halftone screens on paper, drawn against scans of printed screens. The
+  // first row is the references in their own inks, the second the same
+  // screens in colour.
+  { kind: "halftone", id: "halftone-umbra", label: "Umbra", family: "halftone", paper: "#f3efe9", ink: "#3b3340", field: { shape: "radial", x: 66, y: 57, r: 72 }, from: 0.92, to: 0, cells: 92, jitter: 0.12, ring: 0.38, plates: ["#e0869c", "#7fbfd8"], seed: 3 },
+  { kind: "halftone", id: "halftone-drift", label: "Drift", family: "halftone", paper: "#f3efe9", ink: "#4a4846", field: { shape: "linear", angle: 90 }, from: 0.75, to: 0, ramp: [0.05, 0.8], cells: 110, jitter: 0.3, ring: 0.35, seed: 5 },
+  { kind: "halftone", id: "halftone-stipple", label: "Stipple", family: "halftone", paper: "#f3efe9", ink: "#625d58", field: { shape: "radial", x: 54, y: 40, r: 72 }, from: 0.5, to: 0, cells: 130, jitter: 0.45, seed: 7 },
+  { kind: "halftone", id: "halftone-riso", label: "Riso", family: "halftone", paper: "#f3efe9", ink: "#3a3238", field: { shape: "linear", angle: 90 }, from: 0, to: 0.95, ramp: [0.25, 0.75], cells: 58, jitter: 0.15, ring: 0.4, plates: ["#ec8fa8", "#8cc8e0", "#f0dc8c"], seed: 11 },
+  { kind: "halftone", id: "halftone-overcast", label: "Overcast", family: "halftone", paper: "#fbfbfa", ink: "#2e2e32", field: { shape: "noise", scale: 3.5 }, from: 0.05, to: 0.75, ramp: [0.15, 1], cells: 150, jitter: 0.3, seed: 13 },
+  { kind: "halftone", id: "halftone-clearing", label: "Clearing", family: "halftone", paper: "#f3efe9", ink: "#1e1a1a", field: { shape: "radial", x: 30, y: 30, r: 100 }, from: 0, to: 0.7, ramp: [0.28, 1], cells: 72, screen: 18, ring: 0.45, seed: 17 },
+  { kind: "halftone", id: "halftone-newsprint", label: "Newsprint", family: "halftone", paper: "#ffffff", ink: "#111111", field: { shape: "linear", angle: 200 }, from: 0, to: 0.8, cells: 150, grid: "square", screen: 15, seed: 19 },
+  { kind: "halftone", id: "halftone-pop", label: "Pop Dot", family: "halftone", paper: "#f3efe9", ink: "#1d1a1a", field: { shape: "radial", x: 22, y: 64, r: 105 }, from: 0, to: 0.85, ramp: [0.12, 1], cells: 40, seed: 23 },
+  { kind: "halftone", id: "halftone-cobalt", label: "Cobalt Screen", family: "halftone", paper: "#f1ede4", ink: "#1f47b0", field: { shape: "radial", x: 70, y: 30, r: 90 }, from: 0.85, to: 0, ramp: [0, 0.9], cells: 70, screen: 30, seed: 29 },
+  { kind: "halftone", id: "halftone-riso-pink", label: "Riso Pink", family: "halftone", paper: "#f4efe6", ink: "#e5487f", field: { shape: "linear", angle: 160 }, from: 0, to: 0.9, ramp: [0.1, 0.95], cells: 64, jitter: 0.1, plates: ["#3f7fd0"], seed: 31 },
+  { kind: "halftone", id: "halftone-moss", label: "Moss Stipple", family: "halftone", paper: "#eef0e6", ink: "#2f5a3c", field: { shape: "noise", scale: 3 }, from: 0, to: 0.8, ramp: [0.2, 0.95], cells: 120, jitter: 0.35, seed: 37 },
+  { kind: "halftone", id: "halftone-night", label: "Night Screen", family: "halftone", paper: "#141417", ink: "#e6e0d6", field: { shape: "radial", x: 75, y: 25, r: 95 }, from: 0.7, to: 0, ramp: [0, 0.9], cells: 64, screen: 12, seed: 41 },
+  { kind: "halftone", id: "halftone-sepia", label: "Sepia", family: "halftone", paper: "#f0e6d4", ink: "#6b4428", field: { shape: "linear", angle: 135 }, from: 0.85, to: 0, ramp: [0.05, 0.9], cells: 100, screen: 45, grid: "square", seed: 43 },
+  { kind: "halftone", id: "halftone-vermilion", label: "Vermilion", family: "halftone", paper: "#f5f0e8", ink: "#d8392b", field: { shape: "radial", x: 78, y: 78, r: 100 }, from: 0.9, to: 0, ramp: [0, 0.85], cells: 36, seed: 47 },
+  { kind: "halftone", id: "halftone-blueprint", label: "Blueprint", family: "halftone", paper: "#1c3f94", ink: "#e9eef8", field: { shape: "linear", angle: 0 }, from: 0.55, to: 0, ramp: [0, 0.8], cells: 72, grid: "square", screen: 45, seed: 53 },
+  { kind: "halftone", id: "halftone-duotone", label: "Duotone", family: "halftone", paper: "#f7efe2", ink: "#1f2a55", field: { shape: "linear", angle: 45 }, from: 0.05, to: 0.8, ramp: [0.1, 0.9], cells: 46, plates: ["#f08a3c"], seed: 59 },
+  // Fluted glass, drawn against a print of reeded glass over red light. The
+  // first is that print.
+  { kind: "fluted", id: "fluted-cathedral", label: "Cathedral", family: "fluted", colors: ["#dcdcf8", "#f8b8dc", "#ffa08a", "#ff0033"], columns: 19, curve: "arch", high: 0.06, low: 1.1, fall: 0.6, hold: 0.25 },
+  { kind: "fluted", id: "fluted-undertow", label: "Undertow", family: "fluted", colors: ["#e4ecff", "#a8c4ff", "#5a78ff", "#2a1aff"], columns: 17, curve: "valley", high: 0.12, low: 0.9, fall: 0.6, hold: 0.15 },
+  { kind: "fluted", id: "fluted-marmalade", label: "Marmalade", family: "fluted", colors: ["#fff4d6", "#ffd27a", "#ff8a3c", "#e0341a"], columns: 24, curve: "wave", high: 0.15, low: 0.75, fall: 0.55, hold: 0.1, waves: 1.5 },
+  { kind: "fluted", id: "fluted-kelp", label: "Kelp", family: "fluted", colors: ["#e8fff4", "#9ff0d0", "#2cc8a0", "#006a6a"], columns: 16, curve: "slope", high: 0.05, low: 0.95, fall: 0.6, hold: 0.1 },
+  { kind: "fluted", id: "fluted-neon-arch", label: "Neon Arch", family: "fluted", colors: ["#0a0a14", "#2a1a5a", "#8a3ad0", "#ff6ad8"], columns: 21, curve: "arch", high: 0.3, low: 1.1, fall: 0.5, hold: 0.08 },
+  { kind: "fluted", id: "fluted-limeade", label: "Limeade", family: "fluted", colors: ["#fffbe0", "#f8f070", "#b8e040", "#28a048"], columns: 14, curve: "arch", high: 0.1, low: 1, fall: 0.6, hold: 0.2 },
+  { kind: "fluted", id: "fluted-silverpoint", label: "Silverpoint", family: "fluted", colors: ["#f4f4f4", "#c8c8cc", "#6a6a72", "#141418"], columns: 18, curve: "valley", high: 0.2, low: 0.95, fall: 0.6, hold: 0.1 },
+  { kind: "fluted", id: "fluted-furnace", label: "Furnace", family: "fluted", colors: ["#140806", "#6a1a0a", "#e0501a", "#ffc070"], columns: 20, curve: "wave", high: 0.25, low: 0.85, fall: 0.5, hold: 0.05 },
+  { kind: "fluted", id: "fluted-bubblegum", label: "Bubblegum", family: "fluted", colors: ["#fdf0ff", "#ffc2ea", "#ff7ac4", "#c01888"], columns: 17, curve: "valley", high: 0.1, low: 0.85, fall: 0.6, hold: 0.15 },
+  { kind: "fluted", id: "fluted-tidewater", label: "Tidewater", family: "fluted", colors: ["#eafcff", "#a0e8f8", "#30b8e0", "#0a4a90"], columns: 28, curve: "wave", high: 0.15, low: 0.8, fall: 0.55, hold: 0.08, waves: 2 },
+  { kind: "fluted", id: "fluted-heatwave", label: "Heatwave", family: "fluted", colors: ["#2a0a3a", "#a01a6a", "#ff5a3a", "#ffd06a"], columns: 16, curve: "slope", high: 1, low: 0.1, fall: 0.6, hold: 0.12 },
+  { kind: "fluted", id: "fluted-frosted", label: "Frosted", family: "fluted", colors: ["#f8f8ff", "#e0e4f8", "#b0b8e8", "#7a84d0"], columns: 22, curve: "arch", high: 0.1, low: 1, fall: 0.7, hold: 0.2 },
+  { kind: "fluted", id: "fluted-absinthe", label: "Absinthe", family: "fluted", colors: ["#0a140a", "#1a4a1a", "#40c040", "#d0ff70"], columns: 18, curve: "valley", high: 0.25, low: 0.95, fall: 0.5, hold: 0.06 },
+  { kind: "fluted", id: "fluted-peony", label: "Peony", family: "fluted", colors: ["#fff0f0", "#ffc8c0", "#ff8a90", "#e03a5a"], columns: 15, curve: "arch", high: 0.35, low: 1.2, fall: 0.5, hold: 0.3 },
+  { kind: "fluted", id: "fluted-aurora-reed", label: "Aurora Reed", family: "fluted", colors: ["#060a1a", "#0a3a5a", "#10a0a0", "#80ffc0"], columns: 26, curve: "wave", high: 0.2, low: 0.9, fall: 0.5, hold: 0.06, waves: 1.25 },
+  { kind: "fluted", id: "fluted-terracotta", label: "Terracotta", family: "fluted", colors: ["#f6ece2", "#e8c0a0", "#c87850", "#8a3a20"], columns: 16, curve: "arch", high: 0.12, low: 1.05, fall: 0.6, hold: 0.18 },
 ];
 
 /**
@@ -3625,6 +3719,9 @@ export const gradientFamilies: {
   { id: "glow", label: "Glow", grain: 40 },
   { id: "horizon", label: "Horizon", grain: 30 },
   { id: "spectral", label: "Spectral", grain: 55 },
+  { id: "paper", label: "Paper" },
+  { id: "halftone", label: "Halftone" },
+  { id: "fluted", label: "Fluted" },
 ];
 
 export const defaultGradientId = "golden-hour";
@@ -3675,6 +3772,10 @@ export function supportsAngle(preset: GradientPreset): boolean {
  * default direction and is ignored by mesh presets.
  */
 export function gradientToCss(preset: GradientPreset, angle?: number): string {
+  if (preset.kind === "paper") return paperToCss(preset);
+  if (preset.kind === "halftone") return halftoneToCss(preset);
+  if (preset.kind === "fluted") return flutedToCss(preset);
+
   if (preset.kind === "scene") {
     const stops = (list: Stop[]) =>
       list.map((stop) => `${stop.color} ${stop.at}%`).join(", ");
