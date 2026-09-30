@@ -48,6 +48,22 @@ describe("templates", () => {
     expect(outputFor(getTemplate("li-landscape")!)).toEqual({ width: 1200, height: 628 });
     expect(outputFor(getTemplate("web-og")!)).toEqual({ width: 1200, height: 630 });
   });
+
+  it("matches the sizes checked on 2026-09-30", () => {
+    expect(outputFor(getTemplate("x-header")!)).toEqual({ width: 1500, height: 500 });
+    expect(outputFor(getTemplate("li-banner")!)).toEqual({ width: 1584, height: 396 });
+    expect(outputFor(getTemplate("gh-social")!)).toEqual({ width: 1280, height: 640 });
+    expect(outputFor(getTemplate("as-iphone")!)).toEqual({ width: 1320, height: 2868 });
+    expect(outputFor(getTemplate("gp-feature")!)).toEqual({ width: 1024, height: 500 });
+    expect(outputFor(getTemplate("cws-marquee")!)).toEqual({ width: 1400, height: 560 });
+  });
+
+  it("keeps a YouTube banner's safe zone to the middle every device shows", () => {
+    const banner = getTemplate("yt-banner")!;
+    const safe = banner.safe!;
+    expect(banner.width - safe.left - safe.right).toBe(1546);
+    expect(banner.height - safe.top - safe.bottom).toBe(423);
+  });
 });
 
 describe("slides", () => {

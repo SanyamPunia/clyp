@@ -35,6 +35,10 @@ export type Platform =
   | "threads"
   | "bluesky"
   | "pinterest"
+  | "github"
+  | "appstore"
+  | "googleplay"
+  | "chromewebstore"
   | "web";
 
 /** Pixels the platform's own interface covers, at the template's size. */
@@ -69,6 +73,10 @@ export const platforms: { id: Platform; label: string }[] = [
   { id: "threads", label: "Threads" },
   { id: "bluesky", label: "Bluesky" },
   { id: "pinterest", label: "Pinterest" },
+  { id: "github", label: "GitHub" },
+  { id: "appstore", label: "App Store" },
+  { id: "googleplay", label: "Google Play" },
+  { id: "chromewebstore", label: "Chrome Web Store" },
   { id: "web", label: "Web" },
 ];
 
@@ -86,9 +94,11 @@ export const templates: Template[] = [
   { id: "ig-reel", platform: "instagram", label: "Reel", width: 1080, height: 1920, safe: META_REEL },
   { id: "x-post", platform: "x", label: "Post image", width: 1600, height: 900, maxSeconds: 140 },
   { id: "x-square", platform: "x", label: "Square post", width: 1080, height: 1080, maxSeconds: 140 },
+  { id: "x-header", platform: "x", label: "Header", width: 1500, height: 500 },
   { id: "li-landscape", platform: "linkedin", label: "Landscape post", width: 1200, height: 628 },
   { id: "li-square", platform: "linkedin", label: "Square post", width: 1080, height: 1080 },
   { id: "li-portrait", platform: "linkedin", label: "Portrait post", width: 1080, height: 1350 },
+  { id: "li-banner", platform: "linkedin", label: "Profile banner", width: 1584, height: 396 },
   { id: "fb-portrait", platform: "facebook", label: "Feed post", width: 1080, height: 1350 },
   { id: "fb-story", platform: "facebook", label: "Story", width: 1080, height: 1920, safe: META_STORY },
   { id: "tt-video", platform: "tiktok", label: "Video", width: 1080, height: 1920, safe: { top: 130, bottom: 484, left: 44, right: 140 } },
@@ -96,11 +106,20 @@ export const templates: Template[] = [
   // 1280x720 rather than the 3840x2160 YouTube now recommends: a screenshot
   // enlarged three times over is soft, and 1280 is what most thumbnails are.
   { id: "yt-thumb", platform: "youtube", label: "Thumbnail", width: 1280, height: 720 },
+  { id: "yt-banner", platform: "youtube", label: "Channel banner", width: 2560, height: 1440, safe: { top: 508, bottom: 509, left: 507, right: 507 } },
   { id: "th-post", platform: "threads", label: "Post", width: 1080, height: 1350 },
   { id: "bs-square", platform: "bluesky", label: "Square post", width: 1000, height: 1000 },
   // 1200x675 in the guides, a pixel taller here for the same H.264 reason.
   { id: "bs-landscape", platform: "bluesky", label: "Landscape post", width: 1200, height: 676 },
   { id: "pin-standard", platform: "pinterest", label: "Pin", width: 1000, height: 1500 },
+  { id: "gh-social", platform: "github", label: "Social preview", width: 1280, height: 640 },
+  { id: "as-iphone", platform: "appstore", label: "iPhone screenshot", width: 1320, height: 2868 },
+  { id: "as-ipad", platform: "appstore", label: "iPad screenshot", width: 2064, height: 2752 },
+  { id: "gp-feature", platform: "googleplay", label: "Feature graphic", width: 1024, height: 500 },
+  { id: "gp-phone", platform: "googleplay", label: "Phone screenshot", width: 1080, height: 1920 },
+  { id: "cws-screenshot", platform: "chromewebstore", label: "Screenshot", width: 1280, height: 800 },
+  { id: "cws-marquee", platform: "chromewebstore", label: "Marquee tile", width: 1400, height: 560 },
+  { id: "cws-small", platform: "chromewebstore", label: "Small tile", width: 440, height: 280 },
   { id: "web-og", platform: "web", label: "Link preview", width: 1200, height: 630 },
   { id: "web-dribbble", platform: "web", label: "Dribbble shot", width: 1600, height: 1200 },
   { id: "web-producthunt", platform: "web", label: "Product Hunt gallery", width: 1270, height: 760 },
