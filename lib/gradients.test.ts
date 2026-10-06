@@ -56,6 +56,8 @@ function coloursOf(preset: GradientPreset): string[] {
     case "halftone":
       return [preset.paper, preset.ink, ...(preset.plates ?? [])];
     case "fluted":
+    case "flow":
+    case "warp":
       return preset.colors;
   }
 }
@@ -247,6 +249,17 @@ describe("gradientToCss", () => {
       const css = gradientToCss(preset);
       expect(css.startsWith('url("data:image/svg+xml,'), preset.id).toBe(true);
       expect(css.endsWith(`linear-gradient(0deg, ${ground} 0%, ${ground} 100%)`), preset.id).toBe(true);
+    }
+  });
+
+  it("stands a moving preset in with an opaque still, ending on a solid", () => {
+    // The shader paints over it, but it is what shows before WebGL has drawn
+    // and where it cannot, so it is held to the same rule as every layer.
+    for (const preset of gradientPresets) {
+      if (preset.kind !== "flow" && preset.kind !== "warp") continue;
+      expect(gradientToCss(preset), preset.id).toMatch(
+        /linear-gradient\(0deg, (#[0-9a-f]{6}) 0%, \1 100%\)$/,
+      );
     }
   });
 

@@ -10,7 +10,7 @@
  * radial gradients over a base color and ignore the angle.
  *
  * Paper, halftone and fluted presets are pictures a gradient cannot draw: a
- * lit surface, dots and columns. They they are generated as SVG from their parameters. They still
+ * lit surface, dots and columns. They are generated as SVG from their parameters. They still
  * arrive as a `background-image`, through `svgBackground`, so nothing
  * downstream knows they are not gradients.
  *
@@ -24,6 +24,13 @@
 import { flutedToCss, type FlutedGlass } from "@/lib/fluted";
 import { halftoneToCss, type HalftoneScreen } from "@/lib/halftone";
 import { paperToCss, type PaperStock } from "@/lib/paper";
+import {
+  type FlowField,
+  type ShaderField,
+  type WarpField,
+  flowPoint,
+  hexChannels,
+} from "@/lib/shader";
 
 export type GradientFamily =
   | "atmosphere"
@@ -36,7 +43,9 @@ export type GradientFamily =
   | "spectral"
   | "paper"
   | "halftone"
-  | "fluted";
+  | "fluted"
+  | "flow"
+  | "warp";
 
 interface Stop {
   color: string;
@@ -151,13 +160,31 @@ interface FlutedPreset extends FlutedGlass {
   family: GradientFamily;
 }
 
+/** A mesh gradient that moves, drawn by `lib/shader.ts`. */
+interface FlowPreset extends FlowField {
+  kind: "flow";
+  id: string;
+  label: string;
+  family: GradientFamily;
+}
+
+/** A warped, banded pattern that moves, drawn by `lib/shader.ts`. */
+interface WarpPreset extends WarpField {
+  kind: "warp";
+  id: string;
+  label: string;
+  family: GradientFamily;
+}
+
 export type GradientPreset =
   | LinearGradient
   | MeshGradient
   | SceneGradient
   | PaperPreset
   | HalftonePreset
-  | FlutedPreset;
+  | FlutedPreset
+  | FlowPreset
+  | WarpPreset;
 
 /**
  * A family holds a multiple of eight presets, so the picker lays out as even
@@ -3697,6 +3724,44 @@ export const gradientPresets: GradientPreset[] = [
   { kind: "fluted", id: "fluted-peony", label: "Peony", family: "fluted", colors: ["#fff0f0", "#ffc8c0", "#ff8a90", "#e03a5a"], columns: 15, curve: "arch", high: 0.35, low: 1.2, fall: 0.5, hold: 0.3 },
   { kind: "fluted", id: "fluted-aurora-reed", label: "Aurora Reed", family: "fluted", colors: ["#060a1a", "#0a3a5a", "#10a0a0", "#80ffc0"], columns: 26, curve: "wave", high: 0.2, low: 0.9, fall: 0.5, hold: 0.06, waves: 1.25 },
   { kind: "fluted", id: "fluted-terracotta", label: "Terracotta", family: "fluted", colors: ["#f6ece2", "#e8c0a0", "#c87850", "#8a3a20"], columns: 16, curve: "arch", high: 0.12, low: 1.05, fall: 0.6, hold: 0.18 },
+
+  // Flow: Paper's mesh gradient, moving. The first four are Paper's own
+  // palettes for it, and the rest are drawn the same way.
+  { kind: "flow", id: "flow-daydream", label: "Daydream", family: "flow", colors: ["#e0eaff", "#241d9a", "#f75092", "#9f50d3"], distortion: 0.8, swirl: 0.1, pace: 1, seed: 0 },
+  { kind: "flow", id: "flow-violet-silk", label: "Violet Silk", family: "flow", colors: ["#aaa7d7", "#3c2b8e"], distortion: 1, swirl: 1, pace: 1, seed: 0 },
+  { kind: "flow", id: "flow-riviera", label: "Riviera", family: "flow", colors: ["#bcecf6", "#00aaff", "#00f7ff", "#ffd447"], distortion: 0.8, swirl: 0.35, pace: 1, seed: 0 },
+  { kind: "flow", id: "flow-inkwell", label: "Inkwell", family: "flow", colors: ["#ffffff", "#000000"], distortion: 1, swirl: 0.2, pace: 1, seed: 0 },
+  { kind: "flow", id: "flow-solar-flare", label: "Solar Flare", family: "flow", colors: ["#1a0500", "#ff5a00", "#ffd166", "#b5179e"], distortion: 1, swirl: 0.3, pace: 2, seed: 1.2 },
+  { kind: "flow", id: "flow-northern-drift", label: "Northern Drift", family: "flow", colors: ["#04121f", "#0b5d5e", "#29d3a2", "#7b4dff"], distortion: 0.9, swirl: 0.4, pace: 1, seed: 2.1 },
+  { kind: "flow", id: "flow-peach-fuzz", label: "Peach Fuzz", family: "flow", colors: ["#ffe1c6", "#ff9a76", "#ffd3e1", "#f76b8a"], distortion: 0.7, swirl: 0.3, pace: 1, seed: 0.6 },
+  { kind: "flow", id: "flow-hibiscus", label: "Hibiscus", family: "flow", colors: ["#ff006e", "#8338ec", "#3a86ff", "#ffbe0b"], distortion: 0.8, swirl: 0.3, pace: 1, seed: 3.3 },
+  { kind: "flow", id: "flow-lava-lamp", label: "Lava Lamp", family: "flow", colors: ["#2b0a3d", "#ff4d2e", "#ffb000", "#d6246e"], distortion: 1, swirl: 0.6, pace: 1, seed: 4.4 },
+  { kind: "flow", id: "flow-glasshouse", label: "Glasshouse", family: "flow", colors: ["#e6f7ec", "#7fd6a6", "#2f8f6b", "#d9f99d"], distortion: 0.6, swirl: 0.2, pace: 1, seed: 1.7 },
+  { kind: "flow", id: "flow-sherbet", label: "Sherbet", family: "flow", colors: ["#fff1a8", "#ff8fb1", "#9bd7ff", "#ffc27a"], distortion: 0.8, swirl: 0.25, pace: 1, seed: 5.2 },
+  { kind: "flow", id: "flow-abyss", label: "Abyss", family: "flow", colors: ["#020617", "#1e3a8a", "#0ea5e9", "#020617"], distortion: 0.9, swirl: 0.5, pace: 1, seed: 2.8 },
+  { kind: "flow", id: "flow-rosewater", label: "Rosewater", family: "flow", colors: ["#fde2e4", "#fad2e1", "#e2ece9", "#bee1e6", "#cddafd"], distortion: 0.6, swirl: 0.15, pace: 1, seed: 0.9 },
+  { kind: "flow", id: "flow-mercury", label: "Mercury", family: "flow", colors: ["#f2f2f2", "#9aa0a6", "#3c4043", "#e8eaed"], distortion: 0.9, swirl: 0.7, pace: 1, seed: 3.9 },
+  { kind: "flow", id: "flow-twilight-drift", label: "Twilight Drift", family: "flow", colors: ["#0f0c29", "#302b63", "#ff6e7f", "#bfe9ff"], distortion: 0.8, swirl: 0.4, pace: 1, seed: 6.1 },
+  { kind: "flow", id: "flow-chlorophyll", label: "Chlorophyll", family: "flow", colors: ["#0b3d2e", "#3ddc84", "#c3f73a", "#095256"], distortion: 0.9, swirl: 0.5, pace: 2, seed: 2.4 },
+
+  // Warp: Paper's warp, moving. The first six are its own presets, renamed
+  // where a label was already taken, and the rest follow them.
+  { kind: "warp", id: "warp-nightshade", label: "Nightshade", family: "warp", colors: ["#121212", "#9470ff", "#121212", "#8838ff"], shape: "checks", scale: 1, rotation: 0, shapeScale: 0.1, proportion: 0.45, softness: 1, distortion: 0.25, swirl: 0.8, iterations: 10, pace: 1 },
+  { kind: "warp", id: "warp-bog", label: "Bog", family: "warp", colors: ["#a7e58b", "#324472", "#0a180d"], shape: "edge", scale: 0.9, rotation: 160, shapeScale: 0.6, proportion: 0.64, softness: 1.5, distortion: 0.2, swirl: 0.86, iterations: 7, pace: 2 },
+  { kind: "warp", id: "warp-marble", label: "Marble", family: "warp", colors: ["#111314", "#9faeab", "#f3fee7", "#f3fee7"], shape: "checks", scale: 1.2, rotation: 44, shapeScale: 0.28, proportion: 0.05, softness: 0, distortion: 0.25, swirl: 0.8, iterations: 10, pace: 1 },
+  { kind: "warp", id: "warp-seagrass", label: "Seagrass", family: "warp", colors: ["#dbff8f", "#404f3e", "#091316"], shape: "stripes", scale: 0.8, rotation: 50, shapeScale: 1, proportion: 0.67, softness: 0, distortion: 0, swirl: 0.2, iterations: 3, pace: 3 },
+  { kind: "warp", id: "warp-amber-pour", label: "Amber Pour", family: "warp", colors: ["#151310", "#d3a86b", "#f0edea"], shape: "edge", scale: 2, rotation: 0, shapeScale: 0.75, proportion: 0.24, softness: 1, distortion: 0.21, swirl: 0.57, iterations: 10, pace: 1 },
+  { kind: "warp", id: "warp-garnet", label: "Garnet", family: "warp", colors: ["#3b1515", "#954751", "#ffc085"], shape: "checks", scale: 2.5, rotation: 1.35, shapeScale: 0.25, proportion: 0.5, softness: 1, distortion: 0.09, swirl: 0.9, iterations: 6, pace: 1 },
+  { kind: "warp", id: "warp-oil-slick", label: "Oil Slick", family: "warp", colors: ["#0d0d1a", "#2de2e6", "#f706cf", "#fd9a00", "#0d0d1a"], shape: "checks", scale: 1.5, rotation: 20, shapeScale: 0.2, proportion: 0.5, softness: 0.6, distortion: 0.3, swirl: 0.7, iterations: 8, pace: 1 },
+  { kind: "warp", id: "warp-ultramarine", label: "Ultramarine", family: "warp", colors: ["#06135c", "#2448ff", "#a5b4ff", "#ffffff"], shape: "checks", scale: 1.4, rotation: 10, shapeScale: 0.15, proportion: 0.55, softness: 0.4, distortion: 0.3, swirl: 0.85, iterations: 10, pace: 1 },
+  { kind: "warp", id: "warp-tiger-lily", label: "Tiger Lily", family: "warp", colors: ["#1b0f0a", "#ff7b00", "#ffd29d"], shape: "stripes", scale: 1, rotation: 30, shapeScale: 0.5, proportion: 0.5, softness: 0.2, distortion: 0.15, swirl: 0.5, iterations: 5, pace: 2 },
+  { kind: "warp", id: "warp-meltwater", label: "Meltwater", family: "warp", colors: ["#e8f6ff", "#7cc6fe", "#1f4e79"], shape: "edge", scale: 1.2, rotation: 200, shapeScale: 0.5, proportion: 0.5, softness: 1.2, distortion: 0.25, swirl: 0.7, iterations: 8, pace: 1 },
+  { kind: "warp", id: "warp-mulled", label: "Mulled", family: "warp", colors: ["#2a0c12", "#8c1c2f", "#e3a587", "#fbe3cf"], shape: "checks", scale: 1.8, rotation: 90, shapeScale: 0.3, proportion: 0.4, softness: 0.8, distortion: 0.15, swirl: 0.8, iterations: 9, pace: 1 },
+  { kind: "warp", id: "warp-pistachio", label: "Pistachio", family: "warp", colors: ["#f3f9e6", "#b7d77a", "#4f6b2b"], shape: "stripes", scale: 1.2, rotation: 75, shapeScale: 0.4, proportion: 0.5, softness: 0.7, distortion: 0.2, swirl: 0.6, iterations: 6, pace: 1 },
+  { kind: "warp", id: "warp-cream-soda", label: "Cream Soda", family: "warp", colors: ["#fff4e0", "#f7b267", "#f4845f", "#7d3c98"], shape: "edge", scale: 1.5, rotation: 300, shapeScale: 0.7, proportion: 0.45, softness: 1, distortion: 0.25, swirl: 0.6, iterations: 8, pace: 1 },
+  { kind: "warp", id: "warp-smoke-signal", label: "Smoke Signal", family: "warp", colors: ["#0e0e10", "#3a3a40", "#b8b8c0", "#f5f5f7"], shape: "checks", scale: 1, rotation: 120, shapeScale: 0.12, proportion: 0.5, softness: 1, distortion: 0.35, swirl: 0.9, iterations: 12, pace: 1 },
+  { kind: "warp", id: "warp-bubble-tea", label: "Bubble Tea", family: "warp", colors: ["#fde4cf", "#f1c0e8", "#cfbaf0", "#90dbf4"], shape: "checks", scale: 0.8, rotation: 60, shapeScale: 0.2, proportion: 0.5, softness: 1, distortion: 0.2, swirl: 0.7, iterations: 8, pace: 1 },
+  { kind: "warp", id: "warp-rust-belt", label: "Rust Belt", family: "warp", colors: ["#1c1008", "#7a2e0e", "#d9622b", "#f2b880"], shape: "stripes", scale: 1.3, rotation: 140, shapeScale: 0.6, proportion: 0.5, softness: 0.5, distortion: 0.2, swirl: 0.5, iterations: 5, pace: 2 },
 ];
 
 /**
@@ -3722,6 +3787,8 @@ export const gradientFamilies: {
   { id: "paper", label: "Paper" },
   { id: "halftone", label: "Halftone" },
   { id: "fluted", label: "Fluted" },
+  { id: "flow", label: "Flow" },
+  { id: "warp", label: "Warp" },
 ];
 
 export const defaultGradientId = "golden-hour";
@@ -3772,6 +3839,7 @@ export function supportsAngle(preset: GradientPreset): boolean {
  * default direction and is ignored by mesh presets.
  */
 export function gradientToCss(preset: GradientPreset, angle?: number): string {
+  if (preset.kind === "flow" || preset.kind === "warp") return shaderStandIn(preset);
   if (preset.kind === "paper") return paperToCss(preset);
   if (preset.kind === "halftone") return halftoneToCss(preset);
   if (preset.kind === "fluted") return flutedToCss(preset);
@@ -3809,6 +3877,45 @@ export function gradientToCss(preset: GradientPreset, angle?: number): string {
     .map((stop) => `${stop.color} ${stop.at}%`)
     .join(", ");
   return `linear-gradient(${angle ?? preset.angle}deg, ${stops})`;
+}
+
+/**
+ * What a moving preset is as CSS: a still approximation of its first frame.
+ *
+ * The shader paints over it once WebGL has drawn, so it is seen only where it
+ * cannot run, in the moment before it does, under a cross-fade, and as the dot
+ * a saved look shows. It still has to be opaque, the same as every other
+ * layer, so it ends on a solid of the palette's mean.
+ */
+function shaderStandIn(preset: FlowPreset | WarpPreset): string {
+  const base = solidToCss(meanHex(preset.colors));
+  if (preset.kind === "warp") {
+    const last = preset.colors.length - 1;
+    const stops = preset.colors
+      .map((color, i) => `${color} ${Math.round((i / last) * 100)}%`)
+      .join(", ");
+    return `linear-gradient(${preset.rotation + 180}deg, ${stops}), ${base}`;
+  }
+  const layers = preset.colors.map((color, i) => {
+    const at = flowPoint(i, 0, preset.pace, preset.seed);
+    return `radial-gradient(circle at ${Math.round(at.x * 100)}% ${Math.round(at.y * 100)}%, ${color} 0%, transparent 70%)`;
+  });
+  return [...layers, base].join(", ");
+}
+
+function meanHex(colors: readonly string[]): string {
+  const sum = [0, 0, 0];
+  for (const color of colors) {
+    hexChannels(color).forEach((c, i) => (sum[i] += c));
+  }
+  return `#${sum
+    .map((c) => Math.round((c / colors.length) * 255).toString(16).padStart(2, "0"))
+    .join("")}`;
+}
+
+/** The shader's own data for a moving preset, or null for any other kind. */
+export function shaderFieldOf(preset: GradientPreset): ShaderField | null {
+  return preset.kind === "flow" || preset.kind === "warp" ? preset : null;
 }
 
 /** CSS for a custom two-color gradient built in the Custom tab. */
@@ -3861,6 +3968,15 @@ export function resolveGradientCss(selection: GradientSelection): string {
       );
     }
   }
+}
+
+/**
+ * The moving field behind the artwork, or null when the background holds
+ * still. Whether this browser can draw it is the caller's question.
+ */
+export function resolveShader(selection: GradientSelection): ShaderField | null {
+  if (selection.background !== "preset") return null;
+  return shaderFieldOf(getGradient(selection.gradientId));
 }
 
 /** Whether the angle control does anything for this selection. */
