@@ -42,8 +42,8 @@ public/platforms  platform logos from svgl (svgl.app), one SVG per platform
 types/        shared types
 ```
 
-A hook lives beside the component that uses it, as `components/use-*.ts`.
-`use-edit-history.ts` is the only one so far. `lib/` still holds no React.
+A hook lives beside the component that uses it, as `components/use-*.ts`:
+`use-edit-history.ts` and `use-shader-support.ts`. `lib/` still holds no React.
 
 `lib/` holds no React. `components/ui/` holds primitives with no product
 knowledge. Everything else is a feature component.
@@ -197,7 +197,8 @@ both derive their CSS from that data, so the two cannot drift.
 - **A family holds a multiple of eight presets, so the picker lays out as even
   rows.** It is eight columns wide, and a ninth in one family leaves a ragged
   last row. The first four families hold thirty-two each, four rows, and the
-  four scene families and the three generated ones sixteen each, two rows.
+  four scene families, the three generated ones and the two moving ones
+  sixteen each, two rows.
   `lib/gradients.test.ts` fails on any count that is not a multiple of eight.
 - **A family can carry the grain it is made to be seen with.** Defocus is 70,
   Glow 40, Horizon 30 and Spectral 55: a defocused photograph is mostly its
@@ -320,6 +321,76 @@ Every generated layer must be fully opaque. `GradientBackground` keeps the
 previous gradient painted underneath during a cross-fade, and an incoming layer
 with transparency would let the stale one show through, including in the export.
 The spec checks that every colour is a six-digit hex.
+
+### Moving backgrounds
+
+Flow and Warp are backgrounds that move, after Paper's shaders
+(shaders.paper.design). A flow is their mesh gradient: colour points drifting
+over the frame, blended by inverse distance, with a distortion and a swirl over
+the coordinates. A warp is their warp: checks, stripes or an edge pushed
+through noise and stacked sine swirls, then cut into colour bands.
+`lib/shader.ts` holds the one WebGL2 program that draws both. The preview, the
+picker's swatches, a PNG and the encode in the worker all call
+`createShaderRenderer`, so none of them can draw a preset differently. The
+presets are data in the registry like every other kind.
+
+- **Every motion is periodic over `LOOP_SECONDS`, 12 s at Normal.** Paper's
+  shaders run on a free clock whose frequencies never line up, which is right
+  for a web page and wrong for a file: an exported clip would jump when it
+  loops. Time here is a phase from 0 to 1. Every oscillator turns a whole
+  number of times per loop, `pace` included, and drifting through noise goes
+  round a circle rather than along a line. The spec checks the whole numbers.
+- **`backgroundSpeed` and `backgroundMoment` are style.** Motion is Still,
+  Slow, Normal or Fast. Still holds the picture at the moment, and a Moment
+  slider then picks it, which is how a reader chooses the frame a PNG
+  captures. Choosing Still holds the picture where it is rather than jumping
+  to the last stored moment, since `handleStyleChange` reads the phase off the
+  live canvas first.
+- **`gradientToCss` answers a still stand-in for a moving preset**, radial
+  layers at the points' first positions over a solid of the palette's mean. It
+  is what shows before WebGL has drawn, under a fade, as a saved look's dot,
+  and everywhere in a browser that cannot run the shader. `shaderSupported`
+  asks an `OffscreenCanvas`, since that is what the worker draws on, so a
+  browser that could preview motion but not encode it shows the still
+  instead. `resolveShader` is how a consumer learns there is a field to draw.
+- **The live layer, `ShaderLayer`, is always mounted while the browser can
+  draw one.** A field arriving or leaving fades the canvas. Between two moving
+  presets the fade happens inside the canvas, both still moving on one clock.
+  It draws on a 2D canvas fed from an offscreen WebGL one, at screen size
+  capped at 1280px: a smooth field upscaled is invisible, and a 3000px frame
+  drawn sixty times a second is not. Under reduced motion it holds the moment.
+- **The swatches share one WebGL context** and copy their frame onto their
+  own 2D canvas. A browser keeps a handful of live contexts and drops the
+  oldest, so thirty-two would lose most of them. A swatch plays while it is
+  hovered or focused, since a moving background is judged by how it moves.
+- **An export rasterizes the frame without its background and paints the
+  shader under the result.** The background layers, the grain and the live
+  canvas carry `EXPORT_BACKDROP`, `rasterize` takes `dropBackdrop`, and
+  `paintBackdrop` in `lib/backdrop.ts` draws the shader at the export's own
+  size, clipped to the frame's radius, then the grain as an overlay, then the
+  raster over both. Alpha compositing is associative, so that is the same
+  picture as one pass, the media's shadow included. The grain is the one
+  layer that is not a plain over, which is why it leaves with the background
+  and is blended here. A PNG takes the phase the live canvas last drew, read
+  off its `data-backdrop-phase`, so the file is the frame on screen.
+- **An image over a moving background can download as a loop.** The modal's
+  Format row, which a clip already had, offers Loop or Still: one loop of the
+  background as an MP4, with the picture rasterized once and blurs baked into
+  it, since nothing under them moves. `exportLoop` and `renderLoop` are that
+  path. Whole frames tile the loop, so the last leads back into the first.
+  Held still, or where WebCodecs is missing, an image's Download stays a PNG.
+- **A clip over one paints it under every frame**, at the frame's output
+  time, through the same painter. It starts at the stored moment, so a held
+  background is the same frame through the whole clip.
+- **An MP4 over a moving background is several times larger** than one over
+  a still background, because the whole frame changes every frame. A 12 s loop
+  at 2x and 60 fps measured 6.3 MB for Solar Flare and 9.2 MB for Nightshade.
+  `estimateMovingBytes` in `lib/export-size.ts` is fitted for it, for a loop
+  and a clip alike, and the recording fit read 837 KB for both. Measured in
+  headless Chromium. Refit from real exports before adjusting it.
+- **Grain is not suggested by these families.** The shader dithers its own
+  output by under one level, because a slow gradient across a large frame
+  bands visibly, and worse once H.264 has had it.
 
 ## Typography
 
@@ -1099,10 +1170,11 @@ stop each.**
 
 Measured with a clip loaded: 83 tab stops for the whole page with every
 section open, against 109 before this, and 34 with every section folded. Each of the eleven background families
-is two of them, its header and its one swatch stop, with the swatches behind
+then was two of them, its header and its one swatch stop, with the swatches behind
 the arrow keys. The Marks, Handle, Clicks and Saved looks sections added
 seven, each a radiogroup or a single control, and each of the nine panel
-section headers is one.
+section headers is one. Flow and Warp came after that count, two stops each,
+and the Motion radiogroup is one more while a moving preset is chosen.
 
 ### Shortcuts
 
