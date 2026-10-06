@@ -20,7 +20,14 @@ import type { Split } from "@/lib/clip-pieces";
 import type { FadeRegion } from "@/lib/clip-fade";
 import type { ZoomRegion } from "@/lib/clip-zoom";
 import type { MotionTrack } from "@/lib/motion";
-import { type RasterSize, rasterize, rasterizeMarks } from "@/lib/raster";
+import {
+  type BackdropSpec,
+  type RasterSize,
+  bakeBlurs,
+  rasterize,
+  rasterizeMarks,
+  scaleBackdrop,
+} from "@/lib/raster";
 import {
   type BlurRegion,
   type Box,
@@ -85,6 +92,8 @@ export interface VideoExportRequest {
   };
   /** The motion pass's clicks, when each is to be drawn as a ripple. */
   ripples?: Float32Array | null;
+  /** A moving background, painted under the chrome at each frame's time. */
+  backdrop?: BackdropSpec | null;
   onProgress?: (fraction: number) => void;
   signal?: AbortSignal;
 }
@@ -188,14 +197,21 @@ export async function exportVideo({
   fps = DEFAULT_FPS,
   marks,
   ripples = null,
+  backdrop = null,
   onProgress,
   signal,
 }: VideoExportRequest): Promise<Blob> {
   // Only when something fades. With no fade the alpha is 1 throughout and the
   // media's still is covered exactly as before, so leaving it in keeps every
   // existing export byte-identical.
-  const dataUrl = await rasterize(frame, size, { dropMedia: fades.length > 0 });
+  const dataUrl = await rasterize(frame, size, {
+    dropMedia: fades.length > 0,
+    dropBackdrop: Boolean(backdrop),
+  });
   const chrome = await createImageBitmap(await (await fetch(dataUrl)).blob());
+  const under = backdrop
+    ? await scaleBackdrop(backdrop, frame, chrome.width)
+    : null;
   const overlay = marks?.drawn
     ? await createImageBitmap(
         await (
@@ -236,6 +252,8 @@ export async function exportVideo({
   return encodeInWorker(
     {
       chrome,
+      backdrop: under,
+      seconds: 0,
       box,
       radii,
       source,
@@ -252,6 +270,71 @@ export async function exportVideo({
       overlay,
       blurs: marks?.blurs ?? [],
       ripples: ripples && ripples.length ? ripples : null,
+    },
+    onProgress,
+    signal,
+  );
+}
+
+export interface LoopExportRequest {
+  /** The node the PNG export rasterizes, which is the whole frame. */
+  frame: HTMLElement;
+  size: RasterSize;
+  /** The moving background, which is the only thing that moves. */
+  backdrop: BackdropSpec;
+  /** One loop of the background, so the file plays round without a seam. */
+  seconds: number;
+  fps?: number;
+  onProgress?: (fraction: number) => void;
+  signal?: AbortSignal;
+}
+
+/**
+ * An image over a moving background, as a clip.
+ *
+ * The frame is rasterized once without its background, the same raster a
+ * PNG of it starts from, blurs baked in since nothing under them moves. The
+ * worker paints the background under it at each frame's time. There is no
+ * source to decode and no sound to carry.
+ */
+export async function exportLoop({
+  frame,
+  size,
+  backdrop,
+  seconds,
+  fps = DEFAULT_FPS,
+  onProgress,
+  signal,
+}: LoopExportRequest): Promise<Blob> {
+  const dataUrl = await bakeBlurs(
+    await rasterize(frame, size, { dropBackdrop: true }),
+    frame,
+  );
+  const chrome = await createImageBitmap(await (await fetch(dataUrl)).blob());
+  const under = await scaleBackdrop(backdrop, frame, chrome.width);
+  if (signal?.aborted) throw aborted();
+
+  return encodeInWorker(
+    {
+      chrome,
+      backdrop: under,
+      seconds,
+      box: { x: 0, y: 0, width: 0, height: 0 },
+      radii: [0, 0, 0, 0],
+      source: null,
+      trim: { start: 0, end: seconds },
+      cuts: [],
+      splits: [],
+      speed: 1,
+      zooms: [],
+      fades: [],
+      motion: null,
+      audio: false,
+      mixed: null,
+      fps,
+      overlay: null,
+      blurs: [],
+      ripples: null,
     },
     onProgress,
     signal,
@@ -306,6 +389,7 @@ function encodeInWorker(
     // mix is the export's own length in floats, and neither is needed here
     // once the worker has it.
     const transfer: Transferable[] = [message.chrome];
+    if (message.backdrop?.grain) transfer.push(message.backdrop.grain.tile);
     if (message.overlay) transfer.push(message.overlay);
     if (message.mixed) transfer.push(message.mixed.data.buffer as ArrayBuffer);
     worker.postMessage(message, transfer);

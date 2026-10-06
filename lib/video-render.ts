@@ -14,6 +14,11 @@
  * gradient, the padding, the radius and the title bar. That is a second
  * renderer, it has to be kept in step with the DOM one forever, and the day it
  * drifts the preview starts lying about the export.
+ *
+ * A moving background is the one layer under the chrome that changes. It is
+ * drawn by the same shader the preview runs, through `paintBackdrop`, and the
+ * chrome was rasterized without it. That is not a second renderer: there is
+ * one shader, and the preview and the export both call it.
  */
 
 import {
@@ -32,6 +37,7 @@ import {
   canEncodeAudio,
 } from "mediabunny";
 
+import { type Backdrop, backdropPhase, paintBackdrop } from "@/lib/backdrop";
 import { type ZoomRegion, sourceRect, zoomAt } from "@/lib/clip-zoom";
 import { type Cut, keptSeconds, keptSegments, outputAt } from "@/lib/clip-cuts";
 import { type FadeRegion, fadeAt } from "@/lib/clip-fade";
@@ -45,6 +51,7 @@ import { normalized, project } from "@/lib/marks";
 import type { Split } from "@/lib/clip-pieces";
 import type { MotionTrack } from "@/lib/motion";
 import { drawRipple, ripplesAt } from "@/lib/ripples";
+import { type ShaderRenderer, createShaderRenderer } from "@/lib/shader";
 import type { Trim } from "@/types/screenshot";
 
 export interface Box {
@@ -81,13 +88,24 @@ export interface MixedAudio {
 }
 
 export interface RenderRequest {
-  /** The whole frame, already rasterized at the output scale. */
+  /**
+   * The whole frame, already rasterized at the output scale. With a moving
+   * background it was rasterized without one, and `backdrop` is painted under
+   * it on every frame.
+   */
   chrome: ImageBitmap;
+  /** A moving background, or null when the chrome already carries it. */
+  backdrop: Backdrop | null;
+  /**
+   * How long to run when there is no clip: an image over a moving
+   * background, written as one loop of it. Ignored when there is a source.
+   */
+  seconds: number;
   /** Where the video sits inside it, in output pixels. */
   box: Box;
   radii: Radii;
-  /** The original file. */
-  source: Blob;
+  /** The original file, or null for an image over a moving background. */
+  source: Blob | null;
   /** The clip's in and out points. */
   trim: Trim;
   /** Stretches removed from the middle. The loop decodes around them. */
@@ -148,33 +166,134 @@ const MIX_CHUNK = 1;
  */
 export const even = (n: number) => Math.max(2, Math.floor(n / 2) * 2);
 
-export async function renderVideo({
-  chrome,
-  box,
-  radii,
-  source,
-  trim,
-  cuts,
-  splits,
-  speed,
-  zooms,
-  fades,
-  motion,
-  audio,
-  mixed,
-  fps,
-  overlay,
-  blurs,
-  ripples,
-  onProgress,
-}: RenderRequest): Promise<ArrayBuffer> {
+export async function renderVideo(request: RenderRequest): Promise<ArrayBuffer> {
+  const under = request.backdrop ? backdropPainter(request.backdrop) : null;
+  try {
+    return request.source
+      ? await renderClip(request, request.source, under)
+      : await renderLoop(request, under);
+  } finally {
+    under?.dispose();
+  }
+}
+
+/**
+ * Paints the background under the chrome, at the time each frame lands.
+ *
+ * The shader draws on a WebGL canvas of its own at the output's size, and the
+ * frame is copied from there. Held still, it draws once and every frame copies
+ * the same picture.
+ */
+interface BackdropPainter {
+  paint(ctx: OffscreenCanvasRenderingContext2D, seconds: number): void;
+  dispose(): void;
+}
+
+function backdropPainter(backdrop: Backdrop): BackdropPainter {
+  const renderer: ShaderRenderer | null = createShaderRenderer(
+    new OffscreenCanvas(1, 1),
+  );
+  if (!renderer) {
+    throw new Error("This browser cannot draw the moving background in an export");
+  }
+  return {
+    paint(ctx, seconds) {
+      // The corners outside the frame's radius are black in an MP4, the same
+      // as a still background leaves them, and are filled every frame so a
+      // previous frame's picture can never be left in them.
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+      paintBackdrop(ctx, renderer, backdrop, backdropPhase(backdrop, seconds));
+    },
+    dispose() {
+      renderer.dispose();
+      backdrop.grain?.tile.close();
+    },
+  };
+}
+
+/** The output canvas and the file it is encoded into, set up the same for both paths. */
+function openOutput(width: number, height: number) {
+  const canvas = new OffscreenCanvas(width, height);
+  const ctx = canvas.getContext("2d", { alpha: false });
+  if (!ctx) throw new Error("No 2D context");
+
+  const output = new Output({
+    format: new Mp4OutputFormat({ fastStart: "in-memory" }),
+    target: new BufferTarget(),
+  });
+  const frames = new CanvasSource(canvas, {
+    codec: "avc",
+    quality: QUALITY_HIGH,
+  });
+  output.addVideoTrack(frames);
+  return { canvas, ctx, output, frames };
+}
+
+/**
+ * An image over a moving background: the chrome, which already holds the
+ * picture, drawn over the background at each frame's time, for one loop.
+ * There is nothing to decode and no sound.
+ */
+async function renderLoop(
+  { chrome, seconds, fps, onProgress }: RenderRequest,
+  under: BackdropPainter | null,
+): Promise<ArrayBuffer> {
+  const width = even(chrome.width);
+  const height = even(chrome.height);
+  const { ctx, output, frames } = openOutput(width, height);
+  await output.start();
+
+  try {
+    // Whole frames, so the last one ends exactly where the first begins and
+    // the loop plays round without a seam.
+    const count = Math.max(1, Math.round(seconds * fps));
+    for (let i = 0; i < count; i++) {
+      const at = i / fps;
+      under?.paint(ctx, at);
+      ctx.drawImage(chrome, 0, 0);
+      await frames.add(at, 1 / fps);
+      onProgress?.((i + 1) / count);
+    }
+    await output.finalize();
+  } catch (error) {
+    await output.cancel().catch(() => {});
+    throw refusal(error, width, height);
+  }
+
+  const { buffer } = output.target;
+  if (!buffer) throw new Error("The encoder produced nothing");
+  return buffer;
+}
+
+async function renderClip(
+  {
+    chrome,
+    box,
+    radii,
+    trim,
+    cuts,
+    splits,
+    speed,
+    zooms,
+    fades,
+    motion,
+    audio,
+    mixed,
+    fps,
+    overlay,
+    blurs,
+    ripples,
+    onProgress,
+  }: RenderRequest,
+  source: Blob,
+  under: BackdropPainter | null,
+): Promise<ArrayBuffer> {
   const minFrameGap = 1 / fps;
   const width = even(chrome.width);
   const height = even(chrome.height);
 
-  const canvas = new OffscreenCanvas(width, height);
-  const ctx = canvas.getContext("2d", { alpha: false });
-  if (!ctx) throw new Error("No 2D context");
+  const { canvas, ctx, output, frames } = openOutput(width, height);
 
   const input = new Input({
     formats: ALL_FORMATS,
@@ -201,17 +320,6 @@ export async function renderVideo({
     ? new OffscreenCanvas(Math.max(Math.round(box.width), 1), Math.max(Math.round(box.height), 1))
     : null;
   const heldCtx = held?.getContext("2d") ?? null;
-
-  const output = new Output({
-    format: new Mp4OutputFormat({ fastStart: "in-memory" }),
-    target: new BufferTarget(),
-  });
-
-  const frames = new CanvasSource(canvas, {
-    codec: "avc",
-    quality: QUALITY_HIGH,
-  });
-  output.addVideoTrack(frames);
 
   // Declared before the output starts, because a track cannot be added to a
   // running output. A source with no encoder for it is worse than no sound, so
@@ -270,6 +378,7 @@ export async function renderVideo({
 
         const fade = fadeAt(fades, sample.timestamp);
 
+        under?.paint(ctx, at);
         ctx.drawImage(chrome, 0, 0);
         ctx.save();
         // Under a picture-only fade the chrome shows through, which is the
@@ -516,21 +625,27 @@ export async function renderVideo({
     // frames still in flight, which for a 1080p clip is hundreds of megabytes.
     await output.cancel().catch(() => {});
 
-    // WebCodecs reports a refused configuration by quoting the codec string
-    // back, which tells a reader nothing they can act on. The scale is the
-    // thing they can change, so the message names the size instead. The probe
-    // should have caught this before a frame was drawn, so reaching here means
-    // the encoder changed its mind between being asked and being used.
-    if (
-      error instanceof Error &&
-      /not supported in this environment/i.test(error.message)
-    ) {
-      throw new Error(
-        `This browser cannot encode ${width}x${height}. Try a smaller scale.`,
-      );
-    }
-    throw error;
+    throw refusal(error, width, height);
   }
+}
+
+/**
+ * WebCodecs reports a refused configuration by quoting the codec string back,
+ * which tells a reader nothing they can act on. The scale is the thing they
+ * can change, so the message names the size instead. The probe should have
+ * caught this before a frame was drawn, so reaching here means the encoder
+ * changed its mind between being asked and being used.
+ */
+function refusal(error: unknown, width: number, height: number): unknown {
+  if (
+    error instanceof Error &&
+    /not supported in this environment/i.test(error.message)
+  ) {
+    return new Error(
+      `This browser cannot encode ${width}x${height}. Try a smaller scale.`,
+    );
+  }
+  return error;
 }
 
 /**

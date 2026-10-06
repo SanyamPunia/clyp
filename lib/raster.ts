@@ -1,5 +1,9 @@
 import { toPng } from "html-to-image";
 
+import { type Backdrop, paintBackdrop } from "@/lib/backdrop";
+import { NOISE_TILE_URL } from "@/lib/noise";
+import { type ShaderField, createShaderRenderer } from "@/lib/shader";
+
 /**
  * Marks a node inside the frame that must not reach the export.
  *
@@ -25,6 +29,23 @@ export const EXPORT_IGNORE = "data-export-ignore";
 export const EXPORT_MEDIA = "data-export-media";
 
 /**
+ * Marks the background's layers: the gradient, the grain over it and the
+ * live shader canvas.
+ *
+ * A moving background cannot be one still of the DOM, so when one is showing
+ * the frame is rasterized without these and `paintBackdrop` in
+ * `lib/backdrop.ts` paints the shader and the grain under the result. With a
+ * still background they rasterize like anything else.
+ */
+export const EXPORT_BACKDROP = "data-export-backdrop";
+
+/**
+ * The phase the live shader last drew, written on its canvas every frame.
+ * A still export reads it off the DOM, so the PNG is the frame on screen.
+ */
+export const BACKDROP_PHASE = "data-backdrop-phase";
+
+/**
  * Marks a blur mark, with its radius in picture pixels as the value.
  *
  * A blur is shown with `backdrop-filter`, which `html-to-image` cannot
@@ -47,9 +68,17 @@ export const MARK_LAYER = "data-mark-layer";
  */
 export type RasterSize = number | { width: number; height: number };
 
-const keep = (options: { dropMedia?: boolean }) => (node: Node) => {
+interface RasterOptions {
+  /** Leave the media out, so a fade shows the background through its box. */
+  dropMedia?: boolean;
+  /** Leave the background out, so a moving one can be painted under it. */
+  dropBackdrop?: boolean;
+}
+
+const keep = (options: RasterOptions) => (node: Node) => {
   if (!(node instanceof Element)) return true;
   if (node.hasAttribute(EXPORT_IGNORE)) return false;
+  if (options.dropBackdrop && node.hasAttribute(EXPORT_BACKDROP)) return false;
   return !(options.dropMedia && node.hasAttribute(EXPORT_MEDIA));
 };
 
@@ -57,7 +86,7 @@ const keep = (options: { dropMedia?: boolean }) => (node: Node) => {
 export function rasterize(
   frame: HTMLElement,
   size: RasterSize,
-  options: { dropMedia?: boolean } = {},
+  options: RasterOptions = {},
 ): Promise<string> {
   const exact = typeof size === "object";
   return toPng(frame, {
@@ -173,6 +202,76 @@ export async function bakeBlurs(
     ctx.restore();
   }
 
+  return canvas.toDataURL("image/png");
+}
+
+/** A moving background in the frame's own layout pixels. */
+export interface BackdropSpec {
+  field: ShaderField;
+  speed: number;
+  moment: number;
+  /** The frame's outer radius, in layout pixels. */
+  radius: number;
+  /** The grain's opacity, from `grainOpacity`. */
+  grain: number;
+}
+
+/**
+ * A backdrop at the size of a raster of the frame.
+ *
+ * The scale is the raster's width over the frame's layout width, the ratio
+ * the video composite measures its radius by, so the canvas zoom is not in it
+ * and a template's exact pixels are.
+ */
+export async function scaleBackdrop(
+  spec: BackdropSpec,
+  frame: HTMLElement,
+  rasterWidth: number,
+): Promise<Backdrop> {
+  const scale = rasterWidth / frame.offsetWidth;
+  const tile =
+    spec.grain > 0
+      ? await createImageBitmap(await (await fetch(NOISE_TILE_URL)).blob())
+      : null;
+  return {
+    field: spec.field,
+    speed: spec.speed,
+    moment: spec.moment,
+    radius: spec.radius * scale,
+    grain: tile ? { tile, opacity: spec.grain, scale } : null,
+  };
+}
+
+/**
+ * A raster taken without its background, with the moving background painted
+ * under it at one phase. Its own renderer, released before returning: an
+ * export is rare, and a context held for it would count against the handful a
+ * browser allows for the whole page.
+ */
+export async function underBackdrop(
+  dataUrl: string,
+  frame: HTMLElement,
+  spec: BackdropSpec,
+  phase: number,
+): Promise<string> {
+  const image = await loadImage(dataUrl);
+  const canvas = document.createElement("canvas");
+  canvas.width = image.naturalWidth;
+  canvas.height = image.naturalHeight;
+  const ctx = canvas.getContext("2d");
+  const renderer = createShaderRenderer(new OffscreenCanvas(1, 1));
+  if (!ctx || !renderer) {
+    throw new Error("This browser cannot draw the moving background");
+  }
+
+  try {
+    const backdrop = await scaleBackdrop(spec, frame, canvas.width);
+    paintBackdrop(ctx, renderer, backdrop, phase);
+    backdrop.grain?.tile.close();
+    ctx.drawImage(image, 0, 0);
+  } finally {
+    renderer.dispose();
+  }
   return canvas.toDataURL("image/png");
 }
 

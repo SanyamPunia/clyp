@@ -107,3 +107,50 @@ export function estimateVideoBytes(
     (fps > 30 ? VIDEO_60_FPS_FACTOR : 1)
   );
 }
+
+/**
+ * Size estimate for anything over a moving background: an image written as a
+ * loop, or a clip.
+ *
+ * Fitted separately because it behaves unlike a recording. The whole frame
+ * changes every frame, so the file tracks the pixel count, not the linear
+ * size: bytes go as pixels to about 0.88. Measured on 12 s loops of a
+ * 480x300 picture with 64px of padding, at 30 fps, in bytes per second:
+ *
+ *               1x 0.26 Mpx   2x 1.04 Mpx   3x 2.34 Mpx
+ *   Daydream       80,200       241,400       483,300
+ *   Inkwell        62,200       179,500       351,300
+ *   Nightshade    106,500       395,400       845,700
+ *   Seagrass      106,200       394,500       847,800
+ *
+ * Over pixels^0.88 that is 0.9 to 2.1, flows low and warps high, so the
+ * coefficient is the middle. 60 fps cost 1.5x for a flow and 2x for a warp,
+ * which is far over a recording's 1.4: a moving field shares less between
+ * frames than a screen does.
+ *
+ * A clip over one lands in the same range, since the field is most of what
+ * changes: the six-colour fixture at 768x488 and 30 fps wrote 0.30 bytes per
+ * pixel-second over Daydream and 0.46 over Nightshade, against 0.07 over
+ * Golden Hour. The constant before this fit was the recording's,
+ * and it read 837 KB for files of 6 to 9 MB.
+ */
+const LOOP_COEFFICIENT = 1.4;
+const LOOP_EXPONENT = 0.88;
+const LOOP_60_FPS_FACTOR = 1.7;
+
+export function estimateMovingBytes(
+  width: number,
+  height: number,
+  seconds: number,
+  fps = 30,
+): number {
+  const pixels = width * height;
+  if (!pixels || !seconds) return 0;
+
+  return (
+    LOOP_COEFFICIENT *
+    pixels ** LOOP_EXPONENT *
+    seconds *
+    (fps > 30 ? LOOP_60_FPS_FACTOR : 1)
+  );
+}

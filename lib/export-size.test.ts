@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   estimateBytes,
+  estimateMovingBytes,
   estimateVideoBytes,
   formatBytes,
   outputSize,
@@ -124,5 +125,33 @@ describe("estimateVideoBytes", () => {
     const at30 = estimateVideoBytes(1280, 720, 10, 30);
     expect(estimateVideoBytes(1280, 720, 10, 24)).toBe(at30);
     expect(estimateVideoBytes(1280, 720, 10)).toBe(at30);
+  });
+});
+
+describe("estimateMovingBytes", () => {
+  it("is nothing for an empty frame or no length", () => {
+    expect(estimateMovingBytes(0, 0, 12)).toBe(0);
+    expect(estimateMovingBytes(608, 428, 0)).toBe(0);
+  });
+
+  it("lands inside the measured spread at every scale", () => {
+    // The fit's own samples, in bytes per second at 30 fps: Inkwell is the
+    // low end and Nightshade the high one.
+    const samples = [
+      { w: 608, h: 428, low: 62_200, high: 106_500 },
+      { w: 1216, h: 856, low: 179_500, high: 395_400 },
+      { w: 1824, h: 1284, low: 351_300, high: 845_700 },
+    ];
+    for (const { w, h, low, high } of samples) {
+      const perSecond = estimateMovingBytes(w, h, 1);
+      expect(perSecond).toBeGreaterThan(low);
+      expect(perSecond).toBeLessThan(high);
+    }
+  });
+
+  it("costs more at 60 fps than a recording does", () => {
+    const ratio = estimateMovingBytes(1216, 856, 12, 60) / estimateMovingBytes(1216, 856, 12, 30);
+    expect(ratio).toBeGreaterThan(1.4);
+    expect(ratio).toBeLessThan(2);
   });
 });
