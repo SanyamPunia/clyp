@@ -1,6 +1,9 @@
 import type React from "react";
 
-import { NOISE_TILE_SIZE, NOISE_TILE_URL } from "@/lib/noise";
+import { ShaderLayer } from "@/components/shader-layer";
+import { NOISE_TILE_SIZE, NOISE_TILE_URL, grainOpacity } from "@/lib/noise";
+import { EXPORT_BACKDROP } from "@/lib/raster";
+import type { ShaderField } from "@/lib/shader";
 
 /* ─────────────────────────────────────────────────────────
  * ANIMATION STORYBOARD - gradient swap
@@ -20,9 +23,6 @@ import { NOISE_TILE_SIZE, NOISE_TILE_URL } from "@/lib/noise";
 
 const CROSS_FADE_MS = 400;
 
-/** Layer opacity at intensity 100. Past this the grain buries the artwork. */
-const MAX_NOISE_OPACITY = 0.55;
-
 interface GradientBackgroundProps {
   /** Full CSS background-image value, from `resolveGradientCss`. */
   css: string;
@@ -31,6 +31,12 @@ interface GradientBackgroundProps {
   showNoiseOverlay?: boolean;
   /** Grain strength, 0 to 100. */
   noiseIntensity?: number;
+  /**
+   * The moving field, drawn live over `css`, or null. Absent where the browser
+   * cannot draw one, in which case `css` is the still stand-in and is all
+   * there is.
+   */
+  shader?: { field: ShaderField | null; speed: number; moment: number };
   children: React.ReactNode;
 }
 
@@ -39,11 +45,10 @@ export function GradientBackground({
   previousCss,
   showNoiseOverlay = false,
   noiseIntensity = 55,
+  shader,
   children,
 }: GradientBackgroundProps) {
-  const grain = showNoiseOverlay
-    ? (noiseIntensity / 100) * MAX_NOISE_OPACITY
-    : 0;
+  const grain = grainOpacity(showNoiseOverlay, noiseIntensity);
 
   /**
    * A transparent background is the one incoming layer that is not opaque.
@@ -64,6 +69,7 @@ export function GradientBackground({
       {!transparent && (
         <div
           aria-hidden="true"
+          {...{ [EXPORT_BACKDROP]: "" }}
           className="absolute inset-0 z-0"
           style={{ backgroundImage: previousCss }}
         />
@@ -72,6 +78,7 @@ export function GradientBackground({
       <div
         aria-hidden="true"
         key={css}
+        {...{ [EXPORT_BACKDROP]: "" }}
         className="animate-gradient-in absolute inset-0 z-10"
         style={{
           backgroundImage: css,
@@ -79,11 +86,17 @@ export function GradientBackground({
         }}
       />
 
+      {/* After the incoming layer, so it paints over the stand-in at the same
+          z-index. Under it, a moving preset's CSS is only seen until WebGL
+          has drawn and while the canvas fades. */}
+      {shader && <ShaderLayer {...shader} />}
+
       {/* Always mounted, at opacity 0 when off, so switching grain on or
           changing its amount eases rather than snaps. At 0 an overlay blend
           is a no-op, in the preview and in the export alike. */}
       <div
         aria-hidden="true"
+        {...{ [EXPORT_BACKDROP]: "" }}
         className="artwork-ease pointer-events-none absolute inset-0 z-20 mix-blend-overlay transition-opacity"
         style={{
           opacity: grain,

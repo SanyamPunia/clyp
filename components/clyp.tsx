@@ -103,6 +103,7 @@ import {
   transitionAt,
 } from "@/lib/clip-transitions";
 import { useEditHistory } from "@/components/use-edit-history";
+import { useShaderSupport } from "@/components/use-shader-support";
 import {
   type FadeRegion,
   DEFAULT_CURVE,
@@ -111,13 +112,18 @@ import {
   placeFade,
 } from "@/lib/clip-fade";
 import {
+  BACKDROP_PHASE,
+  type BackdropSpec,
   EXPORT_IGNORE,
   EXPORT_MEDIA,
   type RasterSize,
   bakeBlurs,
   rasterize,
   slice,
+  underBackdrop,
 } from "@/lib/raster";
+import { grainOpacity } from "@/lib/noise";
+import { loopSeconds } from "@/lib/shader";
 import {
   type Mark,
   type MarkColor,
@@ -150,6 +156,7 @@ import {
   defaultCustomGradient,
   defaultGradientId,
   resolveGradientCss,
+  resolveShader,
 } from "@/lib/gradients";
 import { ALL_CORNERS, aspectBox, aspectRatio, cornerRadius } from "@/lib/style-options";
 import {
@@ -191,6 +198,7 @@ import {
   EDIT_FPS,
   SPEED_OPTIONS,
   canExportVideo,
+  exportLoop,
   exportVideo,
 } from "@/lib/video-export";
 import { download, downloadBlob, filenameFor } from "@/lib/download";
@@ -329,6 +337,13 @@ const bytesOf = async (url: string) =>
 const clamp = (value: number, low: number, high: number) =>
   Math.min(Math.max(value, low), Math.max(low, high));
 
+/** The phase the live background last drew, read off its canvas. */
+function shownPhase(frame: HTMLElement, fallback: number): number {
+  const value = frame.querySelector(`[${BACKDROP_PHASE}]`)?.getAttribute(BACKDROP_PHASE);
+  const phase = value ? Number(value) : Number.NaN;
+  return Number.isFinite(phase) ? phase : fallback;
+}
+
 const DEFAULT_STYLE: StyleOptions = {
   gradientId: defaultGradientId,
   gradientAngle: 180,
@@ -362,6 +377,8 @@ const DEFAULT_STYLE: StyleOptions = {
   customGradientFrom: defaultCustomGradient.from,
   customGradientTo: defaultCustomGradient.to,
   solidColor: DEFAULT_SOLID_COLOR,
+  backgroundSpeed: 1,
+  backgroundMoment: 0,
 };
 
 export function Clyp() {
@@ -629,6 +646,45 @@ export function Clyp() {
   }, []);
 
   const gradientCss = resolveGradientCss(styleOptions);
+  /**
+   * The moving field behind the artwork, when this browser can draw one.
+   * Where it cannot, the preset's CSS stand-in is the background everywhere,
+   * preview and export alike, so neither promises motion the other lacks.
+   */
+  const canShade = useShaderSupport();
+  const shaderField = canShade ? resolveShader(styleOptions) : null;
+  const backdrop = useMemo<BackdropSpec | null>(
+    () =>
+      shaderField
+        ? {
+            field: shaderField,
+            speed: styleOptions.backgroundSpeed,
+            moment: styleOptions.backgroundMoment,
+            radius: styleOptions.outerRadius,
+            grain: grainOpacity(
+              styleOptions.showNoiseOverlay,
+              styleOptions.noiseIntensity,
+            ),
+          }
+        : null,
+    [
+      shaderField,
+      styleOptions.backgroundSpeed,
+      styleOptions.backgroundMoment,
+      styleOptions.outerRadius,
+      styleOptions.showNoiseOverlay,
+      styleOptions.noiseIntensity,
+    ],
+  );
+  /**
+   * How long one loop of the background runs, when an image can be exported
+   * moving. Null for a still background, a held one, or a browser that cannot
+   * encode, which leaves an image's Download a PNG as it always was.
+   */
+  const loop =
+    media?.kind === "image" && backdrop && backdrop.speed > 0 && canEncode
+      ? loopSeconds(backdrop.speed)
+      : null;
   // One radius for both branches and for the export's rounded clip, so an
   // image and a video cannot end up cornered differently.
   // Copy always produces a PNG, so a clip copies its styled poster frame and
@@ -648,7 +704,7 @@ export function Clyp() {
   const slides = sizeOverride ? 1 : slideCount(template, styleOptions.slides);
   // A carousel's slides are stills, so a clip set to one exports its frame.
   const exportsVideo =
-    media?.kind === "video" &&
+    (media?.kind === "video" || loop !== null) &&
     exportAction === "download" &&
     videoFormat === "mp4" &&
     slides === 1;
@@ -2060,11 +2116,22 @@ export function Clyp() {
    * One still of the frame at a size, with the blurs baked in. Every PNG path
    * goes through this: one size, a carousel, several sizes and a copy.
    */
-  const still = useCallback(async (size: RasterSize) => {
-    const frame = screenshotRef.current;
-    if (!frame) throw new Error("There is nothing to export");
-    return bakeBlurs(await rasterize(frame, size), frame);
-  }, []);
+  const still = useCallback(
+    async (size: RasterSize) => {
+      const frame = screenshotRef.current;
+      if (!frame) throw new Error("There is nothing to export");
+      if (!backdrop) return bakeBlurs(await rasterize(frame, size), frame);
+
+      // A moving background is the frame on screen: the phase the live layer
+      // last drew, read off its canvas, painted under a raster without it.
+      const raster = await rasterize(frame, size, { dropBackdrop: true });
+      return bakeBlurs(
+        await underBackdrop(raster, frame, backdrop, shownPhase(frame, backdrop.moment)),
+        frame,
+      );
+    },
+    [backdrop],
+  );
 
   const handleExport = useCallback(
     async (options: ExportOptions) => {
@@ -2106,6 +2173,21 @@ export function Clyp() {
             filenameFor(options.filename, "zip", media.name),
           );
           toast.success(`${entries.length} sizes downloaded`);
+        } else if (exportsVideo && loop !== null && backdrop) {
+          const controller = new AbortController();
+          abortRef.current = controller;
+
+          const blob = await exportLoop({
+            frame,
+            size: template ? outputFor(template) : options.quality,
+            backdrop,
+            seconds: loop,
+            fps: options.fps,
+            onProgress: setProgress,
+            signal: controller.signal,
+          });
+          downloadBlob(blob, filenameFor(options.filename, "mp4", media.name));
+          toast.success("Video downloaded");
         } else if (exportsVideo) {
           const box = clipBoxRef.current;
           if (!box || !media.blob || !trim) {
@@ -2146,6 +2228,7 @@ export function Clyp() {
                   }
                 : undefined,
             ripples: styleOptions.clickRipples ? motion?.clicks : null,
+            backdrop,
             onProgress: setProgress,
             signal: controller.signal,
           });
@@ -2209,6 +2292,8 @@ export function Clyp() {
     [
       exportAction,
       exportsVideo,
+      loop,
+      backdrop,
       media,
       motion,
       soundtrack,
@@ -2530,6 +2615,17 @@ export function Clyp() {
   const handleStyleChange = useCallback(
     (newOptions: Partial<StyleOptions>) => {
       const next = { ...styleOptions, ...newOptions };
+      // Holding a moving background holds it where it is, so the picture does
+      // not jump back to the last moment someone chose.
+      const frame = screenshotRef.current;
+      if (
+        frame &&
+        next.backgroundSpeed === 0 &&
+        styleOptions.backgroundSpeed !== 0 &&
+        newOptions.backgroundMoment === undefined
+      ) {
+        next.backgroundMoment = shownPhase(frame, next.backgroundMoment);
+      }
       const before = resolveGradientCss(styleOptions);
 
       if (before !== resolveGradientCss(next)) setPreviousGradientCss(before);
@@ -2804,6 +2900,15 @@ export function Clyp() {
                   <GradientBackground
                     css={gradientCss}
                     previousCss={previousGradientCss}
+                    shader={
+                      canShade
+                        ? {
+                            field: shaderField,
+                            speed: styleOptions.backgroundSpeed,
+                            moment: styleOptions.backgroundMoment,
+                          }
+                        : undefined
+                    }
                     showNoiseOverlay={styleOptions.showNoiseOverlay}
                     noiseIntensity={styleOptions.noiseIntensity}
                   >
@@ -3242,6 +3347,8 @@ export function Clyp() {
         hasClipAudio={media?.hasAudio ?? false}
         soundtrackName={soundtrack?.name}
         transparent={styleOptions.background === "none"}
+        loop={loop ?? undefined}
+        movingBackground={Boolean(backdrop && backdrop.speed > 0)}
         format={videoFormat}
         onFormatChange={setVideoFormat}
         progress={progress}

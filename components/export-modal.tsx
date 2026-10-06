@@ -29,6 +29,7 @@ import { Dimensions } from "@/components/ui/dimensions";
 import { formatDuration } from "@/lib/media";
 import {
   estimateBytes,
+  estimateMovingBytes,
   estimateVideoBytes,
   formatBytes,
   outputSize,
@@ -82,7 +83,14 @@ interface ExportModalProps {
   soundtrackName?: string;
   /** Set when the background is transparent, which an MP4 cannot carry. */
   transparent?: boolean;
-  /** Video only. What a Download writes: the clip, or its current frame. */
+  /**
+   * Image only. Set when the background moves and can be exported moving: one
+   * loop of it, in seconds, which is how long the clip would run.
+   */
+  loop?: number;
+  /** The background moves, which changes what an MP4 costs. */
+  movingBackground?: boolean;
+  /** What a Download writes: the clip or loop, or a still of it. */
   format?: "mp4" | "png";
   onFormatChange?: (format: "mp4" | "png") => void;
   /** 0 to 1 while a video encodes, null while a PNG renders. */
@@ -114,6 +122,8 @@ export function ExportModal({
   hasClipAudio = false,
   soundtrackName,
   transparent = false,
+  loop,
+  movingBackground = false,
   format = "mp4",
   onFormatChange,
   progress = null,
@@ -154,12 +164,18 @@ export function ExportModal({
    * carousel never does: its slides are stills, and a clip split into slides
    * would be one encode per slide.
    */
-  const choosesFormat = kind === "video" && !isCopy && !carousel;
+  /**
+   * Whether this export can come out moving at all: a clip, or an image over a
+   * background that moves. An image's Download then offers the loop beside
+   * the still, the same choice a clip offers between itself and its frame.
+   */
+  const moves = kind === "video" || loop !== undefined;
+  const choosesFormat = moves && !isCopy && !carousel;
   // Copy goes through the clipboard, which has no MP4 flavour, so a clip
   // copies its styled poster frame. A Download set to PNG asks for the same
   // thing deliberately. Only an encode is a video export.
   const isVideo = choosesFormat && format === "mp4";
-  const seconds = duration ?? 0;
+  const seconds = duration ?? loop ?? 0;
 
   // Asked once per size, when the dialog opens. It resolves in milliseconds,
   // and until it does every tile is offered: a control that starts disabled and
@@ -178,7 +194,7 @@ export function ExportModal({
     : `${frameWidth}x${frameHeight}`;
 
   useEffect(() => {
-    if (!open || kind !== "video" || !frameWidth) return;
+    if (!open || !moves || !frameWidth) return;
 
     const asks: [number, { width: number; height: number }][] = exactWidth
       ? [[0, { width: exactWidth, height: exactHeight }]]
@@ -207,7 +223,7 @@ export function ExportModal({
     return () => {
       cancelled = true;
     };
-  }, [open, kind, frameWidth, frameHeight, exactWidth, exactHeight]);
+  }, [open, moves, frameWidth, frameHeight, exactWidth, exactHeight]);
 
   // A scale a video cannot be encoded at is offered as a disabled tile rather
   // than hidden, so the ceiling is visible instead of the control silently
@@ -253,7 +269,12 @@ export function ExportModal({
         return t ? sum + estimateBytes(t.width, t.height, hasGrain) : sum;
       }, 0)
     : isVideo
-      ? estimateVideoBytes(output.width, output.height, seconds, fps)
+      ? (movingBackground ? estimateMovingBytes : estimateVideoBytes)(
+          output.width,
+          output.height,
+          seconds,
+          fps,
+        )
       : estimateBytes(output.width, output.height, hasGrain);
   const extension = zipped ? "zip" : isVideo ? "mp4" : "png";
   const tooLong = Boolean(
@@ -267,8 +288,10 @@ export function ExportModal({
       : carousel
         ? "Download carousel"
         : isVideo
-          ? "Download clip"
-          : choosesFormat
+          ? kind === "video"
+            ? "Download clip"
+            : "Download loop"
+          : choosesFormat && kind === "video"
             ? "Download frame"
             : "Download image";
 
@@ -298,7 +321,9 @@ export function ExportModal({
               encoder ever written. The summary below says what you get. */}
           <DialogDescription className="sr-only">
             {isVideo
-              ? "Export the clip as an MP4 at the styled size."
+              ? kind === "video"
+                ? "Export the clip as an MP4 at the styled size."
+                : "Export the image over its moving background as a looping MP4."
               : kind === "video"
                 ? "Capture the clip's current frame as a PNG, styled."
                 : "Export the image as a PNG at the styled size."}
@@ -333,7 +358,9 @@ export function ExportModal({
                   disabled={pending}
                   className="flex-col gap-0.5 py-2"
                 >
-                  <span className="text-sm font-medium">Clip</span>
+                  <span className="text-sm font-medium">
+                    {kind === "video" ? "Clip" : "Loop"}
+                  </span>
                   <span className="text-xs text-muted-foreground">MP4</span>
                 </SegmentedOption>
                 <SegmentedOption
@@ -343,7 +370,9 @@ export function ExportModal({
                   disabled={pending}
                   className="flex-col gap-0.5 py-2"
                 >
-                  <span className="text-sm font-medium">This frame</span>
+                  <span className="text-sm font-medium">
+                    {kind === "video" ? "This frame" : "Still"}
+                  </span>
                   <span className="text-xs text-muted-foreground">PNG</span>
                 </SegmentedOption>
               </SegmentedGroup>
@@ -555,7 +584,11 @@ export function ExportModal({
                       {rate} fps
                     </span>
                     <span className="text-xs text-muted-foreground">
-                      {rate === 30 ? "Smaller" : "Every source frame"}
+                      {rate === 30
+                        ? "Smaller"
+                        : kind === "video"
+                          ? "Every source frame"
+                          : "Smoother"}
                     </span>
                   </SegmentedOption>
                 ))}

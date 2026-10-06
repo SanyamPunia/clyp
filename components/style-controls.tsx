@@ -17,6 +17,8 @@ import { ColorPicker } from "@/components/color-picker";
 import { FieldLabel } from "@/components/ui/field-label";
 import { Input } from "@/components/ui/input";
 import { PlatformIcon } from "@/components/platform-icon";
+import { ShaderSwatch } from "@/components/shader-swatch";
+import { useShaderSupport } from "@/components/use-shader-support";
 import {
   Select,
   SelectContent,
@@ -45,11 +47,13 @@ import {
   gradientToCss,
   getGradient,
   resolveGradientCss,
+  shaderFieldOf,
   solidToCss,
   supportsAngle,
   type GradientFamily,
   type GradientPreset,
 } from "@/lib/gradients";
+import { BACKGROUND_SPEEDS } from "@/lib/shader";
 import { type Look, isLook } from "@/lib/looks";
 import {
   MAX_SLIDES,
@@ -133,6 +137,9 @@ export function StyleControls({
   const hasGuides = Boolean(template && (template.safe || template.carousel));
   const badged = options.badge.trim().length > 0;
   const activePreset = getGradient(options.gradientId);
+  const activeField =
+    options.background === "preset" ? shaderFieldOf(activePreset) : null;
+  const shades = useShaderSupport();
   const hasAngle = angleApplies(options);
   const captioned = options.caption.trim().length > 0;
   // Grain over nothing is nothing: an overlay blend at any strength leaves a
@@ -179,6 +186,7 @@ export function StyleControls({
               <FamilyPicker
                 key={family.id}
                 family={family}
+                shades={shades}
                 selectedId={
                   options.background === "preset" ? options.gradientId : null
                 }
@@ -286,7 +294,9 @@ export function StyleControls({
                 ? "A flat colour does not use an angle."
                 : options.background === "none"
                   ? "There is nothing behind the artwork to angle."
-                  : activePreset.kind === "mesh"
+                  : activeField
+                    ? "A moving background keeps its own direction."
+                    : activePreset.kind === "mesh"
                     ? "Mesh gradients do not use an angle."
                     : activePreset.kind === "paper"
                       ? "A sheet of paper does not turn with an angle."
@@ -296,6 +306,46 @@ export function StyleControls({
                           ? "Fluted glass stays upright."
                           : "This scene does not turn with an angle."}
             </p>
+          )}
+
+          {/* Only for a preset that moves. Still holds the picture, which is
+              also how a reader picks the frame a PNG captures, so it brings
+              a slider for that moment. */}
+          {activeField && (
+            <>
+              <ChoiceRow
+                label="Motion"
+                name="background-speed"
+                value={String(options.backgroundSpeed)}
+                options={BACKGROUND_SPEEDS.map((speed) => ({
+                  value: String(speed.value),
+                  label: speed.label,
+                }))}
+                columns={4}
+                disabled={!shades}
+                onChange={(value) =>
+                  onChange({ backgroundSpeed: Number(value) })
+                }
+              />
+              {!shades ? (
+                <p className="text-xs text-muted-foreground">
+                  This browser cannot draw a moving background, so it shows a
+                  still one.
+                </p>
+              ) : options.backgroundSpeed === 0 ? (
+                <SliderRow
+                  label="Moment"
+                  value={Math.round(options.backgroundMoment * 100)}
+                  min={0}
+                  max={100}
+                  step={1}
+                  suffix="%"
+                  onChange={(value) =>
+                    onChange({ backgroundMoment: value / 100 })
+                  }
+                />
+              ) : null}
+            </>
           )}
 
           <ToggleRow
@@ -1115,17 +1165,22 @@ const FAMILY_ROW = 8;
  */
 function FamilyPicker({
   family,
+  shades,
   selectedId,
   angle,
   onPick,
 }: {
   family: { id: GradientFamily; label: string };
+  /** Whether moving presets can be drawn, rather than shown as stand-ins. */
+  shades: boolean;
   /** The chosen preset's id, or null when the background is not a preset. */
   selectedId: string | null;
   angle: number;
   onPick: (id: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  /** The moving swatch being hovered or focused, which is the one that plays. */
+  const [playing, setPlaying] = useState<string | null>(null);
   const presets = gradientPresets.filter(
     (preset) => preset.family === family.id
   );
@@ -1140,6 +1195,11 @@ function FamilyPicker({
 
   const swatch = (preset: GradientPreset, index: number) => {
     const selected = preset.id === selectedId;
+    const field = shades ? shaderFieldOf(preset) : null;
+    const play = field ? () => setPlaying(preset.id) : undefined;
+    const stop = field
+      ? () => setPlaying((id) => (id === preset.id ? null : id))
+      : undefined;
 
     return (
       <button
@@ -1148,6 +1208,10 @@ function FamilyPicker({
         title={preset.label}
         aria-pressed={selected}
         onClick={() => onPick(preset.id)}
+        onPointerEnter={play}
+        onPointerLeave={stop}
+        onFocus={play}
+        onBlur={stop}
         tabIndex={index === stopAt ? 0 : -1}
         className={cn(
           "group relative aspect-[4/5] cursor-pointer overflow-hidden rounded-md",
@@ -1166,6 +1230,9 @@ function FamilyPicker({
             ),
           }}
         />
+        {field && (
+          <ShaderSwatch field={field} playing={playing === preset.id} />
+        )}
         {selected && (
           <span className="absolute inset-0 flex items-center justify-center">
             <span className="rounded-full bg-black/35 p-0.5 backdrop-blur-sm">

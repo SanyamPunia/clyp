@@ -108,6 +108,13 @@ export interface StyleOptions {
   customGradientTo: string;
   /** The flat colour, for `background: "solid"`. */
   solidColor: string;
+  /**
+   * How fast a moving background runs, one of `BACKGROUND_SPEEDS` in
+   * `lib/shader.ts`. 0 holds it still at `backgroundMoment`.
+   */
+  backgroundSpeed: number;
+  /** The phase a moving background holds at, or starts from, 0 to 1. */
+  backgroundMoment: number;
 }
 
 export interface ExportOptions {
