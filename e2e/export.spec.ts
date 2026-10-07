@@ -12,10 +12,10 @@ import {
   loadTrack,
   openEditor,
   pickSegmented,
-  pressLane,
   readAlpha,
   readAudio,
   readVideo,
+  removeStretch,
   seek,
 } from "./helpers";
 
@@ -35,13 +35,9 @@ async function shrinkPadding(page: import("@playwright/test").Page) {
   for (let i = 0; i < 14; i++) await padding.press("ArrowLeft");
 }
 
-/** Places a cut of the default length at `at`, deselecting first. */
-async function cutAt(page: import("@playwright/test").Page, at: number) {
-  await pressLane(page, 0.72);
-  await seek(page, at);
-  await page.getByRole("button", { name: "Cut at the playhead" }).click();
-  await expect(page.getByRole("button", { name: /^Cut, / })).not.toHaveCount(0);
-}
+/** Takes the second from `at` out of the clip. */
+const cutAt = (page: import("@playwright/test").Page, at: number) =>
+  removeStretch(page, at, at + 1);
 
 test.describe("the exported clip", () => {
   test("is the whole clip when nothing is cut", async ({ page }) => {

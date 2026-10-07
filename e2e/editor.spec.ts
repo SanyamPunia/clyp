@@ -3,14 +3,15 @@ import { gradientFamilies, gradientPresets } from "../lib/gradients";
 
 import {
   CLIP_SECONDS,
-  cutLabels,
   keptReadout,
   loadClip,
   loadTrack,
   openEditor,
   outputSize,
   pickShape,
+  pieceLabels,
   pressLane,
+  removeStretch,
   seek,
   settle,
   tabStops,
@@ -21,87 +22,143 @@ import {
  * What the editor does, as opposed to what it writes.
  *
  * These are the truths a unit spec cannot reach, and every one of them stands
- * in for a bug that was found by driving the app: a Cut button with no way
- * back to it, a cut that could take the whole clip, a copy that took the wrong
- * selection.
+ * in for a bug that was found by driving the app: a trimmed piece that showed
+ * the footage it slid over, a cut that could take the whole clip, a copy that
+ * took the wrong selection.
  */
 
-const cutButton = (page: Page) =>
-  page.getByRole("button", { name: "Cut at the playhead" });
+const lane = (page: Page) => page.locator('[data-lane="video"]').first();
 
-async function addCut(page: Page, at: number) {
-  await seek(page, at);
-  await cutButton(page).click();
+/** The lane's x for a point on it, in the lane's own seconds. */
+async function laneX(page: Page, seconds: number) {
+  const box = (await lane(page).boundingBox())!;
+  return box.x + 6 + ((box.width - 12) * seconds) / CLIP_SECONDS;
 }
 
-test.describe("cuts", () => {
-  test("takes the cut second off the length", async ({ page }) => {
+/**
+ * Drags a lane control from where it sits to another point on the lane, both
+ * in the lane's own seconds. Moved by the distance between them rather than
+ * to an absolute x, since the grip's centre is a few pixels inside the edge
+ * it moves.
+ */
+async function dragBy(
+  page: Page,
+  name: string,
+  index: number,
+  from: number,
+  to: number,
+) {
+  const box = (await page
+    .getByRole("slider", { name, exact: true })
+    .nth(index)
+    .boundingBox())!;
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x + (await laneX(page, to)) - (await laneX(page, from)), y, {
+    steps: 12,
+  });
+  await page.mouse.up();
+}
+
+test.describe("pieces", () => {
+  test("taking a piece out takes its length off", async ({ page }) => {
     await openEditor(page);
     await loadClip(page);
     expect(await keptReadout(page)).toBe("6.000s");
 
-    await addCut(page, 2);
-    expect(await cutLabels(page)).toEqual(["Cut, 2.000s to 3.000s"]);
+    await removeStretch(page, 2, 3);
+    expect(await pieceLabels(page)).toEqual([
+      "Piece, 0.000s to 2.000s",
+      "Piece, 3.000s to 6.000s",
+    ]);
     expect(await keptReadout(page)).toBe("5.000s of 6.000s");
   });
 
-  test("a press on the bare lane puts the selection away", async ({ page }) => {
+  test("a trimmed piece closes the gap and the next piece keeps its footage", async ({
+    page,
+  }) => {
     await openEditor(page);
     await loadClip(page);
-    await addCut(page, 2);
+    await seek(page, 3);
+    await page.keyboard.press("s");
 
-    // The selected cut's controls take the Cut button's slot no longer, but
-    // the selection still has to be dismissable, or nothing else can be
-    // selected. This is the bug that stopped a second cut being placed.
-    await expect(page.getByRole("button", { name: /^Cut, / })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    await pressLane(page, 0.72);
-    await expect(page.getByRole("button", { name: /^Cut, / })).toHaveAttribute(
-      "aria-pressed",
-      "false",
-    );
+    // The first piece's end comes in from 3s to 1s. The second piece moves
+    // up to meet it and still opens on its own third second. This is the bug
+    // where it opened on whatever footage it had slid over.
+    await dragBy(page, "Piece end", 0, 3, 1);
+    expect(await pieceLabels(page)).toEqual([
+      "Piece, 0.000s to 1.000s",
+      "Piece, 3.000s to 6.000s",
+    ]);
+    expect(await keptReadout(page)).toBe("4.000s of 6.000s");
+
+    const second = (await page
+      .getByRole("button", { name: /^Piece, 3\.000/ })
+      .boundingBox())!;
+    expect(Math.abs(second.x - (await laneX(page, 1)))).toBeLessThan(4);
   });
 
-  test("a second cut can be placed after the first", async ({ page }) => {
+  test("an edge drags back out to bring the footage back", async ({ page }) => {
     await openEditor(page);
     await loadClip(page);
-    await addCut(page, 1);
-    await pressLane(page, 0.72);
-    await addCut(page, 4);
+    await removeStretch(page, 2, 3);
 
-    expect(await cutLabels(page)).toEqual([
-      "Cut, 1.000s to 2.000s",
-      "Cut, 4.000s to 5.000s",
+    // On the lane the first piece ends at 2s. Its end drags out a second,
+    // into the footage it had lost, and stops at the piece after it.
+    await dragBy(page, "Piece end", 0, 2, 4);
+    expect(await pieceLabels(page)).toEqual([
+      "Piece, 0.000s to 3.000s",
+      "Piece, 3.000s to 6.000s",
+    ]);
+    expect(await keptReadout(page)).toBe("6.000s");
+  });
+
+  test("the clip's own edges trim it and stop at the shortest", async ({ page }) => {
+    await openEditor(page);
+    await loadClip(page);
+
+    await dragBy(page, "Clip start", 0, 0, 7);
+    await dragBy(page, "Clip end", 0, 6, -1);
+    expect(await keptReadout(page)).toBe("0.200s of 6.000s");
+  });
+
+  test("a press on the bare rail puts the selection away", async ({ page }) => {
+    await openEditor(page);
+    await loadClip(page);
+    await removeStretch(page, 2, 3);
+
+    const piece = page.getByRole("button", { name: /^Piece, 0\.000/ });
+    await piece.click();
+    await expect(piece).toHaveAttribute("aria-pressed", "true");
+    // The pieces take 5s of the lane's 6, so the last sixth is bare rail.
+    await pressLane(page, 0.95);
+    await expect(piece).toHaveAttribute("aria-pressed", "false");
+  });
+
+  test("a second stretch can be taken out after the first", async ({ page }) => {
+    await openEditor(page);
+    await loadClip(page);
+    await removeStretch(page, 1, 2);
+    await removeStretch(page, 4, 5);
+    expect(await pieceLabels(page)).toEqual([
+      "Piece, 0.000s to 1.000s",
+      "Piece, 2.000s to 4.000s",
+      "Piece, 5.000s to 6.000s",
     ]);
     expect(await keptReadout(page)).toBe("4.000s of 6.000s");
   });
 
-  test("its sides cannot be dragged until nothing is left", async ({ page }) => {
+  test("offers one cutting tool", async ({ page }) => {
     await openEditor(page);
     await loadClip(page);
-    await addCut(page, 2);
-
-    const lane = page.locator('[data-lane="video"]').first();
-    const box = (await lane.boundingBox())!;
-    const y = box.y + box.height / 2;
-    const dragTo = async (from: number, to: number) => {
-      await page.mouse.move(box.x + box.width * from, y);
-      await page.mouse.down();
-      for (let i = 1; i <= 12; i++) {
-        await page.mouse.move(box.x + box.width * (from + (to - from) * (i / 12)), y);
-      }
-      await page.mouse.up();
-    };
-
-    await dragTo(2 / CLIP_SECONDS, -0.4);
-    await dragTo(3 / CLIP_SECONDS, 1.4);
-
-    // Each side is a piece's own edge now, and a piece stops at the shortest
-    // one, so what is left is the minimum on each side of the cut.
-    expect(await cutLabels(page)).toEqual(["Cut, 0.200s to 5.800s"]);
-    expect(await keptReadout(page)).toBe("0.400s of 6.000s");
+    await expect(
+      page.getByRole("button", { name: /^Split at the playhead/ }),
+    ).toHaveCount(1);
+    await expect(
+      page.getByRole("button", { name: /^Cut at the playhead/ }),
+    ).toHaveCount(0);
   });
 });
 
@@ -124,28 +181,15 @@ test.describe("copy and paste", () => {
     ]);
   });
 
-  test("a cut keeps its length", async ({ page }) => {
-    await openEditor(page);
-    await loadClip(page);
-    await addCut(page, 2.2);
-    await page.keyboard.press("Meta+c");
-    await seek(page, 0.4);
-    await page.keyboard.press("Meta+v");
-
-    expect(await cutLabels(page)).toEqual([
-      "Cut, 0.400s to 1.400s",
-      "Cut, 2.200s to 3.200s",
-    ]);
-  });
-
   test("copies the one thing that is selected", async ({ page }) => {
     await openEditor(page);
     await loadClip(page);
     await seek(page, 0.5);
     await page.getByRole("button", { name: "Add a zoom" }).click();
-    // Selecting a cut must put the zoom's selection away, or "the selected
-    // thing" is ambiguous and the copy takes whichever it checks first.
-    await addCut(page, 3);
+    // Selecting a piece must put the zoom's selection away, or "the selected
+    // thing" is ambiguous and the copy takes the zoom anyway.
+    await seek(page, 3);
+    await page.keyboard.press("s");
     await expect(page.getByRole("button", { name: /^Zoom \d/ })).toHaveAttribute(
       "aria-pressed",
       "false",
@@ -154,11 +198,16 @@ test.describe("copy and paste", () => {
     await page.keyboard.press("Meta+c");
     await seek(page, 5);
     await page.keyboard.press("Meta+v");
-
-    expect(await cutLabels(page)).toHaveLength(2);
     expect(await zoomLabels(page)).toHaveLength(1);
   });
 });
+
+/** Takes a second off the clip's end, from the keyboard. One edit. */
+async function trimASecond(page: Page) {
+  const end = page.getByRole("slider", { name: "Clip end", exact: true });
+  await end.focus();
+  await end.press("Shift+ArrowLeft");
+}
 
 test.describe("undo", () => {
   test("walks the edits back and forward in order", async ({ page }) => {
@@ -172,26 +221,25 @@ test.describe("undo", () => {
     await expect(undo).toBeDisabled();
     await expect(redo).toBeDisabled();
 
-    await addCut(page, 2);
+    await trimASecond(page);
     // Waited out on purpose. Two edits inside one settle window are one
-    // entry, so without this the cut and the speed would come back together.
+    // entry, so without this the trim and the speed would come back together.
     await settle(page);
     await expect(undo).toBeEnabled();
-    await pressLane(page, 0.72);
     await page.getByRole("radio", { name: "2x", exact: true }).first().click();
     await expect.poll(speed).toBe("2x");
     await settle(page);
 
     await undo.click();
     await expect.poll(speed).toBe("1x");
-    expect(await cutLabels(page)).toHaveLength(1);
+    expect(await keptReadout(page)).toBe("5.000s of 6.000s");
 
     await undo.click();
-    expect(await cutLabels(page)).toHaveLength(0);
+    expect(await keptReadout(page)).toBe("6.000s");
     await expect(undo).toBeDisabled();
 
     await redo.click();
-    expect(await cutLabels(page)).toHaveLength(1);
+    expect(await keptReadout(page)).toBe("5.000s of 6.000s");
     await redo.click();
     await expect.poll(speed).toBe("2x");
     await expect(redo).toBeDisabled();
@@ -200,14 +248,14 @@ test.describe("undo", () => {
   test("answers the keyboard too", async ({ page }) => {
     await openEditor(page);
     await loadClip(page);
-    await addCut(page, 2);
+    await trimASecond(page);
     await settle(page);
-    expect(await cutLabels(page)).toHaveLength(1);
+    expect(await keptReadout(page)).toBe("5.000s of 6.000s");
 
     await page.keyboard.press("Meta+z");
-    expect(await cutLabels(page)).toHaveLength(0);
+    expect(await keptReadout(page)).toBe("6.000s");
     await page.keyboard.press("Meta+Shift+z");
-    expect(await cutLabels(page)).toHaveLength(1);
+    expect(await keptReadout(page)).toBe("5.000s of 6.000s");
   });
 
   test("collapses edits made inside one settle window into one entry", async ({
@@ -220,13 +268,12 @@ test.describe("undo", () => {
     // No wait between them. A drag rewrites the state every frame, and one
     // entry per frame is a history nobody can walk back, so the window is
     // what collapses a drag into the snapshot taken before it began.
-    await addCut(page, 2);
-    await pressLane(page, 0.72);
+    await trimASecond(page);
     await page.getByRole("radio", { name: "2x", exact: true }).first().click();
     await settle(page);
 
     await undo.click();
-    expect(await cutLabels(page)).toHaveLength(0);
+    expect(await keptReadout(page)).toBe("6.000s");
     await expect(
       page.locator('[aria-label="Playback speed"] [aria-checked="true"]'),
     ).toHaveText("1x");

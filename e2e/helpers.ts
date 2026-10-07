@@ -61,7 +61,7 @@ export async function loadClip(page: Page, name = "clip.mp4") {
     .locator('input[type="file"][accept*="video"]')
     .first()
     .setInputFiles(fixture(name));
-  await expect(page.getByRole("slider", { name: "Trim start" })).toBeVisible();
+  await expect(page.getByRole("slider", { name: "Clip start" })).toBeVisible();
   await pause(page);
 }
 
@@ -126,7 +126,7 @@ export function expectLength(duration: number, seconds: number) {
   expect(duration).toBeLessThan(seconds + 0.15);
 }
 
-/** The trim bar's own readout, which is the kept length in source seconds. */
+/** The trim bar's own readout, which is the kept length before the speed. */
 export const keptReadout = (page: Page) =>
   page.locator("span:has(> span > span.tabular-nums)").first().innerText();
 
@@ -135,10 +135,29 @@ export const zoomLabels = (page: Page) =>
     els.map((el) => el.getAttribute("aria-label") ?? ""),
   );
 
-export const cutLabels = (page: Page) =>
-  page.getByRole("button", { name: /^Cut, / }).evaluateAll((els) =>
+export const pieceLabels = (page: Page) =>
+  page.getByRole("button", { name: /^Piece, / }).evaluateAll((els) =>
     els.map((el) => el.getAttribute("aria-label") ?? ""),
   );
+
+/**
+ * Takes `from` to `to` out of the clip the way a reader does: a split either
+ * side, a press on the piece between, and Delete.
+ */
+export async function removeStretch(page: Page, from: number, to: number) {
+  await seek(page, from);
+  await page.keyboard.press("s");
+  await seek(page, to);
+  await page.keyboard.press("s");
+  const name = new RegExp(`^Piece, ${from.toFixed(3)}s to ${to.toFixed(3)}s`);
+  await page.getByRole("button", { name }).click();
+  await expect(page.getByRole("button", { name })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await page.keyboard.press("Delete");
+  await expect(page.getByRole("button", { name })).toHaveCount(0);
+}
 
 /** A press on the bare lane, which seeks and puts any selection away. */
 export async function pressLane(page: Page, fraction: number) {

@@ -453,7 +453,7 @@ test.describe("pieces", () => {
     await loadClip(page);
     await splitBlue(page);
     await page.keyboard.press("Delete");
-    await expect(page.getByRole("button", { name: /^Cut, / })).toHaveCount(1);
+    await expect(page.getByRole("button", { name: /^Piece, / })).toHaveCount(2);
 
     const { duration, colours } = await readVideo(page, await exportFile(page), [
       0.5, 1.5, 2.5, 3.5, 4.5,
@@ -468,30 +468,31 @@ test.describe("pieces", () => {
     await splitBlue(page);
     await settle(page);
     await page.keyboard.press("Delete");
-    await expect(page.getByRole("button", { name: /^Cut, / })).toHaveCount(1);
+    await expect(page.getByRole("button", { name: /^Piece, / })).toHaveCount(2);
     await page.keyboard.press("ControlOrMeta+z");
-    await expect(page.getByRole("button", { name: /^Cut, / })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /^Piece, / })).toHaveCount(3);
   });
 
-  test("a piece moves into the room beside it", async ({ page }) => {
+  test("a trimmed piece keeps its own footage in the file", async ({ page }) => {
     await openEditor(page);
     await loadClip(page);
-    await splitBlue(page);
-    await page.keyboard.press("Delete");
+    await seek(page, 3);
+    await page.keyboard.press("s");
 
-    // The piece after the gap, [3, 6], moves back a second into it.
-    await pressLane(page, 4.5 / 6);
-    const piece = page.getByRole("button", { name: /^Piece, 3\.000/ });
-    await piece.focus();
-    await piece.press("Shift+ArrowLeft");
-    await expect(page.getByRole("button", { name: /^Piece, 2\.000/ })).toBeVisible();
+    // The first piece's end comes in two seconds, to 1s. The piece after it
+    // closes up and still opens on the yellow it was cut from, not on the
+    // green and blue it now sits over on the lane.
+    const end = page.getByRole("slider", { name: "Piece end" }).first();
+    await end.focus();
+    await end.press("Shift+ArrowLeft");
+    await end.press("Shift+ArrowLeft");
+    await expect(page.getByRole("button", { name: /^Piece, 0\.000s to 1\.000s/ })).toBeVisible();
 
-    // It now opens on the blue second it moved over, and still runs 3s.
     const { duration, colours } = await readVideo(page, await exportFile(page), [
-      1.5, 2.5, 4.5,
+      0.5, 1.5, 2.5, 3.5,
     ]);
-    expectLength(duration, 5);
-    expect(colours).toEqual(["green", "blue", "magenta"]);
+    expectLength(duration, 4);
+    expect(colours).toEqual(["red", "yellow", "magenta", "cyan"]);
   });
 });
 
@@ -499,7 +500,7 @@ test.describe("the timeline, by pointer", () => {
   const lane = (page: Page) => page.locator('[data-lane="video"]').first();
   const now = (page: Page) =>
     page.evaluate(() => document.querySelector("video")?.currentTime ?? -1);
-  /** The lane's x for a source time, from its own box. */
+  /** The lane's x for a point on it, in the lane's own seconds, from its box. */
   async function xAt(page: Page, seconds: number) {
     const box = (await lane(page).boundingBox())!;
     return { x: box.x + 6 + ((box.width - 12) * seconds) / 6, y: box.y + box.height / 2 };
@@ -541,7 +542,9 @@ test.describe("the timeline, by pointer", () => {
     );
   });
 
-  test("a piece is dragged without selecting it first", async ({ page }) => {
+  test("a drag on a piece moves the playhead and leaves the piece", async ({
+    page,
+  }) => {
     await openEditor(page);
     await loadClip(page);
     await seek(page, 2);
@@ -550,16 +553,17 @@ test.describe("the timeline, by pointer", () => {
     await page.keyboard.press("s");
     await pressLane(page, 2.5 / 6);
     await page.keyboard.press("Delete");
-    // Put the selection away, so the drag below starts on an unselected piece.
-    await page.keyboard.press("Escape");
 
+    // The pieces are [0, 2] and [3, 6], drawn end to end, so 4s on the lane
+    // is the source's fifth second.
     const from = await xAt(page, 4.5);
     const to = await xAt(page, 4);
     await page.mouse.move(from.x, from.y);
     await page.mouse.down();
     await page.mouse.move(to.x, to.y, { steps: 10 });
     await page.mouse.up();
-    await expect(page.getByRole("button", { name: /^Piece, 2\.5/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Piece, 3\.000s to 6\.000s/ })).toBeVisible();
+    await expect.poll(() => now(page)).toBeCloseTo(5, 1);
   });
 
   test("a piece's edge is dragged to make it shorter", async ({ page }) => {
@@ -575,8 +579,10 @@ test.describe("the timeline, by pointer", () => {
     await page.mouse.down();
     await page.mouse.move(to.x, edge.y + edge.height / 2, { steps: 10 });
     await page.mouse.up();
-    // What the edge came in by is now removed.
-    await expect(page.getByRole("button", { name: /^Cut, 2\.0/ })).toBeVisible();
+    // What the edge came in by is now removed, and the piece after it
+    // closes up rather than leaving a gap.
+    await expect(page.getByRole("button", { name: /^Piece, 0\.000s to 2\.0/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Piece, 3\.000s to 6\.000s/ })).toBeVisible();
   });
 
   test("the ruler scrubs", async ({ page }) => {
@@ -597,7 +603,7 @@ test.describe("transitions", () => {
     await page.keyboard.press("s");
     await pressLane(page, 2.5 / 6);
     await page.keyboard.press("Delete");
-    await page.getByRole("button", { name: /^Cut, / }).click();
+    await page.getByRole("button", { name: /^Join at 3\.000/ }).click();
     await page.getByRole("combobox", { name: "Transition at this join" }).click();
     await page.getByRole("option", { name: kind, exact: true }).click();
   }
@@ -699,7 +705,7 @@ test.describe("click ripples", () => {
       });
     });
     await page.reload();
-    await expect(page.getByRole("slider", { name: "Trim start" })).toBeVisible();
+    await expect(page.getByRole("slider", { name: "Clip start" })).toBeVisible();
     await pause(page);
 
     await page.getByRole("switch", { name: "Show each click" }).click();
