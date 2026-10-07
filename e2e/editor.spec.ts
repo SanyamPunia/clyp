@@ -115,6 +115,82 @@ test.describe("pieces", () => {
     expect(await keptReadout(page)).toBe("6.000s");
   });
 
+  test("a start edge moves alone, and the pieces close up when it is let go", async ({
+    page,
+  }) => {
+    await openEditor(page);
+    await loadClip(page);
+    await seek(page, 3);
+    await page.keyboard.press("s");
+
+    // The second piece's start comes in from 3s to 4s. While it is held, its
+    // end stays where it was and a gap opens in front of it.
+    const piece = page.getByRole("button", { name: /^Piece, 3\.000/ });
+    const before = (await piece.boundingBox())!;
+    const edge = (await page
+      .getByRole("slider", { name: "Piece start", exact: true })
+      .nth(1)
+      .boundingBox())!;
+    const y = edge.y + edge.height / 2;
+    const x = edge.x + edge.width / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + (await laneX(page, 4)) - (await laneX(page, 3)), y, {
+      steps: 12,
+    });
+    const held = (await page.getByRole("button", { name: /^Piece, 4\.000/ }).boundingBox())!;
+    expect(Math.abs(held.x + held.width - (before.x + before.width))).toBeLessThan(3);
+    expect(held.x - before.x).toBeGreaterThan(20);
+
+    await page.mouse.up();
+    await expect
+      .poll(async () => {
+        const box = (await page
+          .getByRole("button", { name: /^Piece, 4\.000/ })
+          .boundingBox())!;
+        return Math.round(box.x - (await laneX(page, 3)));
+      })
+      .toBe(0);
+    expect(await keptReadout(page)).toBe("5.000s of 6.000s");
+  });
+
+  test("a piece is dragged to another place in the order", async ({ page }) => {
+    await openEditor(page);
+    await loadClip(page);
+    await seek(page, 2);
+    await page.keyboard.press("s");
+
+    // [0, 2] then [2, 6]. The first is picked up and dropped past the
+    // middle of the second.
+    const piece = (await page.getByRole("button", { name: /^Piece, 0\.000/ }).boundingBox())!;
+    const y = piece.y + piece.height / 2;
+    await page.mouse.move(piece.x + piece.width / 2, y);
+    await page.mouse.down();
+    await page.mouse.move(await laneX(page, 5.5), y, { steps: 12 });
+    await page.mouse.up();
+
+    const order = await page
+      .getByRole("button", { name: /^Piece, / })
+      .evaluateAll((els) =>
+        els
+          .map((el) => ({
+            label: el.getAttribute("aria-label") ?? "",
+            left: el.getBoundingClientRect().left,
+          }))
+          .sort((a, b) => a.left - b.left)
+          .map((el) => el.label),
+      );
+    expect(order).toEqual(["Piece, 2.000s to 6.000s", "Piece, 0.000s to 2.000s"]);
+    expect(await keptReadout(page)).toBe("6.000s");
+    // The playhead stays on its footage, the source's second second, which
+    // now opens the clip. It went to the clip's end when the bar tracked the
+    // piece by its place in the order.
+    await expect(page.getByRole("slider", { name: "Playhead" })).toHaveAttribute(
+      "aria-valuetext",
+      "0.000s",
+    );
+  });
+
   test("the clip's own edges trim it and stop at the shortest", async ({ page }) => {
     await openEditor(page);
     await loadClip(page);

@@ -542,7 +542,7 @@ test.describe("the timeline, by pointer", () => {
     );
   });
 
-  test("a drag on a piece moves the playhead and leaves the piece", async ({
+  test("a piece dragged to the front plays first, with its own footage", async ({
     page,
   }) => {
     await openEditor(page);
@@ -554,16 +554,45 @@ test.describe("the timeline, by pointer", () => {
     await pressLane(page, 2.5 / 6);
     await page.keyboard.press("Delete");
 
-    // The pieces are [0, 2] and [3, 6], drawn end to end, so 4s on the lane
-    // is the source's fifth second.
-    const from = await xAt(page, 4.5);
-    const to = await xAt(page, 4);
+    // The pieces are [0, 2] and [3, 6], drawn end to end. The second is
+    // picked up by its middle and dropped at the front.
+    const from = await xAt(page, 3.5);
+    const to = await xAt(page, 0.2);
     await page.mouse.move(from.x, from.y);
     await page.mouse.down();
-    await page.mouse.move(to.x, to.y, { steps: 10 });
+    await page.mouse.move(to.x, to.y, { steps: 12 });
     await page.mouse.up();
-    await expect(page.getByRole("button", { name: /^Piece, 3\.000s to 6\.000s/ })).toBeVisible();
-    await expect.poll(() => now(page)).toBeCloseTo(5, 1);
+    const order = await page
+      .getByRole("button", { name: /^Piece, / })
+      .evaluateAll((els) =>
+        els
+          .map((el) => ({
+            label: el.getAttribute("aria-label") ?? "",
+            left: el.getBoundingClientRect().left,
+          }))
+          .sort((a, b) => a.left - b.left)
+          .map((el) => el.label),
+      );
+    expect(order).toEqual([
+      "Piece, 3.000s to 6.000s",
+      "Piece, 0.000s to 2.000s",
+    ]);
+
+    // The preview plays the same order: from the top, the source's third
+    // second runs to the file's end and then the first second plays.
+    await page.getByRole("button", { name: "Back to the start" }).click();
+    await expect.poll(() => now(page)).toBeCloseTo(3, 1);
+    await page.getByRole("button", { name: /^Play/ }).click();
+    await expect
+      .poll(() => now(page), { timeout: 8_000 })
+      .toBeLessThan(2);
+    await pause(page);
+
+    const { duration, colours } = await readVideo(page, await exportFile(page), [
+      0.5, 1.5, 2.5, 3.5, 4.5,
+    ]);
+    expectLength(duration, 5);
+    expect(colours).toEqual(["yellow", "magenta", "cyan", "red", "green"]);
   });
 
   test("a piece's edge is dragged to make it shorter", async ({ page }) => {
@@ -603,7 +632,8 @@ test.describe("transitions", () => {
     await page.keyboard.press("s");
     await pressLane(page, 2.5 / 6);
     await page.keyboard.press("Delete");
-    await page.getByRole("button", { name: /^Join at 3\.000/ }).click();
+    // The join sits where the output has it: two seconds in.
+    await page.getByRole("button", { name: /^Join at 2\.000/ }).click();
     await page.getByRole("combobox", { name: "Transition at this join" }).click();
     await page.getByRole("option", { name: kind, exact: true }).click();
   }
