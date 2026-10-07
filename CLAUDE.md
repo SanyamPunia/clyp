@@ -724,10 +724,10 @@ have to agree about where a second is.
 
 **The lane draws the output, not the source.** The pieces sit end to end in
 the order they play, so each piece carries its own footage, and trimming one
-moves the pieces after it up rather than leaving a gap. `toLane` and
-`fromLane` in `lib/clip-pieces.ts` are the map, and every lane under the
-picture's goes through them: the playhead, the ruler, the zooms, the fades,
-the suggestions and the soundtrack.
+moves the pieces after it up rather than leaving a gap. `laneOf` in
+`lib/clip-pieces.ts` is the map, and every lane under the picture's goes
+through it: the playhead, the ruler, the zooms, the fades, the suggestions and
+the soundtrack.
 
 - **The first build drew the source, and a piece was a window on it.**
   Dragging a piece into a gap moved the window, so the piece showed whatever
@@ -736,11 +736,11 @@ the suggestions and the soundtrack.
   second piece's own. Drawing the output removes the gap that invited the
   drag.
 - **The lane keeps the whole source's width.** Its scale does not change
-  under a drag, so an edge stays under the pointer. Before the first piece is
-  the footage the in point took off, at its own place, which is where the
-  first piece's start edge is dragged to bring it back. After the last piece
-  is the footage the out point took off. A cut takes no room, so the rail
-  ends short of the lane's right edge by the length cut from the middle.
+  under a drag, so an edge stays under the pointer. In front of the first
+  piece is the footage it can still reach back into, at its own place, which
+  is where its start edge is dragged to bring it back. After the last piece is
+  the footage it can still reach on into. Footage no piece holds takes no
+  room, so the rail ends short of the lane's right edge.
 - **The ruler and the clock read the output's seconds before the speed**,
   counted from the first piece, so a label says what the file says at that
   point.
@@ -789,14 +789,13 @@ the suggestions and the soundtrack.
   the source at six seconds at 0.99 SSIM against 0.61 at zero.
 - **`clipSeconds` in `clyp.tsx` is the one length everything reads**, so the
   toolbar, the duration readout, the size estimate and the encode cannot
-  describe a length nobody asked for. It is `keptSeconds(trim, cuts) / speed`,
-  so every cut comes off it. See Cuts.
-- **The trim is stored under the edits key, never beside the Blob.** It is an
-  edit on the draft rather than part of it, and putting it in the media record
-  would rewrite the whole Blob on every drag of a handle. See Draft
-  persistence.
-- The shortest a trim may leave is `MIN_TRIM`, 0.2 s. Arrow keys step 0.1 s and
-  Shift steps 1 s, on both handles, which are real sliders with their own
+  describe a length nobody asked for. It is `lengthOf(pieces) / speed`.
+- **The pieces are stored under the edits key, never beside the Blob.** They
+  are an edit on the draft rather than part of it, and putting them in the
+  media record would rewrite the whole Blob on every drag of an edge. See
+  Draft persistence.
+- The shortest a piece may be is `MIN_PIECE`, 0.2 s. Arrow keys step a frame
+  and Shift steps 1 s on every edge, which are real sliders with their own
   labels and values.
 - **The transport sits in the same recessed pill the canvas toolbar gives its
   zoom cluster**, so two groups of icon buttons on one surface read as the same
@@ -881,132 +880,116 @@ the suggestions and the soundtrack.
   the tab order while they are out of sight. The state is the bar's own and is
   not persisted.
 
-## Cuts
-
-`lib/clip-cuts.ts` is the model. A cut is a stretch removed from the middle of
-the clip, on the source's axis like the trim, the speed and the zooms, so
-trimming never moves one and a speed change plays what survives faster rather
-than shifting it. The cuts live in `clyp.tsx` beside the trim and are stored
-with it under the edits key.
-
-**The trim can only take time off the ends, and a screen recording's dead time
-is rarely at the ends.** It is the page load, the fumble, the pause to read
-what just appeared.
-
-**Output time stops being source time shifted.** With a cut in the middle the
-two are a piecewise map, and everything that has to agree about when a frame
-lands goes through `toOutput`: the encode's video loop, both of its audio
-paths, the preview's playhead, the duration readout and the size estimate.
-Nothing recomputes it. `outputAt` is the same arithmetic against segments
-already derived, for the encode loop, which calls it once a frame and must not
-re-sort the cut list tens of thousands of times for one export.
-
-- **Cuts are tidied on every change**: sorted, clipped to the trim, and merged
-  where they overlap or touch. Two cuts that meet are one cut, since the join
-  they produce is the same, and keeping them apart would leave a zero-length
-  segment between them. So nothing downstream copes with an overlap, and
-  `afterCuts` never needs more than one step.
-- **Cuts are made by the pieces, never placed on their own.** A cut is what a
-  piece's edge leaves when it comes in, or what a deleted piece leaves. There
-  is no Cut button and no cut on the lane to select: on the lane a cut is the
-  join between two pieces. The Cut button sat beside Split and did nearly the
-  same thing, and two tools for one job read as two different jobs.
-- **Playback steps over a cut, and only while playing.** A paused playhead at a
-  cut's own start is showing the last frame that survives, which is the right
-  frame, and a loop that moved it would fight a scrub. A scrub lands on a kept
-  frame through `nearestKept`, taking the nearer edge so the playhead does not
-  run ahead of the pointer. A frame step carries on the way it was going
-  instead, since the nearer edge one frame into a cut is the frame just left
-  and the button would appear dead.
-- **The encode runs one pass per kept segment.** `sink.samples` seeks to the
-  keyframe at or before its in point, so a cut is time the decoder never
-  spends.
-- **The streaming audio path carries a monotonic guard.** An audio sample is
-  about 21ms and a segment boundary falls inside one almost always, so the
-  sample straddling a join would be written twice, the second time at a
-  timestamp the muxer has already passed. AAC needs its samples in order and
-  not overlapping, so the later copy is dropped. What is lost is the tail of
-  one sample at each join.
-- **A mixed clip is read as one range per kept segment** and scheduled into the
-  `OfflineAudioContext` at its own output time, which is what a context is for.
-  All of them come off a single decoder: one `Input` per segment would hold
-  that many decode states on the same forty megabyte Blob at once.
-- **A laid soundtrack is scheduled once and plays through.** Its anchor moves
-  with the frame it is anchored to, through `toOutput`, but the track itself
-  does not jump with the picture. Music with a jump cut in it sounds broken,
-  and a music bed over a cut is what every editor plays straight.
-- A zoom region inside a cut plays nothing, the same as one outside the trim.
-  On the lane it shrinks to the join, since a cut takes no room there.
-
-Verified through the export, on a six second clip of one colour a second. One
-cut of the blue second gives a 5.000s file of 150 frames reading red, green,
-yellow, magenta, cyan, with the audio a continuous 440Hz across the join and no
-silent window in it. Two cuts give 4.000s and 120 frames reading red, blue,
-yellow, cyan. With a soundtrack that steps 440Hz to 880Hz at its own midpoint,
-the step lands at the output second its anchor maps to. With no cuts, 6.000s
-and 180 frames, unchanged.
-
 ## Pieces
 
-`lib/clip-pieces.ts` is the model. Split the clip at the playhead, drag a
-piece's edges to trim it, press a piece and delete it: the model every editor
-uses. Split is S or the scissors, and it is the one cutting tool.
+`lib/clip-pieces.ts` is the model. The clip is a list of pieces in the order
+they play, each a stretch of the source with its own id. Split at the
+playhead, drag a piece's ends to trim it, drag the piece to put it elsewhere in
+the order, press it and delete it: the model every editor uses. Split is S or
+the scissors, and it is the one cutting tool.
 
-**A trimmed or deleted stretch is a cut.** Nothing downstream learns a new
-idea: the encode, both audio paths, the preview and every readout already
-handle a cut. The split points are the only new state, stored with the edits
-and in the undo history.
+**The list is the whole edit.** The output is each piece's footage end to end,
+in list order, and nothing else. There is no separate in point, out point,
+cut or split: the first piece's start is where the clip begins, footage no
+piece holds is what was cut, and two pieces of continuous footage side by
+side are what a split leaves. The encode, both audio paths, the preview, every
+readout and the undo history read the one list.
 
-- **Splits are kept raw and read through `tidySplits`.** A split inside a cut,
-  outside the trim, or closer than `MIN_PIECE` to an edge divides nothing and
-  is ignored, so a trim or a cut across one needs no repair. `MIN_PIECE` is
-  `MIN_CUT`, so every piece can be deleted as a cut, and a split that would
-  leave a piece under it is refused with a toast.
-- **Each edge of a piece trims it.** Coming in leaves a cut, and going out
-  brings footage back up to the piece beside it on the source, through
-  `resizePiece`. It reads the whole edit back off the list of pieces: the trim
-  is the first piece's start to the last one's end, every gap on the source
-  is a cut, and pieces that touch meet at a split. A join keeps its
-  transition either way.
-  - **An end edge and the first piece's start edge stay under the pointer.**
-    Any other start edge stays at its join while the piece's footage moves
-    under it, since the piece before it holds that place on the lane. That is
-    the ripple trim of a magnetic timeline, and the playhead follows the edge
-    so the frame it lands on is on the canvas.
-  - **In one piece the edges are the clip's in and out points**, labelled
-    Clip start and Clip end, and their grips always show. There are no
-    separate trim handles, so there is one handle on each edge in every
-    state.
-- **A piece does not move.** A press selects it and scrubs, so a drag across
-  the pieces moves the playhead. Where a piece sits is decided by the pieces
-  before it, and there is no gap to drag it into.
+**Two pieces never share footage.** A piece's ends stop at the footage of
+whichever piece holds the source beside it, through `roomOf`, so a source time
+belongs to at most one piece and the map from the source to the output is one
+to one. That is what lets the zooms, the fades, the ripples and a soundtrack's
+anchor stay on the source's axis: they follow their footage wherever its piece
+plays.
+
+- **The first build kept the source order and called a piece a window on
+  it.** Dragging a piece into a gap slid the window, so the piece showed
+  whatever footage it slid over. Pieces now carry their own `start` and `end`,
+  and nothing moves them but their own ends.
+- **Each end of a piece trims it.** Coming in removes footage from the piece.
+  Going out brings footage back, up to the piece holding the source beside it
+  or the file's own end. It never goes under `MIN_PIECE`.
+  - **The end being dragged is the only thing that moves.** An end edge moves
+    the pieces after it along with it. A start edge cannot do that without
+    moving the pieces in front, so while it is held the piece is drawn through
+    a `LanePreview`: it and everything after it are shifted so its far end
+    holds still. Bringing the start in opens a gap in front of it, taking it
+    out runs it over the piece before, and letting go closes the pieces up
+    over 200 ms. The second build kept the pieces packed during the drag, and
+    a start edge then moved the piece's other end, which read as the wrong
+    end being dragged.
+  - **In one piece the ends are the clip's in and out points**, labelled Clip
+    start and Clip end, and their grips always show. There are no separate
+    trim handles, so there is one handle on each end in every state.
+  - The playhead follows the end being dragged, so the frame it lands on is
+    on the canvas.
+- **A piece is dragged to put it elsewhere in the order.** A press selects it,
+  and past 4px of travel it is picked up: it follows the pointer above the
+  others, and they make room where it would land, from `dropIndex`. Letting go
+  drops it there with its footage and its way in. A press that does not travel
+  is a click and puts the playhead where it landed. While carried, the cursor
+  is `grabbing` on the root, since the pointer can leave the lane. Alt with an
+  arrow moves a focused piece one place.
+- **Playback follows the order, not the file.** The frame loop holds which
+  piece the playhead is in, since a time where one piece ends and another
+  opens belongs to either, and only the loop saw the playhead arrive. Playing
+  past a piece's end goes to the next piece's start, without a seek when the
+  footage is continuous, since a seek to where the element already is
+  stutters. Every seek the bar makes names the piece it is aimed at.
+  Footage no piece holds has no frame in the export, so a playhead left there
+  goes to the join it was cut from.
+- **A clip parked at its own end starts over on play.** That rule moved from
+  the owner's play toggle into the bar's `play` listener, since only the bar
+  knows the playhead is in the last piece: where the last piece ends another
+  can open, and a seek there would play that one.
 - **The playhead is picked up by its knob**, above the pieces, or by a press
-  anywhere on the lane or the ruler. Its line takes no presses: a split leaves
-  it standing on the join, and the line's grab area took every press meant for
-  the edges either side. The knob is a slider with the arrow keys, and the
-  loop writes its value like the clock.
-- Pieces are lane instances only while there is more than one, so a clip in
-  one piece has nothing new to tab past.
+  on the bare lane or the ruler. Its line takes no presses: a split leaves it
+  standing on the join, and the line's grab area took every press meant for
+  the ends either side.
 - **Delete or Backspace removes the selected piece at once**, the same as a
   mark, and the toast carries an Undo. The piece's own Delete button asks
-  first, since a press on a button is the easier one to make by accident.
-  Deleting the first or last piece moves the in or out point rather than
-  leaving a cut against it, which would put footage before the first piece
-  that nothing can reach.
-- Two pieces are drawn a hairline apart, so a join reads as a division of the
-  block. The selected piece is ringed in the selection tone, since brand is
-  the playhead's.
+  first, since a press on a button is the easier one to make by accident. The
+  last piece cannot be deleted.
+- Pieces are lane instances only while there is more than one, so a clip in
+  one piece has nothing new to tab past. Two pieces are drawn a hairline
+  apart, so a join reads as a division of the block. The selected piece is
+  ringed in the selection tone, since brand is the playhead's.
+- **The encode runs one pass per piece, in play order.** `sink.samples` seeks
+  to the keyframe at or before the piece's start, so footage no piece holds is
+  time the decoder never spends, and a piece played out of order is a seek. A
+  sample is placed against its own piece's start.
+- **The streaming audio path carries a monotonic guard.** An audio sample is
+  about 21ms and a join falls inside one almost always, so the sample
+  straddling it would be written twice, the second time at a timestamp the
+  muxer has already passed. AAC needs its samples in order and not
+  overlapping, so the later copy is dropped. What is lost is the tail of one
+  sample at each join.
+- **A mixed clip is read as one range per piece** and scheduled into the
+  `OfflineAudioContext` at its own output time, which is what a context is
+  for. All of them come off a single decoder.
+- **A laid soundtrack is scheduled once and plays through.** Its anchor moves
+  with the frame it is anchored to, read off the same lane, but the track
+  itself does not jump with the picture. Music with a jump cut in it sounds
+  broken.
+- **A draft stored before pieces had an order** holds an in and out point,
+  cuts and splits, and `fromLegacy` reads it as the pieces they made. Every
+  restore goes through `tidyPieces`, which drops any piece sharing footage
+  with one before it.
 
-Verified through the export: splitting either side of the blue second and
-deleting the piece gives 5s reading red, green, yellow, magenta, cyan.
-Splitting at 3s and bringing the first piece's end in to 1s gives 4s reading
-red, yellow, magenta, cyan: the second piece keeps its own footage.
+Verified through the export, on a six second clip of one colour a second.
+Splitting either side of the blue second and deleting the piece gives 5s
+reading red, green, yellow, magenta, cyan, with the audio a continuous 440Hz
+across the join. Splitting at 3s and bringing the first piece's end in to 1s
+gives 4s reading red, yellow, magenta, cyan. Dragging the piece after the
+removed blue second to the front gives 5s reading yellow, magenta, cyan, red,
+green.
 
 ## Transitions
 
-`lib/clip-transitions.ts` is the model. A transition lives on the cut whose
-join it softens, and is placed on the output's clock, since that is where the
-join is: two source seconds a cut apart are one output instant. The preview's
+`lib/clip-transitions.ts` is the model. A transition lives on the piece it
+runs into, so it goes with that piece when the order changes, and is placed
+on the output's clock, since that is where the join is: two pieces from
+anywhere in the source meet at one output instant. The preview's
 loop and the worker's encode loop both read `transitionAt`, so they agree.
 
 - **Four are centred on the join and one is not.** A dip to black, a dip to
@@ -1026,24 +1009,20 @@ loop and the worker's encode loop both read `transitionAt`, so they agree.
 - **A dip is a colour over the picture, inside its own corners**, so the frame
   around it holds while the picture goes to black or white. A zoom pushes in
   on top of any zoom region, and marks ride it the way they ride a region.
-- **Every join between two pieces can carry one, a cut's or a split's.** Where
-  footage was removed between the pieces the join is a cut and the
-  transition is the cut's. Where the footage is continuous it is a split, and
-  a split is `{ at, transition? }` for this: a dip or a push in on a change of
-  subject is a style, not a repair. `joinsBetween` lists every join off the
-  pieces with whichever transition it carries, so `joinsOf` reads both the
-  same way, and `resizePiece` carries a join's transition across when an edge
-  turns one kind into the other.
-- **Every join is a lane instance of its own**, selected by the source time
-  the second piece opens on. It is a small dot on the lane's bottom edge,
+- **Every join between two pieces can carry one**, whether the footage either
+  side is continuous or not: a dip or a push in on a change of subject is a
+  style, not a repair. `joinsOf` lists them off the pieces in play order. The
+  first piece's way in is never read.
+- **Every join is a lane instance of its own**, selected by the id of the
+  piece it runs into. It is a small dot on the lane's bottom edge,
   with a tooltip, and a press on it selects the join. A dot rather than the
   whole hairline, so a press higher up reaches the pieces' own edges. At the
   bottom rather than the top, since a split leaves the playhead standing on
   the join and its knob is at the top: the first build put the dot there and
   the knob swallowed every press on it. Its controls are the one
-  `TransitionPicker`, and an X that takes the join away: a split's pieces
-  become one, and a cut's footage comes back. Delete does the same, without
-  asking, since undo brings either back.
+  `TransitionPicker`, and, where the footage either side is continuous, an X
+  that joins the two pieces back into one. Delete does the same, without
+  asking, since undo brings it back.
 - It is picked as a select, since five named kinds as chips would run the row
   past the panel. A join with one shows a small blend mark on the lane.
 - **Each choice previews itself on hover or keyboard focus.** A tooltip beside
@@ -1055,8 +1034,6 @@ loop and the worker's encode loop both read `transitionAt`, so they agree.
   loop, with the swap between the clips on a step at the halfway point: the
   same shape the real ones have, where four centre on the join and a dissolve
   starts at it. Under reduced motion it holds on the first clip.
-- A split stored as a bare number, from a record written before a split could
-  carry a transition, is read back as a split with none.
 - A stored transition of a kind or length this build does not offer is read
   back as a straight cut or the default length, through `tidyTransition`.
 
@@ -1068,8 +1045,8 @@ the yellow alone at 2.8s.
 ## Undo
 
 `components/use-edit-history.ts` is the history, and it covers the edits: the
-trim, the cuts, the splits, the speed, the zoom regions, a soundtrack's
-placement and the marks. Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z, plus two buttons beside the playhead
+pieces, the speed, the zoom regions, the fades, a soundtrack's placement and
+the marks. Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z, plus two buttons beside the playhead
 clock. It runs for an image too, since marks are edits on a still, and there
 the keys are the only way in.
 
@@ -1176,7 +1153,8 @@ and the Motion radiogroup is one more while a moving preset is chosen.
 | Cmd/Ctrl V | Paste it at the playhead |
 | Cmd/Ctrl Z | Undo, Shift to redo |
 | S | Split the clip at the playhead |
-| Delete or Backspace | Remove the selected mark or piece, or take a selected join away |
+| Delete or Backspace | Remove the selected mark or piece, or join a selected join's pieces back |
+| Alt Left or Right | Move the focused piece one place in the order |
 
 **Cmd C never fires over a real copy.** Text the reader has selected is theirs,
 and a field being typed in keeps its own undo stack, which is the browser's and
@@ -1712,9 +1690,9 @@ the region's length on its own.
     answer for feedback that decorates a state the transport already reports.
 - **Play and pause is one rule in `clyp.tsx`, asked for from three places:**
   the transport button, the spacebar, and a click on the picture itself, which
-  is what every player does. It lives with whoever owns both the element and
-  the trim, since a clip parked at its own out point plays nothing and pressing
-  play there has to start it over.
+  is what every player does. Starting a clip over when it is parked at its
+  own end is the trim bar's, from its `play` listener, since only the bar
+  knows the playhead is in the last piece. See Pieces.
   - **The tolerance on "parked at the end" is a frame and a half, not one.**
     Stopping parks the playhead a frame short of the out point and the element
     snaps that to its own nearest frame, which can land just under an
@@ -1795,8 +1773,8 @@ Style options are a few hundred bytes and stay in localStorage, merged over
 field undefined.
 
 **The clip's edits are stored under a key of their own, `edits`, in the same
-IndexedDB store.** The trim, the cuts with their transitions, the splits, the
-speed, the zoom regions and the soundtrack's placement are a few hundred bytes. They were not stored at all at first,
+IndexedDB store.** The pieces with their transitions, the speed, the zoom
+regions, the fades and the soundtrack's placement are a few hundred bytes. They were not stored at all at first,
 because the only record held the Blob and rewriting forty megabytes on every
 drag of a handle was out of the question. A second key costs nothing to
 rewrite, so the edits follow every change on a 300 ms debounce, which a drag
@@ -1812,9 +1790,10 @@ settles well inside, and the Blob is never touched.
   soundtrack's own restore for the same reason, clamped to the track's length.
 - **Everything is clamped to the restored duration and snapped to the frame
   grid on the way in.** A record that disagrees with its file can never cut
-  past the end. A speed outside `SPEED_OPTIONS` falls back to 1, and the cuts
-  are tidied against the restored trim, so a stored overlap cannot survive a
-  reload. A record written before cuts existed reads back with none.
+  past the end. A speed outside `SPEED_OPTIONS` falls back to 1, and the
+  pieces go through `tidyPieces`, so a stored overlap cannot survive a
+  reload. A record written before pieces had an order reads back through
+  `fromLegacy`.
 - **A restore resets the undo history.** Putting a draft back is not an edit to
   walk back from. See Undo.
 - An image has no edits and clears the key. Removing the clip clears it. The
