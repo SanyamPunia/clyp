@@ -136,6 +136,13 @@
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
+  /* A piece carried along the timeline. On the root, since the pointer can
+     leave the lane mid-drag, and on every descendant, since a child with a
+     cursor of its own beats an inherited one. */
+  html[data-dragging="true"],
+  html[data-dragging="true"] * {
+    cursor: grabbing;
+  }
 }
 
 @layer components {

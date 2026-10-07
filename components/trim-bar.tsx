@@ -57,24 +57,18 @@ import {
   roomFor as roomForFade,
 } from "@/lib/clip-fade";
 import {
-  type Cut,
-  type Segment,
-  afterCuts,
-  cutAt,
-  keptSeconds,
-  keptSegments,
-  nearestKept,
-  newCutId,
-} from "@/lib/clip-cuts";
-import {
+  type LanePreview,
   type Piece,
-  type PieceEdit,
-  type Split,
-  fromLane,
-  joinsBetween,
-  pieces as piecesOf,
+  continues,
+  dropIndex,
+  indexAt,
+  laneOf,
+  lengthOf,
+  movePiece,
   resizePiece,
-  toLane,
+  roomOf,
+  segmentsOf,
+  sourceAt,
 } from "@/lib/clip-pieces";
 import {
   DEFAULT_TRANSITION_DURATION,
@@ -95,7 +89,7 @@ import { DEFAULT_PACE, FOLLOW_PACES } from "@/lib/motion";
 import { drawWaveform, readWaveform, type Waveform } from "@/lib/waveform";
 import { EDIT_FPS, SPEED_OPTIONS, formatSpeed } from "@/lib/video-export";
 import { cn } from "@/lib/utils";
-import type { Soundtrack, Trim } from "@/types/screenshot";
+import type { Soundtrack } from "@/types/screenshot";
 
 /**
  * The clip's pieces, and the preview's playhead.
@@ -134,6 +128,19 @@ const FRAME = 1 / EDIT_FPS;
 const COARSE_STEP = 1;
 
 const snap = (seconds: number) => Math.round(seconds / FRAME) * FRAME;
+
+/** How far a press on a piece must travel, in px, before it picks the piece up. */
+const DRAG_START = 4;
+
+/**
+ * How far past a piece's end playback may be when the loop first sees it and
+ * still count as having played to the end, rather than as a seek elsewhere.
+ * A frame at 60 a second is 17ms, and at 3x that is 50ms of source.
+ */
+const END_SLACK = 0.1;
+
+/** How long the pieces take to close up after an edge or a piece is let go. */
+const SETTLE_MS = 200;
 
 /** The transition select's own value for a straight cut, since a select needs a string. */
 const NO_TRANSITION = "none";
@@ -225,54 +232,40 @@ interface TrimBarProps {
    */
   video: React.RefObject<HTMLVideoElement | null>;
   duration: number;
-  trim: Trim;
+  /** The clip's pieces in the order they play. See `lib/clip-pieces.ts`. */
+  pieces: Piece[];
   onSeek: (time: number) => void;
   onPlayback: (playing: boolean) => void;
-  /** Play or pause. The rule lives with whoever owns the element and the trim. */
+  /** Play or pause. The rule lives with whoever owns the element. */
   onToggle: () => void;
   /**
-   * The playback rate. The lane stays in the source's own seconds whatever it
-   * is, since that is what the handles cut on, and a soundtrack's region is
-   * the one thing drawn against it that runs on the output's clock instead.
+   * The playback rate. The lane is drawn in seconds before it, and a
+   * soundtrack's region is the one thing drawn on it that runs on the
+   * output's clock instead.
    */
   speed: number;
   onSpeedChange: (speed: number) => void;
   /**
-   * Stretches of the clip that close in on the picture, on the same axis as
-   * the trim. The bar draws and moves them. The picture and the export are
-   * the owner's business.
+   * Stretches of the clip that close in on the picture, on the source's axis,
+   * so they follow their footage. The bar draws and moves them. The picture
+   * and the export are the owner's business.
    */
   zooms: ZoomRegion[];
   selectedZoom: string | null;
+  /** The selected piece's id, or null. */
+  selectedPiece: string | null;
   /**
-   * Stretches removed from the source. They take no room on the lane: the
-   * pieces either side of one meet at a join.
+   * The selected join, by the id of the piece it runs into. A join is where
+   * a transition is set.
    */
-  cuts: Cut[];
-  /**
-   * Split points on the source's axis. The kept clip is pieces between the
-   * splits and the cuts: an edge drag trims one, a press selects one, and
-   * Delete takes it out.
-   */
-  splits: Split[];
-  /** The selected piece's start, or null. */
-  selectedPiece: number | null;
-  /**
-   * The selected join between two pieces, by the source time the second one
-   * opens on. A join is where a transition is set, whether it is a split or a
-   * cut underneath.
-   */
-  selectedJoin: number | null;
-  onJoinSelect: (at: number | null) => void;
-  onJoinTransition: (at: number, transition: Transition | undefined) => void;
-  /**
-   * Takes a join away: two pieces of continuous footage become one, and a
-   * cut's footage comes back between the two pieces.
-   */
-  onJoinRemove: (at: number) => void;
-  onPieceSelect: (start: number | null) => void;
-  /** A piece resized: the edit that results, and where the piece now starts. */
-  onPiecesChange: (edit: PieceEdit, selected: number) => void;
+  selectedJoin: string | null;
+  onJoinSelect: (id: string | null) => void;
+  onJoinTransition: (id: string, transition: Transition | undefined) => void;
+  /** Joins two pieces of continuous footage back into one. */
+  onJoinRemove: (id: string) => void;
+  onPieceSelect: (id: string | null) => void;
+  /** The pieces after an edge drag, a move, or their keys. */
+  onPiecesChange: (pieces: Piece[]) => void;
   onSplit: () => void;
   /** Deletes the selected piece at once, for the keyboard. Undo covers it. */
   onPieceDelete: () => void;
@@ -342,7 +335,7 @@ function axisLabel(at: number, interval: number, duration: number): string {
 export function TrimBar({
   video,
   duration,
-  trim,
+  pieces,
   onSeek,
   onPlayback,
   onToggle,
@@ -359,8 +352,6 @@ export function TrimBar({
   onSpeedChange,
   zooms,
   selectedZoom,
-  cuts,
-  splits,
   selectedPiece,
   onPieceSelect,
   onPiecesChange,
@@ -421,13 +412,40 @@ export function TrimBar({
   // The lane's usable span in px, kept in a ref because the playhead is
   // written every frame and must not render anything.
   const spanRef = useRef(0);
-  // The live trim and the live seek, for the frame loop. It is bound once and
-  // would otherwise close over the values this component mounted with. Written
-  // in an effect rather than during render, which is not a ref's to do.
-  const rangeRef = useRef(trim);
-  // The frame loop steps over cuts, and it is bound once, so it reads them
-  // from here rather than closing over the list it mounted with.
-  const cutsRef = useRef(cuts);
+  // The live pieces and the live seek, for the frame loop. It is bound once
+  // and would otherwise close over the values this component mounted with.
+  // Written in an effect rather than during render, which is not a ref's to
+  // do.
+  const piecesRef = useRef(pieces);
+  /**
+   * The piece the playhead is in, by id. A time where one piece ends and
+   * another opens belongs to either, and only the frame loop, which saw the
+   * playhead arrive, knows which. Every seek the bar makes names the piece it
+   * is aimed at. By id rather than by place in the order, which a move
+   * changes under it: the first build kept the place, and a dropped piece
+   * sent the playhead to the end of whichever piece took that place.
+   */
+  const currentRef = useRef<string | null>(null);
+  /**
+   * A start edge being dragged. Until it is let go, the piece and everything
+   * after it are drawn where its far edge holds still, so the edge under the
+   * pointer is the only thing that moves. See `LanePreview`.
+   */
+  const [preview, setPreview] = useState<LanePreview | null>(null);
+  const previewRef = useRef(preview);
+  /**
+   * A piece picked up to be put elsewhere in the order: which it was, where
+   * it would drop, and where its left edge is on the lane right now.
+   */
+  const [carry, setCarry] = useState<{ from: number; to: number; x: number } | null>(
+    null,
+  );
+  /**
+   * True for a moment after an edge or a piece is let go, while the pieces
+   * close up. They ease only then: during a drag they follow the pointer.
+   */
+  const [settling, setSettling] = useState(false);
+  const settleTimer = useRef(0);
   const seekRef = useRef(onSeek);
   const loopRef = useRef(looping);
   const playbackRef = useRef(onPlayback);
@@ -440,14 +458,34 @@ export function TrimBar({
   const restRef = useRef(0);
 
   useEffect(() => {
-    rangeRef.current = trim;
-    cutsRef.current = cuts;
+    piecesRef.current = pieces;
+    previewRef.current = preview;
     seekRef.current = onSeek;
     loopRef.current = looping;
     playbackRef.current = onPlayback;
     soundRef.current = soundtrack;
     changeSoundRef.current = onSoundtrackChange;
-  }, [trim, cuts, onSeek, looping, onPlayback, soundtrack, onSoundtrackChange]);
+  }, [pieces, preview, onSeek, looping, onPlayback, soundtrack, onSoundtrackChange]);
+
+  useEffect(() => () => window.clearTimeout(settleTimer.current), []);
+
+  /** Lets the pieces ease into the places a gesture left them in. */
+  const settle = useCallback(() => {
+    setPreview(null);
+    setCarry(null);
+    setSettling(true);
+    window.clearTimeout(settleTimer.current);
+    settleTimer.current = window.setTimeout(() => setSettling(false), SETTLE_MS);
+  }, []);
+
+  /** A seek the bar makes, naming the piece it is aimed at. */
+  const seekTo = useCallback(
+    (time: number, id: string | undefined) => {
+      currentRef.current = id ?? null;
+      onSeek(time);
+    },
+    [onSeek],
+  );
 
   useEffect(() => {
     const lane = laneRef.current;
@@ -480,59 +518,91 @@ export function TrimBar({
       const playhead = playheadRef.current;
       if (!element || !playhead || !duration) return;
 
-      const { start, end } = rangeRef.current;
+      const list = piecesRef.current;
+      const segments = segmentsOf(list);
+      const last = segments.length - 1;
+      if (last < 0) return;
       const time = element.currentTime;
+      let index = list.findIndex((p) => p.id === currentRef.current);
+      const current = segments[index];
 
-      if (!element.seeking && time < start - 0.05) {
-        seekRef.current(start);
-        return;
-      }
+      if (!element.seeking) {
+        // Playing past the end of a piece goes on to the next one in the
+        // order, which can be anywhere in the file. An element that reached
+        // the file's own end has paused itself, so `ended` counts as playing.
+        const running = !element.paused || element.ended;
+        if (
+          running &&
+          current &&
+          time >= current.end - 1e-3 &&
+          time < current.end + END_SLACK
+        ) {
+          if (index < last) {
+            index += 1;
+            currentRef.current = list[index].id;
+            // Continuous footage plays straight through, since a seek to
+            // where the element already is would stutter.
+            if (Math.abs(segments[index].start - time) > FRAME / 2) {
+              seekRef.current(segments[index].start);
+            }
+            if (element.ended) playbackRef.current(true);
+            return;
+          }
 
-      if (!element.seeking && time >= end) {
-        // Not looping means stopping on the last frame that will be in the
-        // export, rather than one past it or back at the top.
-        if (!loopRef.current) {
-          playbackRef.current(false);
-          seekRef.current(Math.max(end - FRAME, start));
+          // Not looping means stopping on the last frame that will be in the
+          // export, rather than one past it or back at the top.
+          if (!loopRef.current) {
+            playbackRef.current(false);
+            seekRef.current(Math.max(current.end - FRAME, current.start));
+            return;
+          }
+
+          // Wrapping is a seek and then a play, and the play is not optional.
+          // The element has no `loop` attribute, so at the file's own end it
+          // pauses itself: seeking alone put the playhead back at the top and
+          // left it sitting there, which is what made looping appear to work
+          // for exactly one pass.
+          currentRef.current = list[0].id;
+          seekRef.current(segments[0].start);
+          playbackRef.current(true);
           return;
         }
 
-        // Wrapping is a seek and then a play, and the play is not optional.
-        // The element has no `loop` attribute, so at the file's own end it
-        // pauses itself: seeking alone put the playhead back at the top and
-        // left it sitting there, which is what made looping appear to work for
-        // exactly one pass. Read before the seek, since seeking clears
-        // `ended`.
-        const resume = !element.paused || element.ended;
-        seekRef.current(start);
-        if (resume) playbackRef.current(true);
-        return;
-      }
-
-      // A cut has no frames, so playback steps over it rather than through it.
-      // Only while playing: a paused playhead parked at a cut's own start is
-      // showing the last frame that survives, which is the right frame, and a
-      // loop that moved it would fight a scrub.
-      if (!element.seeking && !element.paused) {
-        const jump = afterCuts(rangeRef.current, cutsRef.current, time);
-        if (jump > time) {
-          seekRef.current(jump);
-          return;
+        // Anywhere else, the piece holding the time. A time on a piece's end
+        // belongs to the piece that opens there, which is where a split
+        // leaves the playhead: `indexAt` picks that one. Footage no piece
+        // holds has no frame in the export, so the playhead goes to the join
+        // it was cut from.
+        const holds =
+          current && time >= current.start - 1e-3 && time < current.end - 1e-3;
+        if (!holds) {
+          const found = indexAt(segments, time);
+          if (found < 0) {
+            const lane = laneOf(list);
+            const kept = lane.fromLane(lane.toLane(time));
+            currentRef.current = list[Math.max(indexAt(segments, kept), 0)].id;
+            seekRef.current(kept);
+            return;
+          }
+          index = found;
+          currentRef.current = list[index].id;
         }
       }
 
       // Placed through the same map as the pieces, since the lane draws the
       // output. The clock reads the output's time off it, counted from the
       // first piece, so it agrees with the ruler.
-      const segments = keptSegments(rangeRef.current, cutsRef.current);
-      const x = toLane(segments, time);
+      const segment = segments[index] ?? segments[0];
+      const into = Math.min(Math.max(time - segment.start, 0), segment.end - segment.start);
+      const lane = laneOf(list, previewRef.current);
+      const x = (lane.starts[index] ?? lane.origin) + into;
       const fraction = Math.min(Math.max(x / duration, 0), 1);
       playhead.style.transform = `translateX(${fraction * spanRef.current}px)`;
 
       // Written rather than rendered, for the same reason as the playhead: a
       // readout to the millisecond changes on every frame, and none of those
       // changes is worth a render.
-      const out = Math.max(x - (segments[0]?.start ?? 0), 0);
+      const out = segment.at + into;
       const clock = clockRef.current;
       const text = formatPrecise(out, duration);
       if (clock && clock.textContent !== text) clock.textContent = text;
@@ -556,39 +626,84 @@ export function TrimBar({
     const sync = () => setPlaying(!element.paused);
     sync();
 
+    // A clip parked at its own end plays nothing, so pressing play there
+    // starts it over. Here rather than with the owner's play rule, since this
+    // is what knows the playhead is in the last piece: where the last piece
+    // ends, another can open, and a seek there would play that one instead.
+    // A frame and a half of tolerance, since stopping parks the playhead a
+    // frame short and the element snaps that to its own nearest frame.
+    const restart = () => {
+      const list = piecesRef.current;
+      const segments = segmentsOf(list);
+      const last = segments[segments.length - 1];
+      const time = element.currentTime;
+      if (
+        last &&
+        currentRef.current === list[list.length - 1].id &&
+        time >= last.end - 1.5 * FRAME &&
+        time <= last.end + 1e-3
+      ) {
+        seekTo(segments[0].start, list[0].id);
+      }
+    };
+
     element.addEventListener("play", sync);
+    element.addEventListener("play", restart);
     element.addEventListener("pause", sync);
     return () => {
       element.removeEventListener("play", sync);
+      element.removeEventListener("play", restart);
       element.removeEventListener("pause", sync);
     };
-  }, [video]);
+  }, [video, seekTo]);
+
+  /**
+   * Where the playhead is on the output's clock, read when it is asked. A
+   * plain function, since it reads the element's clock when a key or a button
+   * lands and nothing memoised depends on it.
+   */
+  const outputNow = () => {
+    const list = piecesRef.current;
+    const segments = segmentsOf(list);
+    const time = video.current?.currentTime ?? 0;
+    const own = segments[list.findIndex((p) => p.id === currentRef.current)];
+    const segment =
+      own && time >= own.start - 1e-3 && time <= own.end + 1e-3
+        ? own
+        : segments[Math.max(indexAt(segments, time), 0)];
+    if (!segment) return 0;
+    return segment.at + clamp(time - segment.start, 0, segment.end - segment.start);
+  };
+
+  /**
+   * Moves the playhead to a time on the output's clock. Short of the clip's
+   * own end by a frame, or the loop reads the seek as the clip ending and
+   * snaps back to the start under the hand.
+   */
+  const seekOutput = useCallback(
+    (out: number) => {
+      const list = piecesRef.current;
+      const { index, time } = sourceAt(
+        segmentsOf(list),
+        clamp(out, 0, Math.max(lengthOf(list) - FRAME, 0)),
+      );
+      if (index >= 0) seekTo(time, list[index].id);
+    },
+    [seekTo],
+  );
 
   // Plain functions: they are only handed to buttons in this component's own
   // render and feed no effect, so the compiler memoizes them on its own.
   // A step is one frame of the export, and at 2x an output frame is two of
   // the source's, so the step on the source's clock is that much longer.
   const step = (by: number) => {
-    const element = video.current;
-    if (!element) return;
-
     onPlayback(false);
-    const target = clamp(
-      element.currentTime + by * speed,
-      trim.start,
-      trim.end - FRAME,
-    );
-    // A step that lands in a cut carries on the way it was going. The nearer
-    // edge is wrong here: one frame into a cut it is the frame just left, so
-    // the button would appear dead.
-    const cut = cutAt(cuts, target);
-    const to = !cut ? target : by > 0 ? cut.end : cut.start - FRAME;
-    onSeek(clamp(to, trim.start, trim.end - FRAME));
+    seekOutput(outputNow() + by * speed);
   };
 
   const stop = () => {
     onPlayback(false);
-    onSeek(trim.start);
+    seekTo(pieces[0].start, pieces[0].id);
   };
 
   // Decoded once per file, keyed on the file rather than on the soundtrack:
@@ -632,17 +747,15 @@ export function TrimBar({
    * so the refs are current.
    */
   const sourceBy = useCallback((time: number, by: number) => {
-    const segments = keptSegments(rangeRef.current, cutsRef.current);
-    return fromLane(segments, toLane(segments, time) + by) - time;
+    const lane = laneOf(piecesRef.current);
+    return lane.fromLane(lane.toLane(time) + by) - time;
   }, []);
 
   /**
-   * A press on the lane seeks, and holding it drags the playhead along.
-   *
-   * Clamped into the trim, since a playhead outside the range is a frame that
-   * will not be in the export, and short of the out point by a frame, or the
-   * loop above reads the scrub as the clip ending and snaps back to the start
-   * under the hand.
+   * A press on the lane seeks, and holding it drags the playhead along. The
+   * lane draws the output, so a point on it is an output time, held inside
+   * the pieces: the footage in front of the first piece or after the last is
+   * not in the export.
    */
   const scrubFrom = useCallback(
     (event: React.PointerEvent) => {
@@ -654,21 +767,8 @@ export function TrimBar({
       // what comes out is the video stuttering rather than being moved.
       onPlayback(false);
 
-      const to = (clientX: number) => {
-        const { start, end } = rangeRef.current;
-        // Snapped out of any cut it lands in, so the frame under the hand is
-        // always one that will be in the export. The nearer edge, so the
-        // playhead does not run ahead of the pointer.
-        const kept = nearestKept(
-          rangeRef.current,
-          cutsRef.current,
-          fromLane(
-            keptSegments(rangeRef.current, cutsRef.current),
-            timeAt(clientX),
-          ),
-        );
-        onSeek(clamp(kept, start, end - FRAME));
-      };
+      const origin = laneOf(piecesRef.current).origin;
+      const to = (clientX: number) => seekOutput(timeAt(clientX) - origin);
       to(event.clientX);
 
       const move = (moved: PointerEvent) => to(moved.clientX);
@@ -682,7 +782,7 @@ export function TrimBar({
       window.addEventListener("pointerup", release);
       window.addEventListener("pointercancel", release);
     },
-    [disabled, onPlayback, onSeek, timeAt],
+    [disabled, onPlayback, seekOutput, timeAt],
   );
 
   /**
@@ -701,68 +801,127 @@ export function TrimBar({
   );
 
   /**
-   * A press on a piece selects it, and the same press scrubs, so a drag
-   * across the pieces moves the playhead the way a drag on the bare lane
-   * does. A piece does not move: the lane draws the output, so where a piece
-   * sits is decided by the pieces before it, and its footage goes with it.
-   * A clip in one piece has nothing to select.
+   * A press on a piece selects it. Dragging it picks it up and puts it
+   * somewhere else in the order: the other pieces make room where it would
+   * land, and it drops there with its footage. A press that does not travel
+   * is a click, and puts the playhead where it landed. In one piece there is
+   * nothing to select or move, so a press scrubs.
    */
   const pressPiece = useCallback(
-    (piece: Piece, selectable: boolean) =>
+    (index: number, selectable: boolean) =>
       (event: React.PointerEvent<HTMLDivElement>) => {
         if (disabled || event.button !== 0) return;
         onJoinSelect(null);
-        onPieceSelect(selectable ? piece.start : null);
-        scrubFrom(event);
+        if (!selectable) {
+          onPieceSelect(null);
+          scrubFrom(event);
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        onPlayback(false);
+
+        const base = piecesRef.current;
+        onPieceSelect(base[index].id);
+        const lane = laneOf(base);
+        const length = base[index].end - base[index].start;
+        const pressedX = event.clientX;
+        const grab = timeAt(event.clientX) - lane.starts[index];
+        let moved = false;
+        let to = index;
+        const root = document.documentElement;
+
+        const move = (ev: PointerEvent) => {
+          if (!moved && Math.abs(ev.clientX - pressedX) < DRAG_START) return;
+          moved = true;
+          root.dataset.dragging = "true";
+          const left = timeAt(ev.clientX) - grab;
+          to = dropIndex(base, index, left + length / 2, lane.origin);
+          setCarry({ from: index, to, x: left });
+        };
+        const release = (ev: PointerEvent | FocusEvent) => {
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", release);
+          window.removeEventListener("pointercancel", release);
+          window.removeEventListener("blur", release);
+          root.dataset.dragging = "false";
+          if (!moved) {
+            if ("clientX" in ev) seekOutput(timeAt(ev.clientX) - lane.origin);
+            return;
+          }
+          if (to !== index) onPiecesChange(movePiece(base, index, to));
+          settle();
+        };
+
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", release);
+        window.addEventListener("pointercancel", release);
+        window.addEventListener("blur", release);
       },
-    [disabled, onJoinSelect, onPieceSelect, scrubFrom],
+    [
+      disabled,
+      onJoinSelect,
+      onPieceSelect,
+      onPiecesChange,
+      onPlayback,
+      scrubFrom,
+      seekOutput,
+      settle,
+      timeAt,
+    ],
   );
 
   /**
    * Drags one edge of a piece, the way a clip is trimmed in an editor. The
-   * pieces after it close up or make room, so nothing is left as a gap.
+   * pointer's travel is the edge's travel through the footage, and the edge
+   * stays under the pointer while the piece's other edge holds still.
    *
-   * The pointer's travel is the edge's travel through the footage. An end
-   * edge and the first piece's start edge stay under the pointer. Any other
-   * start edge stays at its join while the piece's own footage moves under
-   * it, since the piece before it holds that place. The playhead follows the
-   * edge, so the frame under it is on the canvas.
+   * An end edge moves the pieces after it along with it. A start edge cannot
+   * do that without moving the pieces in front, so while it is held the piece
+   * is drawn through a `LanePreview`: bringing it in opens a gap in front of
+   * it, and taking it out runs it over the piece before. Letting go closes
+   * the pieces up. The playhead follows the edge, so the frame under it is on
+   * the canvas.
    */
   const resizeEdge = useCallback(
-    (piece: Piece, edge: "start" | "end", selectable: boolean) =>
+    (index: number, edge: "start" | "end", selectable: boolean) =>
       (event: React.PointerEvent<HTMLDivElement>) => {
         if (disabled || event.button !== 0) return;
         event.preventDefault();
         event.stopPropagation();
         onJoinSelect(null);
-        onPieceSelect(selectable ? piece.start : null);
         onPlayback(false);
 
-        const base = { trim: rangeRef.current, cuts: cutsRef.current, splits };
+        const base = piecesRef.current;
+        onPieceSelect(selectable ? base[index].id : null);
         const origin = timeAt(event.clientX);
-        const from = edge === "start" ? piece.start : piece.end;
+        const from = edge === "start" ? base[index].start : base[index].end;
         const move = (ev: PointerEvent) => {
           const next = resizePiece(
-            base.trim,
-            base.cuts,
-            base.splits,
-            piece,
+            base,
+            index,
             edge,
             snap(from + timeAt(ev.clientX) - origin),
             duration,
-            newCutId,
           );
-          onPiecesChange(next, next.piece.start);
-          onSeek(
-            edge === "start"
-              ? next.piece.start
-              : Math.max(next.piece.end - FRAME, next.piece.start),
+          const piece = next[index];
+          // The first piece needs no preview: the room in front of it is its
+          // own footage at its own place, so its start is under the pointer
+          // already and nothing after it moves.
+          if (edge === "start" && index > 0) {
+            setPreview({ index, by: piece.start - base[index].start });
+          }
+          onPiecesChange(next);
+          seekTo(
+            edge === "start" ? piece.start : Math.max(piece.end - FRAME, piece.start),
+            piece.id,
           );
         };
         const release = () => {
           window.removeEventListener("pointermove", move);
           window.removeEventListener("pointerup", release);
           window.removeEventListener("pointercancel", release);
+          settle();
         };
         window.addEventListener("pointermove", move);
         window.addEventListener("pointerup", release);
@@ -775,8 +934,8 @@ export function TrimBar({
       onPieceSelect,
       onPiecesChange,
       onPlayback,
-      onSeek,
-      splits,
+      seekTo,
+      settle,
       timeAt,
     ],
   );
@@ -787,24 +946,12 @@ export function TrimBar({
    * when the key lands.
    */
   const nudgePlayhead = (event: React.KeyboardEvent) => {
-      const by =
-        event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : 0;
-      if (!by) return;
-      event.preventDefault();
-      onPlayback(false);
-      const now = video.current?.currentTime ?? rangeRef.current.start;
-      const { start, end } = rangeRef.current;
-      onSeek(
-        clamp(
-          nearestKept(
-            rangeRef.current,
-            cutsRef.current,
-            now + by * (event.shiftKey ? COARSE_STEP : FRAME),
-          ),
-          start,
-          end - FRAME,
-        ),
-      );
+    const by =
+      event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : 0;
+    if (!by) return;
+    event.preventDefault();
+    onPlayback(false);
+    seekOutput(outputNow() + by * (event.shiftKey ? COARSE_STEP : FRAME));
   };
 
   /**
@@ -922,17 +1069,14 @@ export function TrimBar({
       // plays straight through a join. So it is moved in lane seconds and its
       // anchor is read back off the lane. The props rather than the mirror
       // refs: the edit cannot change while the sound is being moved.
-      const segments = keptSegments(trim, cuts);
-      const end = toLane(segments, duration);
-      const left = toLane(segments, from.offset);
+      const lane = laneOf(pieces);
+      const end = Math.max(lane.toLane(duration), lane.origin + lane.total);
+      const left = lane.toLane(from.offset);
 
       if (part === "body") {
         return {
           ...from,
-          offset: fromLane(
-            segments,
-            snap(clamp(left + by, 0, Math.max(end - span, 0))),
-          ),
+          offset: lane.fromLane(snap(clamp(left + by, 0, Math.max(end - span, 0)))),
         };
       }
       if (part === "head") {
@@ -947,7 +1091,7 @@ export function TrimBar({
           ) - left;
         return {
           ...from,
-          offset: fromLane(segments, left + room),
+          offset: lane.fromLane(left + room),
           start: from.start + room / speed,
         };
       }
@@ -962,7 +1106,7 @@ export function TrimBar({
         ),
       };
     },
-    [cuts, duration, speed, trim],
+    [duration, pieces, speed],
   );
 
   /**
@@ -1030,10 +1174,10 @@ export function TrimBar({
    * the region already selected deselects it, which is the one way to put the
    * marker away without picking another.
    *
-   * Paused for the drag and resumed on release, like a trim handle, and the
-   * playhead follows the edge being moved, clamped into the trim so the loop
-   * does not fight it: the frame under the edge is what decides where a zoom
-   * should start or stop, and it is gone before it can be read otherwise.
+   * Paused for the drag, and the playhead follows the edge being moved: the
+   * frame under the edge is what decides where a zoom should start or stop,
+   * and it is gone before it can be read otherwise. Footage no piece holds
+   * has no frame, and the frame loop moves the playhead to its join.
    */
   /**
    * A zoom moved by `by` seconds, bounded and snapped.
@@ -1084,7 +1228,7 @@ export function TrimBar({
         const wasSelected = selectedZoom === region.id;
         let moved = false;
         const show = (time: number) =>
-          onSeek(clamp(time, rangeRef.current.start, rangeRef.current.end - FRAME));
+          onSeek(time);
 
         const move = (ev: PointerEvent) => {
           const by = timeAt(ev.clientX) - origin;
@@ -1163,7 +1307,7 @@ export function TrimBar({
         const wasSelected = selectedFade === fade.id;
         let moved = false;
         const show = (time: number) =>
-          onSeek(clamp(time, rangeRef.current.start, rangeRef.current.end - FRAME));
+          onSeek(time);
 
         const move = (ev: PointerEvent) => {
           const by = timeAt(ev.clientX) - origin;
@@ -1262,6 +1406,11 @@ export function TrimBar({
       at: (next: T) => number;
       onRemove?: () => void;
       onToggle?: () => void;
+      /**
+       * The id of the piece an edge belongs to, so the playhead is sent into
+       * that piece rather than whichever opens at the same source time.
+       */
+      piece?: string;
     }) =>
       (event: React.KeyboardEvent) => {
         if (disabled) return;
@@ -1293,43 +1442,70 @@ export function TrimBar({
         onPlayback(false);
         const next = options.shift(by);
         options.apply(next);
-        onSeek(clamp(options.at(next), trim.start, trim.end - FRAME));
+        if (options.piece === undefined) onSeek(options.at(next));
+        else seekTo(options.at(next), options.piece);
       },
-    [disabled, onPlayback, onSeek, trim.end, trim.start],
+    [disabled, onPlayback, onSeek, seekTo],
   );
 
   const selectedRegion = zooms.find((z) => z.id === selectedZoom) ?? null;
   const selectedRamp = fades.find((f) => f.id === selectedFade) ?? null;
 
-  // What the file will run, in seconds before the speed: the trim less every
-  // cut. It is also the length the pieces take on the lane.
-  const kept = keptSeconds(trim, cuts);
+  // What the file will run, in seconds before the speed. It is also the
+  // length the pieces take on the lane.
+  const kept = lengthOf(pieces);
   // The lane's map, and where on it a source time or a stretch lands, as a
   // fraction of the lane. The lane keeps the whole source's width, so its
   // scale does not change under a drag.
-  const segments: Segment[] = keptSegments(trim, cuts);
-  const lane = (time: number) => toLane(segments, time) / duration;
+  const layout = laneOf(pieces, preview);
+  const lane = (time: number) => layout.toLane(time) / duration;
   const laneSpan = (start: number, end: number) => lane(end) - lane(start);
   /** Where the first piece starts on the lane, which is the output's zero. */
-  const origin = segments[0]?.start ?? trim.start;
-  // The kept clip as pieces. `split` is whether it is in more than one, which
-  // is when a piece is something to pick.
-  const laneItems: Piece[] = piecesOf(trim, cuts, splits);
-  const split = laneItems.length > 1;
-  const joins = joinsBetween(trim, cuts, splits);
-  const selectedJoinValue =
+  const origin = layout.origin;
+  /**
+   * The footage the last piece can still reach into, drawn as rail after it.
+   * Capped at the lane's own width: a piece played out of its source order
+   * can have the same footage in reach in front of the first piece and after
+   * the last.
+   */
+  const tail = Math.max(
+    Math.min(
+      roomOf(pieces, pieces.length - 1, duration).hi - pieces[pieces.length - 1].end,
+      duration - origin - kept,
+    ),
+    0,
+  );
+  // `split` is whether the clip is in more than one piece, which is when a
+  // piece is something to pick and to move.
+  const split = pieces.length > 1;
+  /**
+   * Where each piece is drawn, in the lane's seconds. While one is carried,
+   * the others sit in the order it would drop into and it follows the
+   * pointer, so the gap it would fill is visible before it is let go.
+   */
+  const carried = carry ? movePiece(pieces, carry.from, carry.to) : null;
+  const leftOf = (index: number): number => {
+    if (!carry || !carried) return layout.starts[index];
+    if (index === carry.from) return carry.x;
+    let at = origin;
+    for (const piece of carried) {
+      if (piece.id === pieces[index].id) return at;
+      at += piece.end - piece.start;
+    }
+    return at;
+  };
+  const selectedIndex = split
+    ? pieces.findIndex((p) => p.id === selectedPiece)
+    : -1;
+  const selectedPieceValue = selectedIndex >= 0 ? pieces[selectedIndex] : null;
+  const joinIndex =
     selectedJoin === null
-      ? null
-      : (joins.find((j) => Math.abs(j.at - selectedJoin) < 1e-6) ?? null);
-  // A join with a cut under it brings footage back when it is removed, and a
-  // split only joins two pieces of continuous footage, so the two say so.
-  const selectedJoinIsCut =
-    selectedJoinValue !== null &&
-    cuts.some((c) => Math.abs(c.end - selectedJoinValue.at) < 1e-6);
-  const selectedPieceValue = split
-    ? (laneItems.find((p) => Math.abs(p.start - (selectedPiece ?? NaN)) < 1e-6) ?? null)
-    : null;
-  const trimmed = trim.start > 0 || trim.end < duration || cuts.length > 0;
+      ? -1
+      : pieces.findIndex((p, i) => i > 0 && p.id === selectedJoin);
+  const selectedJoinValue = joinIndex > 0 ? pieces[joinIndex] : null;
+  // Only continuous footage can be joined back into one piece.
+  const joinable = joinIndex > 0 && continues(pieces, joinIndex);
+  const trimmed = Math.abs(kept - duration) > 1e-6;
 
   return (
     <div
@@ -1478,30 +1654,34 @@ export function TrimBar({
               onPointerDown={scrub}
               className="relative h-9 cursor-pointer touch-none"
             >
-              {/* The source, as a rail. What the pieces leave of it is
-                  footage the in point, the out point or a deleted piece took
-                  off. It ends where the source does on the lane, since a cut
-                  takes no room. */}
+              {/* The footage the pieces can still reach, as a rail: in front
+                  of the first piece what it can reach back into, after the
+                  last what it can reach on into. A cut takes no room, so the
+                  rail ends short of the lane by what the pieces left out. */}
               <div
                 className="absolute left-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-track"
-                style={{ width: `calc(${at(lane(duration))} + ${HANDLE}px)` }}
+                style={{
+                  width: `calc(${at((origin + kept + tail) / duration)} + ${HANDLE}px)`,
+                }}
               />
 
               {/* The pieces, end to end in the order they play. Each is drawn
                   where the output has it, so a piece carries its own footage
-                  wherever the edits before it leave it, and there is never a
-                  gap to close. Two pieces are drawn a hairline apart, so the
-                  join reads as a division of the block. A piece is a lane
-                  instance once there is more than one: selectable and
+                  wherever it goes, and there is never a gap to close. Two
+                  pieces are drawn a hairline apart, so the join reads as a
+                  division of the block. A piece is a lane instance once there
+                  is more than one: selectable, movable by dragging it, and
                   removable from the keyboard. The selected one is ringed in
-                  the selection tone, since brand is the playhead's. */}
-              {laneItems.map((piece, index) => {
-                const lastPiece = index === laneItems.length - 1;
-                const selected =
-                  split && Math.abs(piece.start - (selectedPiece ?? NaN)) < 1e-6;
+                  the selection tone, since brand is the playhead's. They ease
+                  only while they close up after a gesture, and follow the
+                  pointer during one. */}
+              {pieces.map((piece, index) => {
+                const lastPiece = index === pieces.length - 1;
+                const selected = split && piece.id === selectedPiece;
+                const lifted = carry?.from === index;
                 return (
                   <div
-                    key={piece.start}
+                    key={piece.id}
                     role={split ? "button" : undefined}
                     tabIndex={split ? 0 : undefined}
                     aria-label={
@@ -1510,29 +1690,43 @@ export function TrimBar({
                         : undefined
                     }
                     aria-pressed={split ? selected : undefined}
-                    onPointerDown={pressPiece(piece, split)}
+                    onPointerDown={pressPiece(index, split)}
                     onKeyDown={
                       split
                         ? (event) => {
-                            if (event.key === "Delete" || event.key === "Backspace") {
+                            const by =
+                              event.key === "ArrowLeft"
+                                ? -1
+                                : event.key === "ArrowRight"
+                                  ? 1
+                                  : 0;
+                            if (by && event.altKey) {
+                              // Alt with an arrow moves the piece one place in
+                              // the order, the keyboard's way to drag it.
+                              event.preventDefault();
+                              onPiecesChange(movePiece(pieces, index, index + by));
+                            } else if (event.key === "Delete" || event.key === "Backspace") {
                               event.preventDefault();
                               onPieceDelete();
                             } else if (event.key === "Enter" || event.key === " ") {
                               event.preventDefault();
-                              onPieceSelect(selected ? null : piece.start);
+                              onPieceSelect(selected ? null : piece.id);
                             }
                           }
                         : undefined
                     }
-                    onFocus={split ? () => onPieceSelect(piece.start) : undefined}
+                    onFocus={split ? () => onPieceSelect(piece.id) : undefined}
                     className={cn(
                       "group absolute inset-y-0 cursor-pointer rounded-md bg-track-active outline-none",
                       "focus-visible:ring-[3px] focus-visible:ring-ring/50",
                       selected && "ring-2 ring-selected ring-inset",
+                      lifted && "z-20 shadow-lg ring-2 ring-selected",
+                      settling &&
+                        "transition-[left,width] duration-200 ease-out motion-reduce:transition-none",
                     )}
                     style={{
-                      left: `calc(${at(lane(piece.start))} + ${INSET}px)`,
-                      width: `calc(${at(laneSpan(piece.start, piece.end))} - ${lastPiece ? 0 : 2}px)`,
+                      left: `calc(${at(leftOf(index) / duration)} + ${INSET}px)`,
+                      width: `calc(${at((piece.end - piece.start) / duration)} - ${lastPiece || lifted ? 0 : 2}px)`,
                     }}
                   >
                     {/* Each edge trims the piece, the way a clip's does in an
@@ -1564,23 +1758,17 @@ export function TrimBar({
                           aria-valuemax={duration}
                           aria-valuenow={Number(value.toFixed(3))}
                           aria-valuetext={formatPrecise(value, duration)}
-                          onPointerDown={resizeEdge(piece, edge, split)}
+                          onPointerDown={resizeEdge(index, edge, split)}
                           onKeyDown={laneKeys({
                             part: edge === "start" ? "head" : "tail",
                             shift: (by) =>
-                              resizePiece(
-                                trim,
-                                cuts,
-                                splits,
-                                piece,
-                                edge,
-                                value + by,
-                                duration,
-                                newCutId,
-                              ),
-                            apply: (next) => onPiecesChange(next, next.piece.start),
+                              resizePiece(pieces, index, edge, value + by, duration),
+                            apply: onPiecesChange,
                             at: (next) =>
-                              edge === "start" ? next.piece.start : next.piece.end,
+                              edge === "start"
+                                ? next[index].start
+                                : Math.max(next[index].end - FRAME, next[index].start),
+                            piece: piece.id,
                           })}
                           className={cn(
                             "absolute inset-y-0 z-10 flex w-2.5 cursor-ew-resize touch-none items-center justify-center rounded-md outline-none",
@@ -1604,68 +1792,73 @@ export function TrimBar({
                 );
               })}
 
-              {/* Every join between two pieces can take a transition, a
-                  split's and a cut's alike, since on the lane they are the
-                  same thing. A dot on the join's bottom edge rather than the
-                  whole height of the hairline, so a press higher up reaches
-                  the pieces' own edges. At the bottom rather than the top,
-                  since a split leaves the playhead standing on the join, and
-                  its knob is at the top. */}
-              {joins.map((join) => {
-                const selected =
-                  selectedJoin !== null && Math.abs(selectedJoin - join.at) < 1e-6;
-                const toggle = () => onJoinSelect(selected ? null : join.at);
-                return (
-                  <Tooltip key={`join-${join.at}`}>
-                    <TooltipTrigger asChild>
-                      <div
-                        role="button"
-                        tabIndex={0}
-                        aria-label={`Join at ${formatPrecise(join.at, duration)}`}
-                        aria-pressed={selected}
-                        onPointerDown={(event) => {
-                          if (disabled) return;
-                          event.preventDefault();
-                          event.stopPropagation();
-                          onPlayback(false);
-                          toggle();
-                          onSeek(join.at);
-                        }}
-                        onKeyDown={(event) => {
-                          if (event.key !== "Enter" && event.key !== " ") return;
-                          event.preventDefault();
-                          toggle();
-                        }}
-                        className="absolute -bottom-1.5 z-20 grid size-3.5 cursor-pointer place-items-center rounded-full outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
-                        style={{
-                          left: `calc(${centre(lane(join.at))} - 8px)`,
-                        }}
-                      >
-                        {join.transition ? (
-                          <BlendIcon
-                            className={cn(
-                              "size-3.5 rounded-full bg-panel",
-                              selected ? "text-foreground" : "text-muted-foreground",
-                            )}
-                            aria-hidden="true"
-                          />
-                        ) : (
-                          <span
-                            aria-hidden="true"
-                            className={cn(
-                              "size-2 rounded-full border transition-colors duration-150",
-                              selected
-                                ? "border-selected bg-selected"
-                                : "border-stroke-strong bg-panel hover:bg-stroke-strong",
-                            )}
-                          />
-                        )}
-                      </div>
-                    </TooltipTrigger>
-                    <TooltipContent>Transition at this join</TooltipContent>
-                  </Tooltip>
-                );
-              })}
+              {/* Every join between two pieces can take a transition into the
+                  second. A dot on the join's bottom edge rather than the whole
+                  height of the hairline, so a press higher up reaches the
+                  pieces' own edges. At the bottom rather than the top, since a
+                  split leaves the playhead standing on the join, and its knob
+                  is at the top. Hidden while a piece is carried, since the
+                  joins are about to change. */}
+              {!carry &&
+                pieces.slice(1).map((piece, i) => {
+                  const index = i + 1;
+                  const selected = piece.id === selectedJoin;
+                  const toggle = () => onJoinSelect(selected ? null : piece.id);
+                  return (
+                    <Tooltip key={`join-${piece.id}`}>
+                      <TooltipTrigger asChild>
+                        <div
+                          role="button"
+                          tabIndex={0}
+                          aria-label={`Join at ${formatPrecise(layout.starts[index] - origin, duration)}`}
+                          aria-pressed={selected}
+                          onPointerDown={(event) => {
+                            if (disabled) return;
+                            event.preventDefault();
+                            event.stopPropagation();
+                            onPlayback(false);
+                            toggle();
+                            seekTo(piece.start, piece.id);
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key !== "Enter" && event.key !== " ") return;
+                            event.preventDefault();
+                            toggle();
+                          }}
+                          className={cn(
+                            "absolute -bottom-1.5 z-20 grid size-3.5 cursor-pointer place-items-center rounded-full outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+                            settling &&
+                              "transition-[left] duration-200 ease-out motion-reduce:transition-none",
+                          )}
+                          style={{
+                            left: `calc(${centre(layout.starts[index] / duration)} - 8px)`,
+                          }}
+                        >
+                          {piece.transition ? (
+                            <BlendIcon
+                              className={cn(
+                                "size-3.5 rounded-full bg-panel",
+                                selected ? "text-foreground" : "text-muted-foreground",
+                              )}
+                              aria-hidden="true"
+                            />
+                          ) : (
+                            <span
+                              aria-hidden="true"
+                              className={cn(
+                                "size-2 rounded-full border transition-colors duration-150",
+                                selected
+                                  ? "border-selected bg-selected"
+                                  : "border-stroke-strong bg-panel hover:bg-stroke-strong",
+                              )}
+                            />
+                          )}
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent>Transition at this join</TooltipContent>
+                    </Tooltip>
+                  );
+                })}
 
               {/* Brand is spent once on this surface, and this is it: the playhead
                   has to be told apart from the two handles at a glance. */}
@@ -2339,19 +2532,19 @@ export function TrimBar({
                     <TransitionPicker
                       value={selectedJoinValue.transition}
                       onChange={(transition) =>
-                        onJoinTransition(selectedJoinValue.at, transition)
+                        onJoinTransition(selectedJoinValue.id, transition)
                       }
                     />
-                    <Transport
-                      label={
-                        selectedJoinIsCut
-                          ? "Bring back the footage between (Delete)"
-                          : "Join the pieces back (Delete)"
-                      }
-                      onClick={() => onJoinRemove(selectedJoinValue.at)}
-                    >
-                      <XIcon className="size-4" aria-hidden="true" />
-                    </Transport>
+                    {/* Two pieces of continuous footage can be one again.
+                        Elsewhere a join is only where two pieces meet. */}
+                    {joinable && (
+                      <Transport
+                        label="Join the pieces back (Delete)"
+                        onClick={() => onJoinRemove(selectedJoinValue.id)}
+                      >
+                        <XIcon className="size-4" aria-hidden="true" />
+                      </Transport>
+                    )}
                   </div>
                 )}
               </div>

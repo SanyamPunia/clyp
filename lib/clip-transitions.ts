@@ -1,10 +1,11 @@
 /**
  * Transitions: how the two sides of a join run into each other.
  *
- * A join is anywhere two pieces meet: where a cut closes up, or at a split
- * where nothing was removed. The transition lives on whichever made the join,
- * the cut or the split. It is placed on the output's clock, since that is where the join is: two
- * source seconds a cut apart are one output instant. Everything here is pure
+ * A join is anywhere two pieces meet in the order they play. The transition
+ * lives on the piece it runs into, so it goes with that piece when the order
+ * changes. It is placed on the output's clock, since that is where the join
+ * is: two pieces from anywhere in the source meet at one output instant.
+ * Everything here is pure
  * and runs in two places from the same numbers, the way a zoom does: the
  * preview's frame loop styles the video, and the worker's encode loop draws
  * each frame with the same state.
@@ -16,9 +17,7 @@
  * plays underneath.
  */
 
-import { keptSegments, outputAt, type Cut } from "@/lib/clip-cuts";
-import { type Split, joinsBetween, pieces } from "@/lib/clip-pieces";
-import type { Trim } from "@/types/screenshot";
+import type { Piece } from "@/lib/clip-pieces";
 
 export type TransitionKind = "dissolve" | "black" | "white" | "blur" | "zoom";
 
@@ -53,40 +52,31 @@ export interface Join {
 }
 
 /**
- * Every join that carries a transition, a cut's or a split's.
+ * Every join that carries a transition, in play order.
  *
  * A duration is fitted to the pieces it runs into, so a transition never
  * reaches past the piece on either side: a centred one takes at most the whole
  * of each neighbour's length from the join, and a dissolve at most the piece
  * after it, which is the only one it covers.
  */
-export function joinsOf(
-  trim: Trim,
-  cuts: readonly Cut[],
-  speed = 1,
-  splits: readonly Split[] = [],
-): Join[] {
-  const list = pieces(trim, cuts, splits);
-  const segments = keptSegments(trim, cuts);
+export function joinsOf(pieces: readonly Piece[], speed = 1): Join[] {
   const joins: Join[] = [];
+  let at = 0;
 
-  for (const join of joinsBetween(trim, cuts, splits)) {
-    const transition = join.transition;
-    if (!transition) continue;
-    const before = list[join.index - 1];
-    const after = list[join.index];
-    const a = (before.end - before.start) / speed;
-    const b = (after.end - after.start) / speed;
-    const duration =
-      transition.kind === "dissolve"
-        ? Math.min(transition.duration, b)
-        : Math.min(transition.duration, 2 * a, 2 * b);
-    joins.push({
-      at: outputAt(segments, join.at) / speed,
-      kind: transition.kind,
-      duration,
-    });
-  }
+  pieces.forEach((piece, index) => {
+    const before = pieces[index - 1];
+    const transition = piece.transition;
+    if (before && transition) {
+      const a = (before.end - before.start) / speed;
+      const b = (piece.end - piece.start) / speed;
+      const duration =
+        transition.kind === "dissolve"
+          ? Math.min(transition.duration, b)
+          : Math.min(transition.duration, 2 * a, 2 * b);
+      joins.push({ at: at / speed, kind: transition.kind, duration });
+    }
+    at += piece.end - piece.start;
+  });
   return joins;
 }
 

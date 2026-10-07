@@ -39,7 +39,6 @@ import {
 
 import { type Backdrop, backdropPhase, paintBackdrop } from "@/lib/backdrop";
 import { type ZoomRegion, sourceRect, zoomAt } from "@/lib/clip-zoom";
-import { type Cut, keptSeconds, keptSegments, outputAt } from "@/lib/clip-cuts";
 import { type FadeRegion, fadeAt } from "@/lib/clip-fade";
 import {
   TRANSITION_BLUR,
@@ -48,11 +47,10 @@ import {
   transitionAt,
 } from "@/lib/clip-transitions";
 import { normalized, project } from "@/lib/marks";
-import type { Split } from "@/lib/clip-pieces";
+import { type Piece, lengthOf, segmentsOf } from "@/lib/clip-pieces";
 import type { MotionTrack } from "@/lib/motion";
 import { drawRipple, ripplesAt } from "@/lib/ripples";
 import { type ShaderRenderer, createShaderRenderer } from "@/lib/shader";
-import type { Trim } from "@/types/screenshot";
 
 export interface Box {
   x: number;
@@ -106,12 +104,8 @@ export interface RenderRequest {
   radii: Radii;
   /** The original file, or null for an image over a moving background. */
   source: Blob | null;
-  /** The clip's in and out points. */
-  trim: Trim;
-  /** Stretches removed from the middle. The loop decodes around them. */
-  cuts: Cut[];
-  /** Joins between touching pieces, for their transitions. */
-  splits: Split[];
+  /** The clip's pieces in play order. The loop decodes each in turn. */
+  pieces: Piece[];
   /** The playback rate. 2 writes the clip in half its own time. */
   speed: number;
   /** Stretches of the clip that close in on a point of the picture. */
@@ -271,9 +265,7 @@ async function renderClip(
     chrome,
     box,
     radii,
-    trim,
-    cuts,
-    splits,
+    pieces,
     speed,
     zooms,
     fades,
@@ -303,16 +295,15 @@ async function renderClip(
   const track = await input.getPrimaryVideoTrack();
   if (!track) throw new Error("That file has no video track");
 
-  // What survives the trim and the cuts, in order, each carrying where it
-  // lands on the output's clock. Derived once: `outputAt` maps every frame
-  // against these rather than re-deriving them per frame.
-  const segments = keptSegments(trim, cuts);
+  // Each piece's footage in play order, carrying where it lands on the
+  // output's clock.
+  const segments = segmentsOf(pieces);
   // The output's own length. Everything written is on this clock, which runs
   // `speed` times faster than the source's.
-  const length = keptSeconds(trim, cuts) / speed;
+  const length = lengthOf(pieces) / speed;
   // Each join's transition on the output's clock, from the same arithmetic the
   // preview's loop uses.
-  const joins = joinsOf(trim, cuts, speed, splits);
+  const joins = joinsOf(pieces, speed);
   // A dissolve fades the last frame before its join out over the part after
   // it. The picture is copied here on every frame outside a dissolve, so the
   // first frame past a join still finds the one before it.
@@ -357,18 +348,19 @@ async function renderClip(
     let lastSlot = -1;
     let carried = 0;
 
-    // One decode per kept segment rather than one across the whole trim with
-    // the cut frames thrown away. `sink.samples` seeks to the keyframe at or
-    // before its in point, so a cut is time the decoder never spends.
+    // One decode per piece, in play order, rather than one across the whole
+    // file with the unused frames thrown away. `sink.samples` seeks to the
+    // keyframe at or before its in point, so footage no piece holds is time
+    // the decoder never spends, and a piece played out of order is a seek.
     //
-    // A sample's timestamp is absolute, so a trim that starts at four seconds
-    // would write an MP4 whose first frame is at four seconds: four seconds of
-    // nothing at the front. A cut is the same problem in the middle. Both are
-    // answered by `outputAt`, which is the one map the preview and every
-    // readout also go through, divided by the speed.
+    // A sample's timestamp is absolute, so it is placed against its own
+    // piece's start: a piece starting at four seconds would otherwise write
+    // four seconds of nothing in front of it. The first sample can start a
+    // little before its piece, and lands on the piece's own start.
     for (const segment of segments) {
       for await (const sample of sink.samples(segment.start, segment.end)) {
-        const at = outputAt(segments, sample.timestamp) / speed;
+        const at =
+          (segment.at + Math.max(sample.timestamp - segment.start, 0)) / speed;
         const slot = Math.floor(at / minFrameGap + 1e-6);
         if (slot === lastSlot) {
           carried += sample.duration || 0;
@@ -592,7 +584,8 @@ async function renderClip(
 
           // The same absolute-timestamp problem the video has, and the same
           // answer. No speed here: the clip's own sound is only carried at 1x.
-          const at = outputAt(segments, sample.timestamp);
+          // A sample straddling the piece's start lands on it.
+          const at = segment.at + Math.max(sample.timestamp - segment.start, 0);
 
           // Outside the clip entirely, or already covered by what a previous
           // segment wrote. Dropped rather than faded, since a partial sample

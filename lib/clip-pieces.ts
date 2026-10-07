@@ -1,318 +1,425 @@
 /**
- * Pieces: the kept clip split at points, so a piece can be trimmed, picked
- * and deleted.
+ * Pieces: the clip as a list of stretches of the source, in the order they
+ * play.
  *
- * Split at the playhead, drag a piece's edges, press the piece that should go
- * and delete it. A trimmed or deleted stretch becomes a cut, so nothing
- * downstream learns a new idea: the encode, both audio paths, the preview and
- * every readout already handle a cut.
+ * This is the model every editor uses. Split at the playhead, drag a piece's
+ * edges to trim it, drag the piece itself to put it somewhere else in the
+ * order, delete the one that should go. The list is the whole edit: the
+ * output is each piece's footage end to end, in list order, and nothing
+ * between them.
  *
- * **The lane draws the output, not the source.** Pieces sit end to end, so a
- * piece carries its own footage wherever the edits before it leave it, and a
- * gap between two pieces cannot exist. `toLane` and `fromLane` are that map.
+ * **Two pieces never share footage.** A piece's edges stop at the footage of
+ * whichever piece holds the source either side of it, so a source time
+ * belongs to at most one piece and the map from the source to the output is
+ * one to one. That is what lets the zooms, the fades, the marks' ripples and
+ * a soundtrack's anchor stay on the source's axis: they follow their footage
+ * wherever its piece goes.
  *
- * Splits are source seconds, like the cuts and the trim. They are kept raw and
- * read through `tidySplits`, so a trim or a cut dragged across one simply
- * stops it dividing anything, rather than every edit having to repair them.
+ * **A transition belongs to the piece it runs into.** Moving a piece takes its
+ * way in with it. The first piece's is never read.
  *
- * **Every join between two pieces can carry a transition.** Where the pieces
- * are a gap apart, the join is a cut and the transition is the cut's. Where
- * they touch, the join is a split and the transition is the split's. The
- * footage either side of a split is continuous, but a dip or a push in on a
- * change of subject is a style, not a repair, and the join is where it goes.
+ * Everything here is pure, and the arithmetic is the whole of it.
  */
 
-import {
-  type Cut,
-  MIN_CUT,
-  type Segment,
-  keptSegments,
-  leavesEnough,
-  outputAt,
-  tidyCuts,
-} from "@/lib/clip-cuts";
-import type { Transition } from "@/lib/clip-transitions";
-import type { Trim } from "@/types/screenshot";
+import { type Transition, tidyTransition } from "@/lib/clip-transitions";
 
-/**
- * The shortest a piece may be. The shortest cut worth having, so every piece
- * can be deleted as a cut.
- */
-export const MIN_PIECE = MIN_CUT;
+/** The shortest a piece may be. Below this it is a frame or two of nothing. */
+export const MIN_PIECE = 0.2;
 
 export interface Piece {
+  id: string;
   /** Source seconds. */
   start: number;
   end: number;
-}
-
-/** A point two pieces meet at with nothing removed between them. */
-export interface Split {
-  /** Source seconds. */
-  at: number;
-  /** How the two pieces run into each other. Absent is a straight join. */
+  /** How the piece before runs into this one. Absent is a straight join. */
   transition?: Transition;
 }
 
-/**
- * The splits that divide something: inside a kept segment, sorted, and each
- * at least `MIN_PIECE` from the segment's edges and from the split before it.
- */
-export function tidySplits(
-  trim: Trim,
-  cuts: readonly Cut[],
-  splits: readonly Split[],
-): Split[] {
-  const sorted = [...splits].sort((a, b) => a.at - b.at);
-  const kept: Split[] = [];
-
-  for (const segment of keptSegments(trim, cuts)) {
-    let from = segment.start;
-    for (const split of sorted) {
-      if (split.at < segment.start || split.at > segment.end) continue;
-      if (split.at - from < MIN_PIECE - 1e-9) continue;
-      if (segment.end - split.at < MIN_PIECE - 1e-9) continue;
-      kept.push(split);
-      from = split.at;
-    }
-  }
-  return kept;
+/** One piece's footage, and where it lands on the output's clock. */
+export interface Segment {
+  /** Source seconds. */
+  start: number;
+  end: number;
+  /** Where this segment begins on the output's clock, before speed. */
+  at: number;
 }
 
-/** The kept clip as pieces, in order. With no splits, one piece a segment. */
-export function pieces(
-  trim: Trim,
-  cuts: readonly Cut[],
-  splits: readonly Split[],
-): Piece[] {
-  const tidy = tidySplits(trim, cuts, splits);
-  const out: Piece[] = [];
+const clamp = (value: number, low: number, high: number) =>
+  Math.min(Math.max(value, low), high);
 
-  for (const segment of keptSegments(trim, cuts)) {
-    let from = segment.start;
-    for (const split of tidy) {
-      if (split.at <= segment.start || split.at >= segment.end) continue;
-      out.push({ start: from, end: split.at });
-      from = split.at;
-    }
-    out.push({ start: from, end: segment.end });
-  }
-  return out;
+export function newPieceId(): string {
+  return crypto.randomUUID();
 }
 
-/** The piece covering `time`, end exclusive except for the last. */
-export function pieceAt(list: readonly Piece[], time: number): Piece | null {
-  const last = list[list.length - 1];
-  return (
-    list.find((p) => time >= p.start && time < p.end) ??
-    (last && Math.abs(time - last.end) < 1e-9 ? last : null)
-  );
+/** A clip nobody has cut: one piece, the whole file. */
+export function wholeClip(duration: number): Piece[] {
+  return [{ id: newPieceId(), start: 0, end: duration }];
 }
 
-/**
- * The splits with one more at `time`, or null when it would leave a piece
- * shorter than `MIN_PIECE` or `time` is not on a kept frame.
- */
-export function splitAt(
-  trim: Trim,
-  cuts: readonly Cut[],
-  splits: readonly Split[],
-  time: number,
-): Split[] | null {
-  const piece = pieceAt(pieces(trim, cuts, splits), time);
-  if (!piece) return null;
-  if (time - piece.start < MIN_PIECE - 1e-9) return null;
-  if (piece.end - time < MIN_PIECE - 1e-9) return null;
-  return [...tidySplits(trim, cuts, splits), { at: time }].sort((a, b) => a.at - b.at);
-}
-
-/**
- * The edit with a piece taken out, or null when that would leave less than
- * the clip's minimum.
- *
- * The piece becomes a cut, and the trim then shrinks to what is left, so
- * deleting the first or the last piece moves the in or out point rather than
- * leaving a cut against it. A cut against an edge would put removed footage
- * before the first piece on the lane, where nothing can reach it.
- */
-export function removePiece(
-  trim: Trim,
-  cuts: readonly Cut[],
-  piece: Piece,
-  id: string,
-): { trim: Trim; cuts: Cut[] } | null {
-  const merged = tidyCuts([...cuts, { id, start: piece.start, end: piece.end }], trim);
-  if (!leavesEnough(trim, merged)) return null;
-
-  const kept = keptSegments(trim, merged);
-  const next = { start: kept[0].start, end: kept[kept.length - 1].end };
-  return { trim: next, cuts: tidyCuts(merged, next) };
-}
-
-/**
- * Every join between two pieces, with the transition it carries: a cut's
- * where the pieces are a gap apart, a split's where they touch. `at` is the
- * source time the second piece opens on.
- */
-export function joinsBetween(
-  trim: Trim,
-  cuts: readonly Cut[],
-  splits: readonly Split[],
-): { index: number; at: number; transition?: Transition }[] {
-  const list = pieces(trim, cuts, splits);
-  const tidyCutList = tidyCuts(cuts, trim);
-  const tidySplitList = tidySplits(trim, cuts, splits);
-
-  return list.slice(1).map((piece, i) => {
-    const touching = Math.abs(list[i].end - piece.start) < 1e-6;
-    const transition = touching
-      ? tidySplitList.find((s) => Math.abs(s.at - piece.start) < 1e-6)?.transition
-      : tidyCutList.find((c) => Math.abs(c.end - piece.start) < 1e-6)?.transition;
-    return { index: i + 1, at: piece.start, transition };
+/** Each piece's footage with its place on the output, in play order. */
+export function segmentsOf(pieces: readonly Piece[]): Segment[] {
+  let at = 0;
+  return pieces.map((piece) => {
+    const segment = { start: piece.start, end: piece.end, at };
+    at += piece.end - piece.start;
+    return segment;
   });
 }
 
-/** The whole edit a set of pieces stands for. */
-export interface PieceEdit {
-  trim: Trim;
-  cuts: Cut[];
-  splits: Split[];
-}
-
-/** An edit after a resize, and where the resized piece now sits. */
-export interface PieceMove extends PieceEdit {
-  piece: Piece;
+/** The output's length before speed. */
+export function lengthOf(pieces: readonly Piece[]): number {
+  return pieces.reduce((total, p) => total + (p.end - p.start), 0);
 }
 
 /**
- * The edit a list of pieces stands for, after one of them has changed.
+ * The piece holding a source time, or -1.
  *
- * The pieces are the edit: the trim is the first piece's start to the last
- * one's end, every gap between two pieces on the source is a cut, and two
- * pieces that touch meet at a split. So a resize changes the list and the edit
- * is read back off it, which is what lets the first piece reach into what the
- * trim had taken off.
- *
- * A join keeps its transition whether it is a gap or a touch afterwards, so
- * bringing back the footage between two pieces does not lose it, and neither
- * does trimming some away. A gap keeps the id of the cut that was in the same
- * place, too.
+ * End exclusive, so a time two pieces share at an edge belongs to the one it
+ * opens. A time on a piece's end that opens nothing still counts as that
+ * piece, which is where a playhead parks at the end of the clip.
  */
-function editFrom(
-  trim: Trim,
-  cuts: readonly Cut[],
-  splits: readonly Split[],
-  list: readonly Piece[],
-  next: readonly Piece[],
-  newId: () => string,
-): PieceEdit {
-  const tidy = tidyCuts(cuts, trim);
-  const joins = joinsBetween(trim, cuts, splits);
-  const cutAfter = list.map((p) => tidy.find((c) => Math.abs(c.start - p.end) < 1e-6));
+export function indexAt(segments: readonly Segment[], time: number): number {
+  const inside = segments.findIndex((s) => time >= s.start && time < s.end);
+  if (inside >= 0) return inside;
+  return segments.findIndex((s) => Math.abs(time - s.end) < 1e-6);
+}
 
-  const nextCuts: Cut[] = [];
-  const nextSplits: Split[] = [];
-  for (let i = 0; i < next.length - 1; i++) {
-    const end = next[i].end;
-    const start = next[i + 1].start;
-    const transition = joins[i]?.transition;
-    if (start - end > 1e-6) {
-      const old = cutAfter[i];
-      nextCuts.push({
-        id: old?.id ?? newId(),
-        start: end,
-        end: start,
-        ...(transition && { transition }),
-      });
-    } else {
-      nextSplits.push({ at: end, ...(transition && { transition }) });
+/** Output seconds before speed for a source time in a piece, or null. */
+export function outputOf(segments: readonly Segment[], time: number): number | null {
+  const index = indexAt(segments, time);
+  if (index < 0) return null;
+  const segment = segments[index];
+  return segment.at + (time - segment.start);
+}
+
+/** The source time at an output time, and the piece it is in. */
+export function sourceAt(
+  segments: readonly Segment[],
+  out: number,
+): { index: number; time: number } {
+  for (let index = 0; index < segments.length; index++) {
+    const segment = segments[index];
+    const length = segment.end - segment.start;
+    if (out < segment.at + length || index === segments.length - 1) {
+      return {
+        index,
+        time: segment.start + clamp(out - segment.at, 0, length),
+      };
     }
   }
-
-  return {
-    trim: { start: next[0].start, end: next[next.length - 1].end },
-    cuts: nextCuts,
-    splits: nextSplits,
-  };
+  return { index: -1, time: 0 };
 }
 
-const same = (a: Piece, b: Piece) =>
-  Math.abs(a.start - b.start) < 1e-6 && Math.abs(a.end - b.end) < 1e-6;
+/**
+ * How far a piece's edges may go on the source: back to the footage of the
+ * piece that holds the source before it, forward to the next one's, or the
+ * file's own ends.
+ */
+export function roomOf(
+  pieces: readonly Piece[],
+  index: number,
+  duration: number,
+): { lo: number; hi: number } {
+  const piece = pieces[index];
+  let lo = 0;
+  let hi = duration;
+  pieces.forEach((other, i) => {
+    if (i === index) return;
+    if (other.end <= piece.start + 1e-9) lo = Math.max(lo, other.end);
+    if (other.start >= piece.end - 1e-9) hi = Math.min(hi, other.start);
+  });
+  return { lo, hi };
+}
 
 /**
- * Moves one edge of a piece to `to`, the way an editor resizes a clip.
- *
- * Shortening it leaves a gap, which is a cut. Lengthening it takes the room
- * beside it, up to its neighbour or the file's own end, and no further. It
- * never goes under `MIN_PIECE`, so the piece stays one that can be deleted.
+ * The list with the piece at `index` divided at a source time, or null when
+ * either half would be shorter than `MIN_PIECE`. The second half follows the
+ * first in the order, and the two meet with a straight join, since the
+ * footage either side is continuous.
+ */
+export function splitPiece(
+  pieces: readonly Piece[],
+  index: number,
+  at: number,
+  id: string,
+): Piece[] | null {
+  const piece = pieces[index];
+  if (!piece) return null;
+  if (at - piece.start < MIN_PIECE - 1e-9) return null;
+  if (piece.end - at < MIN_PIECE - 1e-9) return null;
+  return [
+    ...pieces.slice(0, index),
+    { ...piece, end: at },
+    { id, start: at, end: piece.end },
+    ...pieces.slice(index + 1),
+  ];
+}
+
+/** The list without the piece at `index`, or null when it is the only one. */
+export function removePiece(pieces: readonly Piece[], index: number): Piece[] | null {
+  if (pieces.length < 2 || !pieces[index]) return null;
+  return pieces.filter((_, i) => i !== index);
+}
+
+/**
+ * Moves one edge of a piece to a source time, the way an editor trims a
+ * clip. Coming in removes footage from the piece. Going out brings footage
+ * back, up to the piece that holds the source beside it or the file's own
+ * end, and no further. It never goes under `MIN_PIECE`.
  */
 export function resizePiece(
-  trim: Trim,
-  cuts: readonly Cut[],
-  splits: readonly Split[],
-  piece: Piece,
+  pieces: readonly Piece[],
+  index: number,
   edge: "start" | "end",
   to: number,
   duration: number,
-  newId: () => string,
-): PieceMove {
-  const list = pieces(trim, cuts, splits);
-  const index = list.findIndex((p) => same(p, piece));
-  if (index < 0) {
-    return { trim, cuts: [...cuts], splits: tidySplits(trim, cuts, splits), piece };
-  }
-
-  const lo = index > 0 ? list[index - 1].end : 0;
-  const hi = index < list.length - 1 ? list[index + 1].start : duration;
-  const current = list[index];
-  const resized =
+): Piece[] {
+  const piece = pieces[index];
+  if (!piece) return [...pieces];
+  const { lo, hi } = roomOf(pieces, index, duration);
+  const next =
     edge === "start"
-      ? { start: Math.min(Math.max(to, lo), current.end - MIN_PIECE), end: current.end }
-      : { start: current.start, end: Math.max(Math.min(to, hi), current.start + MIN_PIECE) };
-  const next = list.map((p, i) => (i === index ? resized : p));
-  return { ...editFrom(trim, cuts, splits, list, next, newId), piece: resized };
+      ? { ...piece, start: clamp(to, lo, piece.end - MIN_PIECE) }
+      : { ...piece, end: clamp(to, piece.start + MIN_PIECE, hi) };
+  return pieces.map((p, i) => (i === index ? next : p));
+}
+
+/** The list with one piece taken out of the order and put back at `to`. */
+export function movePiece(
+  pieces: readonly Piece[],
+  from: number,
+  to: number,
+): Piece[] {
+  const next = [...pieces];
+  const [moved] = next.splice(from, 1);
+  if (!moved) return [...pieces];
+  next.splice(clamp(to, 0, next.length), 0, moved);
+  return next;
 }
 
 /**
- * Where a source time sits on the timeline lane, in seconds from the lane's
- * left edge.
- *
- * The kept segments sit end to end from the first one's own start, so a cut
- * takes no room and every piece carries its footage with it. Before the first
- * segment the lane is the source itself, which is the footage the in point
- * took off and where the first piece's start edge is dragged to bring it
- * back. After the last segment the out point's footage follows on the same
- * way. A time inside a cut lands on the join it makes.
+ * Whether the piece at `index` carries straight on from the one before it,
+ * which is what a split leaves and the one join that can be undone by
+ * joining the two back.
  */
-export function toLane(segments: readonly Segment[], time: number): number {
-  if (segments.length === 0) return time;
-  const first = segments[0];
-  const last = segments[segments.length - 1];
-  if (time <= first.start) return time;
-
-  const kept = last.at + (last.end - last.start);
-  if (time >= last.end) return first.start + kept + (time - last.end);
-  return first.start + outputAt(segments, time);
+export function continues(pieces: readonly Piece[], index: number): boolean {
+  const before = pieces[index - 1];
+  const piece = pieces[index];
+  return Boolean(before && piece && Math.abs(before.end - piece.start) < 1e-6);
 }
 
 /**
- * The source time under a point on the lane. `toLane` the other way round,
- * and a point on a join is the frame the second piece opens on.
+ * The two pieces either side of a join made one again, or null when the
+ * footage is not continuous there. The first piece's id and way in survive.
  */
-export function fromLane(segments: readonly Segment[], x: number): number {
-  if (segments.length === 0) return x;
-  const first = segments[0];
-  const last = segments[segments.length - 1];
-  if (x <= first.start) return x;
+export function joinPieces(pieces: readonly Piece[], index: number): Piece[] | null {
+  if (!continues(pieces, index)) return null;
+  const before = pieces[index - 1];
+  return [
+    ...pieces.slice(0, index - 1),
+    { ...before, end: pieces[index].end },
+    ...pieces.slice(index + 1),
+  ];
+}
 
-  const out = x - first.start;
-  const kept = last.at + (last.end - last.start);
-  if (out >= kept) return last.end + (out - kept);
+/**
+ * The list with a piece's way in set or taken off. Written without the key
+ * rather than as `undefined`, so a straight join stores as one.
+ */
+export function withTransition(
+  pieces: readonly Piece[],
+  index: number,
+  transition: Transition | undefined,
+): Piece[] {
+  return pieces.map((piece, i) => {
+    if (i !== index) return piece;
+    const rest = { ...piece };
+    delete rest.transition;
+    return transition ? { ...rest, transition } : rest;
+  });
+}
 
-  for (const segment of segments) {
-    if (out < segment.at + (segment.end - segment.start)) {
-      return segment.start + Math.max(out - segment.at, 0);
-    }
+/**
+ * Stored pieces made safe for a file of `duration`: clamped to it, put on the
+ * frame grid by `snap`, anything under the shortest dropped, and anything
+ * sharing footage with a piece earlier in the order dropped too, so a record
+ * that disagrees with its file can never break the one-to-one map. Null when
+ * nothing usable is left.
+ */
+export function tidyPieces(
+  value: unknown,
+  duration: number,
+  snap: (seconds: number) => number,
+): Piece[] | null {
+  if (!Array.isArray(value)) return null;
+  const kept: Piece[] = [];
+
+  for (const raw of value as Partial<Piece>[]) {
+    if (typeof raw?.start !== "number" || typeof raw.end !== "number") continue;
+    const start = snap(clamp(raw.start, 0, duration));
+    const end = snap(clamp(raw.end, 0, duration));
+    if (end - start < MIN_PIECE - 1e-9) continue;
+    if (kept.some((p) => start < p.end - 1e-9 && end > p.start + 1e-9)) continue;
+    const transition = tidyTransition(raw.transition);
+    kept.push({
+      id: typeof raw.id === "string" ? raw.id : newPieceId(),
+      start,
+      end,
+      ...(transition && { transition }),
+    });
   }
-  return last.end;
+  return kept.length ? kept : null;
+}
+
+/** An edit as builds before pieces had an order stored it. */
+export interface LegacyEdit {
+  trim: { start: number; end: number };
+  cuts?: { start: number; end: number; transition?: unknown }[];
+  splits?: ({ at: number; transition?: unknown } | number)[];
+}
+
+/**
+ * Pieces from an in and out point, the stretches cut from between them and
+ * the points they were split at, which is how a draft was stored before
+ * pieces could be put in another order. Read once on restore. A cut's
+ * transition goes to the piece after it, and a split's to the piece it
+ * opens.
+ */
+export function fromLegacy({ trim, cuts = [], splits = [] }: LegacyEdit): Piece[] {
+  const removed = [...cuts]
+    .map((c) => ({
+      start: Math.max(Math.min(c.start, c.end), trim.start),
+      end: Math.min(Math.max(c.start, c.end), trim.end),
+      transition: c.transition,
+    }))
+    .filter((c) => c.end > c.start)
+    .sort((a, b) => a.start - b.start);
+  const points = splits
+    .map((s) => (typeof s === "number" ? { at: s } : s))
+    .sort((a, b) => a.at - b.at);
+
+  const pieces: Piece[] = [];
+  let from = trim.start;
+  let way: unknown;
+  const close = (end: number) => {
+    let start = from;
+    for (const point of points) {
+      if (point.at - start < MIN_PIECE - 1e-9 || end - point.at < MIN_PIECE - 1e-9) {
+        continue;
+      }
+      pieces.push(piece(start, point.at, way));
+      start = point.at;
+      way = point.transition;
+    }
+    if (end - start > 1e-9) pieces.push(piece(start, end, way));
+  };
+
+  for (const cut of removed) {
+    if (cut.start > from) close(cut.start);
+    from = Math.max(from, cut.end);
+    way = cut.transition;
+  }
+  if (trim.end > from) close(trim.end);
+  return pieces;
+}
+
+function piece(start: number, end: number, way: unknown): Piece {
+  const transition = tidyTransition(way);
+  return { id: newPieceId(), start, end, ...(transition && { transition }) };
+}
+
+/**
+ * A piece drawn somewhere other than where the list puts it, while one of its
+ * edges is being dragged: `index` and every piece after it sit `by` seconds
+ * further along, so the edge under the pointer moves and the piece's other
+ * edge holds still until the drag lets go.
+ */
+export interface LanePreview {
+  index: number;
+  by: number;
+}
+
+/** The timeline lane's map between the source and the lane, in seconds. */
+export interface Lane {
+  /** Where the first piece starts on the lane, which is the output's zero. */
+  origin: number;
+  /** The pieces' total length on the lane. */
+  total: number;
+  /** Where each piece starts on the lane, preview included. */
+  starts: number[];
+  toLane: (time: number) => number;
+  fromLane: (x: number) => number;
+}
+
+/**
+ * The lane draws the output: the pieces end to end from `origin`, so each one
+ * carries its own footage, and there is never a gap between two.
+ *
+ * In front of the first piece is the footage it can still reach back into,
+ * at its own place, so its start edge is dragged out over it and stays under
+ * the pointer. After the last piece is the footage it can still reach into,
+ * the same way. A source time held by no piece lands where the piece holding
+ * the footage after it starts, which is the join a cut made there.
+ */
+export function laneOf(
+  pieces: readonly Piece[],
+  preview: LanePreview | null = null,
+): Lane {
+  const segments = segmentsOf(pieces);
+  const total = lengthOf(pieces);
+  const first = pieces[0];
+  const last = pieces[pieces.length - 1];
+  if (!first || !last) {
+    return { origin: 0, total: 0, starts: [], toLane: (t) => t, fromLane: (x) => x };
+  }
+
+  const shift = (index: number) =>
+    preview && index >= preview.index ? preview.by : 0;
+  const lo = roomOf(pieces, 0, Infinity).lo;
+  const hi = roomOf(pieces, pieces.length - 1, Infinity).hi;
+  const origin = first.start - lo;
+  const starts = segments.map((s, i) => origin + s.at + shift(i));
+  const end = origin + total + shift(pieces.length - 1);
+
+  const toLane = (time: number) => {
+    const index = indexAt(segments, time);
+    if (index >= 0) return starts[index] + (time - segments[index].start);
+    if (time < first.start && time >= lo) return origin - (first.start - time);
+    if (time > last.end && time <= hi) return end + (time - last.end);
+    // Footage no piece holds: the join where the footage after it opens.
+    let next = -1;
+    segments.forEach((s, i) => {
+      if (s.start > time && (next < 0 || s.start < segments[next].start)) next = i;
+    });
+    return next >= 0 ? starts[next] : end;
+  };
+
+  const fromLane = (x: number) => {
+    if (x < origin) return first.start - (origin - x);
+    if (x >= origin + total) return last.end + (x - origin - total);
+    return sourceAt(segments, x - origin).time;
+  };
+
+  return { origin, total, starts, toLane, fromLane };
+}
+
+/**
+ * Where a drag puts a piece in the order: among the other pieces, before the
+ * first whose middle is past `x` on the lane.
+ */
+export function dropIndex(
+  pieces: readonly Piece[],
+  from: number,
+  x: number,
+  origin: number,
+): number {
+  let at = origin;
+  let index = 0;
+  pieces.forEach((piece, i) => {
+    if (i === from) return;
+    const length = piece.end - piece.start;
+    if (x > at + length / 2) index++;
+    at += length;
+  });
+  return index;
 }

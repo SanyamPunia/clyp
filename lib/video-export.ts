@@ -15,8 +15,7 @@
  */
 
 import { mixAudio } from "@/lib/audio-mix";
-import type { Cut } from "@/lib/clip-cuts";
-import type { Split } from "@/lib/clip-pieces";
+import type { Piece } from "@/lib/clip-pieces";
 import type { FadeRegion } from "@/lib/clip-fade";
 import type { ZoomRegion } from "@/lib/clip-zoom";
 import type { MotionTrack } from "@/lib/motion";
@@ -37,7 +36,7 @@ import {
   type RenderReply,
   even,
 } from "@/lib/video-render";
-import type { Soundtrack, Trim } from "@/types/screenshot";
+import type { Soundtrack } from "@/types/screenshot";
 import { QUALITY_HIGH, canEncodeVideo } from "mediabunny";
 
 export interface VideoExportRequest {
@@ -56,12 +55,8 @@ export interface VideoExportRequest {
    * scale of the frame, or a template's exact pixels.
    */
   size: RasterSize;
-  /** The clip's in and out points. */
-  trim: Trim;
-  /** Stretches removed from the middle of it. */
-  cuts?: Cut[];
-  /** Joins between touching pieces, for the transitions they carry. */
-  splits?: Split[];
+  /** The clip's pieces in play order. */
+  pieces: Piece[];
   /** The playback rate. */
   speed?: number;
   /** Stretches of the clip that close in on a point of the picture. */
@@ -184,9 +179,7 @@ export async function exportVideo({
   box: clip,
   source,
   size,
-  trim,
-  cuts = [],
-  splits = [],
+  pieces,
   speed = 1,
   zooms = [],
   fades = [],
@@ -242,8 +235,7 @@ export async function exportVideo({
     ? await mixAudio({
         clip: clipSound ? source : undefined,
         soundtrack: laid,
-        trim,
-        cuts,
+        pieces,
         speed,
       })
     : null;
@@ -257,9 +249,7 @@ export async function exportVideo({
       box,
       radii,
       source,
-      trim,
-      cuts,
-      splits,
+      pieces,
       speed,
       zooms,
       fades,
@@ -322,9 +312,7 @@ export async function exportLoop({
       box: { x: 0, y: 0, width: 0, height: 0 },
       radii: [0, 0, 0, 0],
       source: null,
-      trim: { start: 0, end: seconds },
-      cuts: [],
-      splits: [],
+      pieces: [{ id: "loop", start: 0, end: seconds }],
       speed: 1,
       zooms: [],
       fades: [],

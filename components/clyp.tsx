@@ -74,29 +74,26 @@ import {
 } from "@/lib/motion";
 import { type MotionRead, readMotion } from "@/lib/read-motion";
 import {
-  type Cut,
-  keptSegments,
-  keptSeconds,
-  nearestKept,
-  newCutId,
-  outputAt,
-  tidyCuts,
-} from "@/lib/clip-cuts";
-import {
-  type PieceEdit,
-  type Split,
-  pieceAt,
-  pieces as piecesOf,
+  type Piece,
+  fromLegacy,
+  indexAt,
+  joinPieces,
+  lengthOf,
+  newPieceId,
+  outputOf,
   removePiece,
-  splitAt,
-  tidySplits,
+  segmentsOf,
+  splitPiece,
+  tidyPieces,
+  wholeClip,
+  withTransition,
 } from "@/lib/clip-pieces";
 import {
   TRANSITION_BLUR,
   type Transition,
   hasDissolve,
   joinsOf,
-  tidyTransition,
+  NO_TRANSITION,
   transitionAt,
 } from "@/lib/clip-transitions";
 import { useEditHistory } from "@/components/use-edit-history";
@@ -205,7 +202,6 @@ import type {
   Media,
   Soundtrack,
   StyleOptions,
-  Trim,
 } from "@/types/screenshot";
 
 /**
@@ -383,34 +379,21 @@ export function Clyp() {
   const [dimensions, setDimensions] = useState<{ w: number; h: number } | null>(
     null,
   );
-  // The clip's in and out points, null for an image. An edit on the draft
-  // rather than part of it, so it is stored under the edits key rather than
-  // beside the Blob, which must not be rewritten on every drag of a handle.
-  const [trim, setTrim] = useState<Trim | null>(null);
   /**
-   * Stretches removed from the middle of the clip, on the source's axis like
-   * the trim and the zooms. Sorted and merged on the way in, so nothing
-   * downstream has to cope with an overlap.
+   * The clip's pieces in the order they play, null for an image. An edit on
+   * the draft rather than part of it, so it is stored under the edits key
+   * rather than beside the Blob, which must not be rewritten on every drag of
+   * an edge. See `lib/clip-pieces.ts`.
    */
-  const [cuts, setCuts] = useState<Cut[]>([]);
-  /**
-   * Split points, on the source's axis like the cuts. With them the kept clip
-   * is in pieces, which can be trimmed by their edges, picked and deleted. A
-   * trimmed or deleted stretch becomes a cut, so a split is the only new
-   * state.
-   */
-  const [splits, setSplits] = useState<Split[]>([]);
-  /** The selected piece, by its start in source seconds. */
-  const [selectedPiece, setSelectedPiece] = useState<number | null>(null);
-  /**
-   * The selected join between two pieces, by the source time the second one
-   * opens on. A split or a cut underneath, the same on the lane.
-   */
-  const [selectedJoin, setSelectedJoin] = useState<number | null>(null);
+  const [pieces, setPieces] = useState<Piece[] | null>(null);
+  /** The selected piece, by id. */
+  const [selectedPiece, setSelectedPiece] = useState<string | null>(null);
+  /** The selected join, by the id of the piece it runs into. */
+  const [selectedJoin, setSelectedJoin] = useState<string | null>(null);
   const [removePieceOpen, setRemovePieceOpen] = useState(false);
   /**
    * Stretches where the picture arrives or leaves, on the source's axis like
-   * the cuts and the zooms.
+   * the zooms, so they follow their footage wherever its piece plays.
    */
   const [fades, setFades] = useState<FadeRegion[]>([]);
   const [selectedFade, setSelectedFade] = useState<string | null>(null);
@@ -573,10 +556,8 @@ export function Clyp() {
   // otherwise close over the regions it mounted with. Written in an effect.
   const zoomsRef = useRef(zooms);
   const fadesRef = useRef(fades);
-  // The loop reads the joins' transitions off the live trim and cuts.
-  const trimRef = useRef(trim);
-  const cutsRef = useRef(cuts);
-  const splitsRef = useRef(splits);
+  // The loop reads the joins' transitions off the live pieces.
+  const piecesRef = useRef(pieces);
   /** A dip's colour over the picture, and a dissolve's held frame. */
   const dipRef = useRef<HTMLDivElement>(null);
   const heldRef = useRef<HTMLCanvasElement>(null);
@@ -705,16 +686,11 @@ export function Clyp() {
     exportAction === "download" &&
     videoFormat === "mp4" &&
     slides === 1;
-  // What will actually be encoded, which is the trim at the chosen speed rather
-  // than the file. The duration readout, the size estimate and the encode all
-  // read this one value, so none of them can describe a length nobody asked
-  // for. The trim bar's own readout stays in the source's seconds, since that
-  // is the axis its handles cut on.
-  // The one length everything reads: the toolbar, the duration readout, the
-  // size estimate and the encode. Every cut comes off it.
-  const clipSeconds = trim
-    ? keptSeconds(trim, cuts) / speed
-    : media?.duration;
+  // What will actually be encoded, which is the pieces at the chosen speed
+  // rather than the file. The toolbar, the duration readout, the size
+  // estimate and the encode all read this one value, so none of them can
+  // describe a length nobody asked for.
+  const clipSeconds = pieces ? lengthOf(pieces) / speed : media?.duration;
 
   /**
    * The frame's box when a shape is asked for.
@@ -774,10 +750,8 @@ export function Clyp() {
     motionRef.current = motion;
     selectedZoomRef.current = selectedZoom;
     ripplesOnRef.current = styleOptions.clickRipples;
-    trimRef.current = trim;
-    cutsRef.current = cuts;
-    splitsRef.current = splits;
-  }, [zooms, fades, motion, selectedZoom, styleOptions.clickRipples, trim, cuts, splits]);
+    piecesRef.current = pieces;
+  }, [zooms, fades, motion, selectedZoom, styleOptions.clickRipples, pieces]);
 
   /**
    * Takes over from the loader in `lib/media.ts`, which has already read and
@@ -790,12 +764,8 @@ export function Clyp() {
       return loaded.media;
     });
     setDimensions({ w: loaded.width, h: loaded.height });
-    setTrim(
-      loaded.media.duration ? { start: 0, end: loaded.media.duration } : null,
-    );
+    setPieces(loaded.media.duration ? wholeClip(loaded.media.duration) : null);
     setSpeed(1);
-    setCuts([]);
-    setSplits([]);
     setSelectedPiece(null);
     setSelectedJoin(null);
     setFades([]);
@@ -833,38 +803,14 @@ export function Clyp() {
   const applyEdits = useCallback((edits: StoredEdits, length: number) => {
     const grid = (seconds: number) =>
       Math.round(clamp(seconds, 0, length) * EDIT_FPS) / EDIT_FPS;
-    const start = grid(edits.trim.start);
-    const end = Math.max(grid(edits.trim.end), start);
-    if (end > start) setTrim({ start, end });
-
-    // Tidied against the restored trim, so a record that somehow disagrees
-    // with the file cannot leave an overlap or a cut outside the clip.
-    setCuts(
-      tidyCuts(
-        (edits.cuts ?? []).map((c) => ({
-          id: c.id,
-          start: grid(c.start),
-          end: grid(c.end),
-          ...(tidyTransition(c.transition) && {
-            transition: tidyTransition(c.transition),
-          }),
-        })),
-        { start, end },
-      ),
-    );
-    // A record from before a split could carry a transition holds bare
-    // numbers, read here as splits with none.
-    setSplits(
-      (edits.splits ?? []).map((split) =>
-        typeof split === "number"
-          ? { at: grid(split) }
-          : {
-              at: grid(split.at),
-              ...(tidyTransition(split.transition) && {
-                transition: tidyTransition(split.transition),
-              }),
-            },
-      ),
+    // A record from before pieces had an order holds an in and out point,
+    // cuts and splits instead, read here as the pieces they made.
+    setPieces(
+      tidyPieces(
+        edits.pieces ?? (edits.trim ? fromLegacy({ ...edits, trim: edits.trim }) : null),
+        length,
+        grid,
+      ) ?? wholeClip(length),
     );
     setSelectedPiece(null);
     setSelectedJoin(null);
@@ -1020,122 +966,110 @@ export function Clyp() {
   }, [selectedZoom]);
 
   /** One selection across the lanes, so a piece takes it from the rest. */
-  const selectPiece = useCallback((start: number | null) => {
-    setSelectedPiece(start);
-    if (start !== null) {
+  const selectPiece = useCallback((id: string | null) => {
+    setSelectedPiece(id);
+    if (id !== null) {
       setSelectedZoom(null);
       setSelectedFade(null);
       setSelectedJoin(null);
     }
   }, []);
 
-  /** A join between two touching pieces, where a split's transition is set. */
-  const selectJoin = useCallback((at: number | null) => {
-    setSelectedJoin(at);
-    if (at !== null) {
+  /** A join between two pieces, where the transition into the second is set. */
+  const selectJoin = useCallback((id: string | null) => {
+    setSelectedJoin(id);
+    if (id !== null) {
       setSelectedZoom(null);
       setSelectedFade(null);
       setSelectedPiece(null);
     }
   }, []);
 
-  /**
-   * Sets the transition on a join, whichever kind it is: a split's own where
-   * the footage either side is continuous, or the cut's where it is not.
-   * Written without the key rather than as `undefined`, so a straight join
-   * stores as one.
-   */
+  /** Sets how the piece before runs into the piece `id`. */
   const setJoinTransition = useCallback(
-    (at: number, transition: Transition | undefined) => {
-      const apply = <T extends { transition?: Transition }>(item: T): T => {
-        const rest = { ...item };
-        delete rest.transition;
-        return transition ? { ...rest, transition } : rest;
-      };
-      if (cuts.some((c) => Math.abs(c.end - at) < 1e-6)) {
-        setCuts(cuts.map((c) => (Math.abs(c.end - at) < 1e-6 ? apply(c) : c)));
-      } else {
-        setSplits(splits.map((s) => (Math.abs(s.at - at) < 1e-6 ? apply(s) : s)));
-      }
+    (id: string, transition: Transition | undefined) => {
+      if (!pieces) return;
+      setPieces(
+        withTransition(
+          pieces,
+          pieces.findIndex((p) => p.id === id),
+          transition,
+        ),
+      );
     },
-    [cuts, splits],
+    [pieces],
   );
 
   /**
-   * Takes a join away. Over a split the two pieces become one. Over a cut
-   * the footage between them comes back. Neither loses anything undo cannot
-   * bring back, so it does not ask.
+   * Joins two pieces of continuous footage back into one. Nothing is lost but
+   * the join's transition, and undo brings that back, so it does not ask.
    */
   const removeJoin = useCallback(
-    (at: number) => {
-      if (cuts.some((c) => Math.abs(c.end - at) < 1e-6)) {
-        setCuts(cuts.filter((c) => Math.abs(c.end - at) >= 1e-6));
-      } else {
-        setSplits(splits.filter((s) => Math.abs(s.at - at) >= 1e-6));
-      }
+    (id: string) => {
+      if (!pieces) return;
+      const next = joinPieces(
+        pieces,
+        pieces.findIndex((p) => p.id === id),
+      );
+      if (!next) return;
+      setPieces(next);
       setSelectedJoin(null);
     },
-    [cuts, splits],
+    [pieces],
   );
 
   /**
-   * Splits the kept clip at the playhead. Refused with a reason when the
-   * playhead is in a cut or too close to an edge, since a piece under the
-   * minimum could not be deleted as a cut.
+   * Splits the piece under the playhead there. Refused with a reason when the
+   * playhead is too close to a piece's edge, since a piece under the minimum
+   * is a frame or two of nothing.
    */
   const splitAtPlayhead = useCallback(() => {
     const video = videoRef.current;
-    if (!video || !trim) return;
+    if (!video || !pieces) return;
     const at = Math.round(video.currentTime * EDIT_FPS) / EDIT_FPS;
-    const next = splitAt(trim, cuts, splits, at);
+    const index = indexAt(segmentsOf(pieces), at);
+    const id = newPieceId();
+    const next = index < 0 ? null : splitPiece(pieces, index, at, id);
     if (!next) {
       toast.error("Too close to the edge of a piece to split there");
       return;
     }
-    setSplits(next);
-    const piece = pieceAt(piecesOf(trim, cuts, next), at);
-    if (piece) selectPiece(piece.start);
-  }, [cuts, selectPiece, splits, trim]);
+    setPieces(next);
+    selectPiece(id);
+  }, [pieces, selectPiece]);
 
-  /** A piece resized, from the lane's drag or its arrow keys. */
-  const handlePiecesChange = useCallback((edit: PieceEdit, selected: number) => {
-    setTrim(edit.trim);
-    setCuts(edit.cuts);
-    setSplits(edit.splits);
-    setSelectedPiece(selected);
+  /** A piece trimmed or moved, from the lane's drag or its keys. */
+  const handlePiecesChange = useCallback((next: Piece[]) => {
+    setPieces(next);
   }, []);
 
   /**
-   * Takes the selected piece out, which is a cut over it, or a new in or out
-   * point for the first or last piece. The splits at its edges now divide
-   * nothing, so they go too.
+   * Takes the selected piece out. The playhead goes to the start of the piece
+   * that takes its place, or the end of the one before when it was the last.
    */
   const deletePiece = useCallback(
     (quiet = false) => {
-      if (!trim || selectedPiece === null) return;
-      const piece = piecesOf(trim, cuts, splits).find(
-        (p) => Math.abs(p.start - selectedPiece) < 1e-6,
-      );
-      if (!piece) return;
-      const next = removePiece(trim, cuts, piece, newCutId());
+      if (!pieces || selectedPiece === null) return;
+      const index = pieces.findIndex((p) => p.id === selectedPiece);
+      const next = index < 0 ? null : removePiece(pieces, index);
       if (!next) {
-        toast.error("At least a fifth of a second of the clip has to stay");
+        toast.error("The last piece of the clip has to stay");
         return;
       }
-      setTrim(next.trim);
-      setCuts(next.cuts);
-      setSplits(tidySplits(next.trim, next.cuts, splits));
+      setPieces(next);
       setSelectedPiece(null);
       setRemovePieceOpen(false);
       const video = videoRef.current;
-      if (video) {
-        video.currentTime = nearestKept(next.trim, next.cuts, video.currentTime);
+      const after = next[Math.min(index, next.length - 1)];
+      if (video && after) {
+        video.currentTime =
+          index < next.length ? after.start : after.end - 1 / EDIT_FPS;
       }
       if (!quiet) {
         toast("Piece deleted", { action: { label: "Undo", onClick: () => undoRef.current?.() } });
       }
     },
-    [cuts, selectedPiece, splits, trim],
+    [pieces, selectedPiece],
   );
 
   /**
@@ -1245,13 +1179,11 @@ export function Clyp() {
    */
   const editState = useMemo(
     () => ({
-      trim,
-      cuts,
+      pieces,
       speed,
       zooms,
       fades,
       marks,
-      splits,
       placement: soundtrack
         ? {
             offset: soundtrack.offset,
@@ -1260,17 +1192,15 @@ export function Clyp() {
           }
         : null,
     }),
-    [trim, cuts, speed, zooms, fades, marks, splits, soundtrack],
+    [pieces, speed, zooms, fades, marks, soundtrack],
   );
 
   const restoreEdits = useCallback((next: typeof editState) => {
-    setTrim(next.trim);
-    setCuts(next.cuts);
+    setPieces(next.pieces);
     setSpeed(next.speed);
     setZooms(next.zooms);
     setFades(next.fades);
     setMarks(next.marks);
-    setSplits(next.splits);
     setSelectedPiece(null);
     setSelectedJoin(null);
     // A selection is a view of the state rather than part of it, and the
@@ -1703,7 +1633,7 @@ export function Clyp() {
   /**
    * The edits, written a moment after they settle.
    *
-   * A drag rewrites the trim or a region on every frame, and a write per frame
+   * A drag rewrites a piece or a region on every frame, and a write per frame
    * is sixty transactions a second for nothing, so the write waits for a pause.
    * The record names the clip it belongs to, so the restore can refuse edits
    * made on a different file. An image has none of these and clears the key.
@@ -1711,7 +1641,7 @@ export function Clyp() {
   useEffect(() => {
     if (!restored) return;
 
-    if (!media || media.kind !== "video" || !trim || !dimensions) {
+    if (!media || media.kind !== "video" || !pieces || !dimensions) {
       deleteEdits();
       deleteMotion();
       return;
@@ -1724,9 +1654,7 @@ export function Clyp() {
         height: dimensions.h,
         duration: media.duration ?? 0,
       },
-      trim,
-      cuts,
-      splits,
+      pieces,
       speed,
       zooms,
       fades,
@@ -1744,9 +1672,7 @@ export function Clyp() {
     restored,
     media,
     dimensions,
-    trim,
-    cuts,
-    splits,
+    pieces,
     speed,
     zooms,
     fades,
@@ -2093,7 +2019,7 @@ export function Clyp() {
           toast.success("Video downloaded");
         } else if (exportsVideo) {
           const box = clipBoxRef.current;
-          if (!box || !media.blob || !trim) {
+          if (!box || !media.blob || !pieces) {
             throw new Error("That clip is not loaded");
           }
 
@@ -2107,9 +2033,7 @@ export function Clyp() {
             box,
             source: media.blob,
             size: template ? outputFor(template) : options.quality,
-            trim,
-            cuts,
-            splits,
+            pieces,
             speed,
             fades,
             zooms,
@@ -2201,14 +2125,12 @@ export function Clyp() {
       motion,
       soundtrack,
       speed,
-      trim,
-      cuts,
+      pieces,
       zooms,
       fades,
       marks,
       picture,
       slides,
-      splits,
       still,
       styleOptions.clickRipples,
       template,
@@ -2277,14 +2199,11 @@ export function Clyp() {
 
       // A join's transition, on the output's clock, from the same arithmetic
       // the encode uses. A zoom transition pushes in on top of any region.
-      const range = trimRef.current;
-      const joins = range
-        ? joinsOf(range, cutsRef.current, speed, splitsRef.current)
-        : [];
-      const out = range
-        ? outputAt(keptSegments(range, cutsRef.current), video.currentTime) / speed
-        : 0;
-      const move = transitionAt(joins, out);
+      const list = piecesRef.current;
+      const joins = list ? joinsOf(list, speed) : [];
+      const out = list ? outputOf(segmentsOf(list), video.currentTime) : null;
+      const move =
+        out !== null ? transitionAt(joins, out / speed) : NO_TRANSITION;
       const state =
         move.scale !== 1
           ? {
@@ -2473,11 +2392,10 @@ export function Clyp() {
   /**
    * Play or pause, from wherever it is asked for.
    *
-   * One rule, held here because this owns both the element and the trim, and
-   * because three things now ask for it: the transport button, the spacebar,
-   * and a click on the picture. A clip parked at its own out point plays
-   * nothing, so pressing play there starts it over, which is only reachable
-   * with looping off.
+   * One rule, held here because this owns the element, and because three
+   * things ask for it: the transport button, the spacebar, and a click on the
+   * picture. Starting a clip over when it is parked at its own end is the trim
+   * bar's, since that is what knows which piece the playhead is in.
    */
   const togglePlayback = useCallback(() => {
     const video = videoRef.current;
@@ -2494,16 +2412,8 @@ export function Clyp() {
       video.pause();
       return;
     }
-
-    // A frame and a half of tolerance, not one. Stopping parks the playhead a
-    // frame short of the out point, and the element then snaps that to its own
-    // nearest frame, which can land just under an exactly-one-frame test. It
-    // then plays for a few milliseconds, hits the out point, and stops again.
-    if (trim && video.currentTime >= trim.end - 1.5 / EDIT_FPS) {
-      video.currentTime = trim.start;
-    }
     void video.play().catch(() => {});
-  }, [trim]);
+  }, []);
 
   const handlePlayback = useCallback((playing: boolean) => {
     const video = videoRef.current;
@@ -2543,9 +2453,7 @@ export function Clyp() {
       return null;
     });
     setDimensions(null);
-    setTrim(null);
-    setCuts([]);
-    setSplits([]);
+    setPieces(null);
     setSelectedPiece(null);
     setSelectedJoin(null);
     setFades([]);
@@ -3119,12 +3027,12 @@ export function Clyp() {
         {/* Only a clip has a length to cut, and the bar sits on the panel's
             own hairline rather than inside the canvas: it is chrome about the
             media, the same category as the toolbar above it. */}
-        {media?.kind === "video" && trim && media.duration ? (
+        {media?.kind === "video" && pieces && media.duration ? (
           <div className="shrink-0 border-t border-stroke">
             <TrimBar
               video={videoRef}
               duration={media.duration}
-              trim={trim}
+              pieces={pieces}
               onSeek={handleSeek}
               onPlayback={handlePlayback}
               onToggle={togglePlayback}
@@ -3132,8 +3040,6 @@ export function Clyp() {
               onSpeedChange={handleSpeedChange}
               zooms={zooms}
               selectedZoom={selectedZoom}
-              cuts={cuts}
-              splits={splits}
               selectedPiece={selectedPiece}
               onPieceSelect={selectPiece}
               onPiecesChange={handlePiecesChange}

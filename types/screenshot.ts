@@ -51,12 +51,6 @@ export interface Media {
   hasAudio?: boolean;
 }
 
-/** A clip's in and out points, in seconds. */
-export interface Trim {
-  start: number;
-  end: number;
-}
-
 export interface StyleOptions {
   gradientId: string;
   gradientAngle: number;

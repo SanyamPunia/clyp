@@ -12,13 +12,12 @@
  * neither is a reason to break the editor.
  */
 
-import type { Cut } from "@/lib/clip-cuts";
 import type { FadeRegion } from "@/lib/clip-fade";
 import type { ZoomRegion } from "@/lib/clip-zoom";
-import type { Split } from "@/lib/clip-pieces";
+import type { LegacyEdit, Piece } from "@/lib/clip-pieces";
 import type { Look } from "@/lib/looks";
 import type { Mark } from "@/lib/marks";
-import type { MediaKind, StyleOptions, Trim } from "@/types/screenshot";
+import type { MediaKind, StyleOptions } from "@/types/screenshot";
 
 const DB_NAME = "clyp";
 const DB_VERSION = 1;
@@ -114,16 +113,14 @@ export async function deleteMedia(): Promise<void> {
  * `of` names the clip they belong to. A restore applies them only when the
  * restored clip matches, so edits made on one file never cut a different one.
  */
-export interface StoredEdits {
+export interface StoredEdits extends Partial<LegacyEdit> {
   of: { name?: string; width: number; height: number; duration: number };
-  trim: Trim;
-  /** Stretches removed from the middle. Absent in a record written before cuts. */
-  cuts?: Cut[];
   /**
-   * Split points. Absent in a record written before pieces existed, and bare
-   * numbers in one written before a split could carry a transition.
+   * The pieces in play order. Absent in a record written before pieces had an
+   * order, which holds the legacy `trim`, `cuts` and `splits` instead and is
+   * read through `fromLegacy`.
    */
-  splits?: (Split | number)[];
+  pieces?: Piece[];
   speed: number;
   zooms: ZoomRegion[];
   /** Fades. Absent in a record written before they existed. */
