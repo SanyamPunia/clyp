@@ -1,11 +1,15 @@
 /**
- * Pieces: the kept clip split at points, so a piece can be picked and deleted.
+ * Pieces: the kept clip split at points, so a piece can be trimmed, picked
+ * and deleted.
  *
- * This is the model every editor uses, where a cut is a range dragged out by
- * its edges. Split at the playhead, press the piece that should go, delete it.
- * A deleted piece becomes a cut, so nothing downstream learns a new idea: the
- * encode, both audio paths, the preview and every readout already handle a
- * cut, and a deleted piece is one.
+ * Split at the playhead, drag a piece's edges, press the piece that should go
+ * and delete it. A trimmed or deleted stretch becomes a cut, so nothing
+ * downstream learns a new idea: the encode, both audio paths, the preview and
+ * every readout already handle a cut.
+ *
+ * **The lane draws the output, not the source.** Pieces sit end to end, so a
+ * piece carries its own footage wherever the edits before it leave it, and a
+ * gap between two pieces cannot exist. `toLane` and `fromLane` are that map.
  *
  * Splits are source seconds, like the cuts and the trim. They are kept raw and
  * read through `tidySplits`, so a trim or a cut dragged across one simply
@@ -21,8 +25,10 @@
 import {
   type Cut,
   MIN_CUT,
+  type Segment,
   keptSegments,
   leavesEnough,
+  outputAt,
   tidyCuts,
 } from "@/lib/clip-cuts";
 import type { Transition } from "@/lib/clip-transitions";
@@ -121,18 +127,26 @@ export function splitAt(
 }
 
 /**
- * The cuts with a piece taken out, or null when that would leave less than
- * the clip's minimum. The splits at the piece's edges now sit on a cut's edge,
- * where `tidySplits` drops them.
+ * The edit with a piece taken out, or null when that would leave less than
+ * the clip's minimum.
+ *
+ * The piece becomes a cut, and the trim then shrinks to what is left, so
+ * deleting the first or the last piece moves the in or out point rather than
+ * leaving a cut against it. A cut against an edge would put removed footage
+ * before the first piece on the lane, where nothing can reach it.
  */
 export function removePiece(
   trim: Trim,
   cuts: readonly Cut[],
   piece: Piece,
   id: string,
-): Cut[] | null {
-  const next = tidyCuts([...cuts, { id, start: piece.start, end: piece.end }], trim);
-  return leavesEnough(trim, next) ? next : null;
+): { trim: Trim; cuts: Cut[] } | null {
+  const merged = tidyCuts([...cuts, { id, start: piece.start, end: piece.end }], trim);
+  if (!leavesEnough(trim, merged)) return null;
+
+  const kept = keptSegments(trim, merged);
+  const next = { start: kept[0].start, end: kept[kept.length - 1].end };
+  return { trim: next, cuts: tidyCuts(merged, next) };
 }
 
 /**
@@ -165,42 +179,24 @@ export interface PieceEdit {
   splits: Split[];
 }
 
-/** An edit after a move, and where the moved piece now sits. */
+/** An edit after a resize, and where the resized piece now sits. */
 export interface PieceMove extends PieceEdit {
   piece: Piece;
-}
-
-/**
- * How far a piece may move each way, in source seconds: up to the piece
- * before it and the piece after it, or the file's own ends. A piece against
- * a neighbour has no room on that side.
- */
-export function roomToMove(
-  list: readonly Piece[],
-  index: number,
-  duration: number,
-): { back: number; forward: number } {
-  const piece = list[index];
-  const lo = index > 0 ? list[index - 1].end : 0;
-  const hi = index < list.length - 1 ? list[index + 1].start : duration;
-  return {
-    back: Math.max(piece.start - lo, 0),
-    forward: Math.max(hi - piece.end, 0),
-  };
 }
 
 /**
  * The edit a list of pieces stands for, after one of them has changed.
  *
  * The pieces are the edit: the trim is the first piece's start to the last
- * one's end, every gap between two pieces is a cut, and two pieces that touch
- * meet at a split. So a move or a resize changes the list and the edit is read
- * back off it, which is what lets the first piece reach into what the trim had
- * taken off.
+ * one's end, every gap between two pieces on the source is a cut, and two
+ * pieces that touch meet at a split. So a resize changes the list and the edit
+ * is read back off it, which is what lets the first piece reach into what the
+ * trim had taken off.
  *
  * A join keeps its transition whether it is a gap or a touch afterwards, so
- * closing a gap onto a neighbour does not lose it, and neither does opening
- * one. A gap keeps the id of the cut that was in the same place, too.
+ * bringing back the footage between two pieces does not lose it, and neither
+ * does trimming some away. A gap keeps the id of the cut that was in the same
+ * place, too.
  */
 function editFrom(
   trim: Trim,
@@ -244,33 +240,6 @@ const same = (a: Piece, b: Piece) =>
   Math.abs(a.start - b.start) < 1e-6 && Math.abs(a.end - b.end) < 1e-6;
 
 /**
- * Moves one piece along the source by `by` seconds, clamped to the room
- * around it, and returns the edit that results. The piece keeps its length.
- */
-export function movePiece(
-  trim: Trim,
-  cuts: readonly Cut[],
-  splits: readonly Split[],
-  piece: Piece,
-  by: number,
-  duration: number,
-  newId: () => string,
-): PieceMove {
-  const list = pieces(trim, cuts, splits);
-  const index = list.findIndex((p) => same(p, piece));
-  if (index < 0) {
-    return { trim, cuts: [...cuts], splits: tidySplits(trim, cuts, splits), piece };
-  }
-
-  const room = roomToMove(list, index, duration);
-  const shift = Math.min(Math.max(by, -room.back), room.forward);
-  const next = list.map((p, i) =>
-    i === index ? { start: p.start + shift, end: p.end + shift } : p,
-  );
-  return { ...editFrom(trim, cuts, splits, list, next, newId), piece: next[index] };
-}
-
-/**
  * Moves one edge of a piece to `to`, the way an editor resizes a clip.
  *
  * Shortening it leaves a gap, which is a cut. Lengthening it takes the room
@@ -302,4 +271,48 @@ export function resizePiece(
       : { start: current.start, end: Math.max(Math.min(to, hi), current.start + MIN_PIECE) };
   const next = list.map((p, i) => (i === index ? resized : p));
   return { ...editFrom(trim, cuts, splits, list, next, newId), piece: resized };
+}
+
+/**
+ * Where a source time sits on the timeline lane, in seconds from the lane's
+ * left edge.
+ *
+ * The kept segments sit end to end from the first one's own start, so a cut
+ * takes no room and every piece carries its footage with it. Before the first
+ * segment the lane is the source itself, which is the footage the in point
+ * took off and where the first piece's start edge is dragged to bring it
+ * back. After the last segment the out point's footage follows on the same
+ * way. A time inside a cut lands on the join it makes.
+ */
+export function toLane(segments: readonly Segment[], time: number): number {
+  if (segments.length === 0) return time;
+  const first = segments[0];
+  const last = segments[segments.length - 1];
+  if (time <= first.start) return time;
+
+  const kept = last.at + (last.end - last.start);
+  if (time >= last.end) return first.start + kept + (time - last.end);
+  return first.start + outputAt(segments, time);
+}
+
+/**
+ * The source time under a point on the lane. `toLane` the other way round,
+ * and a point on a join is the frame the second piece opens on.
+ */
+export function fromLane(segments: readonly Segment[], x: number): number {
+  if (segments.length === 0) return x;
+  const first = segments[0];
+  const last = segments[segments.length - 1];
+  if (x <= first.start) return x;
+
+  const out = x - first.start;
+  const kept = last.at + (last.end - last.start);
+  if (out >= kept) return last.end + (out - kept);
+
+  for (const segment of segments) {
+    if (out < segment.at + (segment.end - segment.start)) {
+      return segment.start + Math.max(out - segment.at, 0);
+    }
+  }
+  return last.end;
 }

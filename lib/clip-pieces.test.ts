@@ -1,17 +1,17 @@
 import { describe, expect, it } from "vitest";
 
-import { keptSeconds } from "@/lib/clip-cuts";
+import { keptSeconds, keptSegments } from "@/lib/clip-cuts";
 import {
   MIN_PIECE,
+  fromLane,
   joinsBetween,
-  movePiece,
   pieceAt,
   pieces,
   removePiece,
   resizePiece,
-  roomToMove,
   splitAt,
   tidySplits,
+  toLane,
 } from "@/lib/clip-pieces";
 
 const trim = { start: 0, end: 6 };
@@ -83,19 +83,30 @@ describe("pieceAt", () => {
 
 describe("removePiece", () => {
   it("turns the piece into a cut, and the clip is that much shorter", () => {
-    const next = removePiece(trim, [], { start: 2, end: 4 }, "p");
-    expect(next).toEqual([{ id: "p", start: 2, end: 4 }]);
-    expect(keptSeconds(trim, next!)).toBe(4);
+    const next = removePiece(trim, [], { start: 2, end: 4 }, "p")!;
+    expect(next).toEqual({ trim, cuts: [{ id: "p", start: 2, end: 4 }] });
+    expect(keptSeconds(next.trim, next.cuts)).toBe(4);
   });
 
   it("merges with a cut it touches", () => {
     const next = removePiece(trim, [{ id: "c", start: 1, end: 2 }], { start: 2, end: 3 }, "p");
-    expect(next).toEqual([{ id: "c", start: 1, end: 3 }]);
+    expect(next?.cuts).toEqual([{ id: "c", start: 1, end: 3 }]);
   });
 
   it("drops the splits at its own edges", () => {
-    const cuts = removePiece(trim, [], { start: 2, end: 4 }, "p")!;
-    expect(tidySplits(trim, cuts, [{ at: 2 }, { at: 4 }])).toEqual([]);
+    const next = removePiece(trim, [], { start: 2, end: 4 }, "p")!;
+    expect(tidySplits(next.trim, next.cuts, [{ at: 2 }, { at: 4 }])).toEqual([]);
+  });
+
+  it("moves the in or out point rather than leaving a cut against it", () => {
+    expect(removePiece(trim, [], { start: 0, end: 2 }, "p")).toEqual({
+      trim: { start: 2, end: 6 },
+      cuts: [],
+    });
+    expect(removePiece(trim, [], { start: 4, end: 6 }, "p")).toEqual({
+      trim: { start: 0, end: 4 },
+      cuts: [],
+    });
   });
 
   it("refuses to take the last of the clip", () => {
@@ -115,64 +126,6 @@ describe("joinsBetween", () => {
       { index: 1, at: 3, transition: undefined },
       { index: 2, at: 4, transition: dip },
     ]);
-  });
-});
-
-describe("movePiece", () => {
-  let n = 0;
-  const id = () => `new-${++n}`;
-  const cuts = [{ id: "gap", start: 2, end: 3, transition: { kind: "black" as const, duration: 0.5 } }];
-
-  it("slides a piece into the removed stretch beside it", () => {
-    // Pieces [0,2] and [3,6]. The second moves back half a second.
-    const next = movePiece(trim, cuts, [], { start: 3, end: 6 }, -0.5, 6, id);
-    expect(next.trim).toEqual({ start: 0, end: 5.5 });
-    expect(next.cuts).toEqual([
-      { id: "gap", start: 2, end: 2.5, transition: { kind: "black", duration: 0.5 } },
-    ]);
-  });
-
-  it("stops at the neighbour, and the gap becomes a split", () => {
-    const next = movePiece(trim, cuts, [], { start: 3, end: 6 }, -5, 6, id);
-    expect(next.cuts).toEqual([]);
-    // The gap's transition stays on the join now that it is a split.
-    expect(next.splits).toEqual([{ at: 2, transition: { kind: "black", duration: 0.5 } }]);
-    expect(next.trim).toEqual({ start: 0, end: 5 });
-  });
-
-  it("keeps the piece's length", () => {
-    const next = movePiece(trim, cuts, [], { start: 0, end: 2 }, 0.7, 6, id);
-    const moved = pieces(next.trim, next.cuts, next.splits)[0];
-    expect(moved.end - moved.start).toBeCloseTo(2, 10);
-    expect(moved.start).toBeCloseTo(0.7, 10);
-  });
-
-  it("moves into what the trim took off, up to the file's own end", () => {
-    const trimmed = { start: 1, end: 5 };
-    const next = movePiece(trimmed, [], [{ at: 3 }], { start: 3, end: 5 }, 9, 6, id);
-    expect(next.trim).toEqual({ start: 1, end: 6 });
-    expect(next.cuts).toEqual([{ id: "new-1", start: 3, end: 4 }]);
-  });
-
-  it("cannot move a piece with a neighbour touching it on that side", () => {
-    const next = movePiece(trim, [], [{ at: 3 }], { start: 0, end: 3 }, 1, 6, id);
-    expect(next.trim).toEqual(trim);
-    expect(next.splits).toEqual([{ at: 3 }]);
-  });
-
-  it("carries a split's transition onto the gap a move opens", () => {
-    const dip = { kind: "white" as const, duration: 0.3 };
-    const next = movePiece(trim, [], [{ at: 3, transition: dip }], { start: 3, end: 6 }, 0, 6, id);
-    expect(next.splits).toEqual([{ at: 3, transition: dip }]);
-    const trimmed = { start: 0, end: 5 };
-    const opened = movePiece(trimmed, [], [{ at: 3, transition: dip }], { start: 3, end: 5 }, 1, 6, id);
-    expect(opened.cuts).toEqual([{ id: expect.any(String), start: 3, end: 4, transition: dip }]);
-  });
-
-  it("reports the room each way", () => {
-    const list = pieces(trim, cuts, []);
-    expect(roomToMove(list, 0, 6)).toEqual({ back: 0, forward: 1 });
-    expect(roomToMove(list, 1, 6)).toEqual({ back: 1, forward: 0 });
   });
 });
 
@@ -208,5 +161,62 @@ describe("resizePiece", () => {
     const dip = { kind: "black" as const, duration: 0.5 };
     const next = resizePiece(trim, [], [{ at: 3, transition: dip }], { start: 3, end: 6 }, "start", 4, 6, id);
     expect(next.cuts).toEqual([{ id: "new", start: 3, end: 4, transition: dip }]);
+  });
+});
+
+describe("the lane", () => {
+  const id = () => "new";
+
+  it("is the source itself with nothing cut", () => {
+    const segments = keptSegments(trim, []);
+    expect(toLane(segments, 2.5)).toBe(2.5);
+    expect(fromLane(segments, 2.5)).toBe(2.5);
+  });
+
+  it("closes the gap a trimmed piece leaves, and the next piece keeps its footage", () => {
+    // A ten second clip split at three, then the first piece cut back to one
+    // second. The second piece sits right after it on the lane and still
+    // opens on the source's third second, not on what used to be beside it.
+    const clip = { start: 0, end: 10 };
+    const next = resizePiece(clip, [], [{ at: 3 }], { start: 0, end: 3 }, "end", 1, 10, id);
+    const segments = keptSegments(next.trim, next.cuts);
+    const [first, second] = pieces(next.trim, next.cuts, next.splits);
+
+    expect(first).toEqual({ start: 0, end: 1 });
+    expect(second).toEqual({ start: 3, end: 10 });
+    expect(toLane(segments, second.start)).toBe(1);
+    expect(fromLane(segments, 1)).toBe(3);
+    expect(toLane(segments, second.end)).toBe(8);
+  });
+
+  it("keeps the footage the in point took off on the left, at its own place", () => {
+    const segments = keptSegments({ start: 2, end: 6 }, [{ id: "c", start: 3, end: 4 }]);
+    expect(toLane(segments, 1)).toBe(1);
+    expect(toLane(segments, 2)).toBe(2);
+    expect(toLane(segments, 4)).toBe(3);
+    expect(fromLane(segments, 1.5)).toBe(1.5);
+  });
+
+  it("puts the footage the out point took off right after the last piece", () => {
+    const segments = keptSegments({ start: 0, end: 6 }, [{ id: "c", start: 2, end: 3 }]);
+    expect(toLane(segments, 6)).toBe(5);
+    expect(toLane(segments, 8)).toBe(7);
+    expect(fromLane(segments, 7)).toBe(8);
+  });
+
+  it("lands a time inside a cut on the join", () => {
+    const segments = keptSegments(trim, [{ id: "c", start: 2, end: 3 }]);
+    expect(toLane(segments, 2.5)).toBe(2);
+    expect(fromLane(segments, 2)).toBe(3);
+  });
+
+  it("round-trips every kept time", () => {
+    const segments = keptSegments({ start: 1, end: 9 }, [
+      { id: "a", start: 2, end: 2.5 },
+      { id: "b", start: 4, end: 5 },
+    ]);
+    for (const time of [0, 0.5, 1, 1.7, 2.6, 3.9, 5, 6.2, 8.9, 9.5]) {
+      expect(fromLane(segments, toLane(segments, time))).toBeCloseTo(time, 10);
+    }
   });
 });

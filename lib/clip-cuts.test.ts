@@ -2,19 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import {
   type Cut,
-  DEFAULT_CUT_LENGTH,
-  MIN_CUT,
   MIN_KEPT,
   afterCuts,
   cutAt,
   keptSeconds,
   keptSegments,
   leavesEnough,
-  longestCut,
   nearestKept,
   outputAt,
-  placeCut,
-  roomForCut,
   tidyCuts,
   toOutput,
   toSource,
@@ -315,98 +310,6 @@ describe("nearestKept", () => {
   });
 });
 
-describe("roomForCut", () => {
-  it("is the whole trim with no cuts", () => {
-    expect(roomForCut(trim(2, 8), [], 5)).toEqual({ lo: 2, hi: 8 });
-  });
-
-  it("stops at the neighbours either side", () => {
-    const cuts = [cut(1, 2), cut(6, 7)];
-    expect(roomForCut(trim(0, 10), cuts, 4)).toEqual({ lo: 2, hi: 6 });
-  });
-
-  it("is null for a time already inside a cut", () => {
-    expect(roomForCut(trim(0, 10), [cut(4, 6)], 5)).toBeNull();
-  });
-
-  it("excludes a cut from its own bounds, which is what lets it be dragged", () => {
-    const cuts = [cut(1, 2, "a"), cut(4, 5, "b"), cut(7, 8, "c")];
-    expect(roomForCut(trim(0, 10), cuts, 4.5, "b")).toEqual({ lo: 2, hi: 7 });
-  });
-});
-
-describe("placeCut", () => {
-  it("runs the default length forward from the press", () => {
-    expect(placeCut(trim(0, 10), [], 3)).toEqual({
-      start: 3,
-      end: 3 + DEFAULT_CUT_LENGTH,
-    });
-  });
-
-  it("takes what is left when the out point is closer", () => {
-    expect(placeCut(trim(0, 10), [], 9.5)).toEqual({ start: 9.5, end: 10 });
-  });
-
-  it("pulls back to fit only when less than the shortest is left forward", () => {
-    const placed = placeCut(trim(0, 10), [], 9.9)!;
-    expect(placed.end).toBe(10);
-    expect(placed.end - placed.start).toBeCloseTo(MIN_CUT, 10);
-  });
-
-  it("stops at a neighbour rather than crossing it", () => {
-    expect(placeCut(trim(0, 10), [cut(4, 6)], 3.5)).toEqual({
-      start: 3.5,
-      end: 4,
-    });
-  });
-
-  it("is null inside an existing cut", () => {
-    expect(placeCut(trim(0, 10), [cut(4, 6)], 5)).toBeNull();
-  });
-
-  it("is null in a gap too small", () => {
-    const cuts = [cut(0, 5), cut(5.1, 10)];
-    expect(placeCut(trim(0, 10), cuts, 5.05)).toBeNull();
-  });
-
-  it("shortens rather than refuses, so a short clip can still be cut", () => {
-    // A cut can always be made smaller, unlike a zoom, which either fits or
-    // does not. A 1s clip keeps its last MIN_KEPT and loses the rest.
-    expect(placeCut(trim(0, 1), [], 0)).toEqual({ start: 0, end: 0.8 });
-    expect(keptSeconds(trim(0, 1), [cut(0, 0.8)])).toBeCloseTo(MIN_KEPT, 10);
-  });
-
-  it("refuses when less than the shortest cut could be removed", () => {
-    expect(placeCut(trim(0, 0.3), [], 0)).toBeNull();
-    // And when earlier cuts have already taken the clip down to the minimum.
-    expect(placeCut(trim(0, 10), [cut(0, 9.8)], 9.9)).toBeNull();
-  });
-
-  it("never leaves less picture than the minimum, wherever it is pressed", () => {
-    for (const end of [0.5, 1, 1.4, 3, 10]) {
-      for (let t = 0; t < end; t += 0.05) {
-        const placed = placeCut(trim(0, end), [], t);
-        if (!placed) continue;
-        expect(
-          keptSeconds(trim(0, end), [{ id: "x", ...placed }]),
-        ).toBeGreaterThanOrEqual(MIN_KEPT - 1e-9);
-      }
-    }
-  });
-
-  it("never proposes anything outside the trim or shorter than the minimum", () => {
-    for (let t = 2; t < 8; t += 0.1) {
-      const placed = placeCut(trim(2, 8), [cut(4, 4.5)], t);
-      if (!placed) continue;
-      expect(placed.end - placed.start).toBeGreaterThanOrEqual(MIN_CUT - 1e-9);
-      expect(placed.start).toBeGreaterThanOrEqual(2 - 1e-9);
-      expect(placed.end).toBeLessThanOrEqual(8 + 1e-9);
-      expect(keptSeconds(trim(2, 8), [cut(4, 4.5), { id: "x", ...placed }]))
-        .toBeGreaterThanOrEqual(MIN_KEPT - 1e-9);
-    }
-  });
-});
-
 /**
  * The export's own loop, on synthetic samples.
  *
@@ -534,8 +437,6 @@ describe("leavesEnough", () => {
   });
 
   it("is false when the cuts take everything", () => {
-    // One cut's two edges, pulled to the in and out points. placeCut will not
-    // propose this, but a drag can reach it.
     expect(leavesEnough(trim(0, 10), [cut(0, 10)])).toBe(false);
   });
 
@@ -553,58 +454,5 @@ describe("leavesEnough", () => {
     const cuts = [cut(0, 5)];
     expect(leavesEnough(trim(0, 10), cuts)).toBe(true);
     expect(leavesEnough(trim(0, 5.1), cuts)).toBe(false);
-  });
-});
-
-describe("longestCut", () => {
-  it("is the clip less the minimum, for the only cut", () => {
-    expect(longestCut(trim(0, 10), [cut(2, 3, "a")], "a")).toBeCloseTo(
-      10 - MIN_KEPT,
-      10,
-    );
-  });
-
-  it("counts what the other cuts already take", () => {
-    const cuts = [cut(0, 4, "a"), cut(6, 7, "b")];
-    // Without "b" the clip keeps 6s, so "b" may be 6 - MIN_KEPT.
-    expect(longestCut(trim(0, 10), cuts, "b")).toBeCloseTo(6 - MIN_KEPT, 10);
-  });
-
-  it("is zero rather than negative when nothing may be removed", () => {
-    expect(longestCut(trim(0, 0.1), [], "a")).toBe(0);
-  });
-
-  it("is exactly the length that leaves the minimum", () => {
-    const t = trim(0, 10);
-    const longest = longestCut(t, [], "a");
-    expect(leavesEnough(t, [cut(0, longest, "a")])).toBe(true);
-    expect(leavesEnough(t, [cut(0, longest + 0.01, "a")])).toBe(false);
-  });
-});
-
-describe("placeCut with a length, which is what a paste needs", () => {
-  it("keeps the copied length where there is room", () => {
-    expect(placeCut(trim(0, 10), [], 3, 2.5)).toEqual({ start: 3, end: 5.5 });
-  });
-
-  it("takes what is left when a neighbour is closer", () => {
-    expect(placeCut(trim(0, 10), [cut(4, 6)], 3, 2.5)).toEqual({
-      start: 3,
-      end: 4,
-    });
-  });
-
-  it("still pulls back only to the shortest, never to the length", () => {
-    // A press in the last tenth of a second did not mean "remove a second".
-    const placed = placeCut(trim(0, 10), [], 9.9, 2)!;
-    expect(placed.end - placed.start).toBeCloseTo(MIN_CUT, 10);
-  });
-
-  it("never leaves less than the minimum, whatever length is asked for", () => {
-    const placed = placeCut(trim(0, 3), [], 0, 10);
-    expect(placed).not.toBeNull();
-    expect(keptSeconds(trim(0, 3), [{ id: "x", ...placed! }])).toBeGreaterThanOrEqual(
-      MIN_KEPT - 1e-9,
-    );
   });
 });

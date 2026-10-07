@@ -45,8 +45,6 @@ export interface Segment {
 
 /** The shortest cut worth having. Below this it is a frame or two of nothing. */
 export const MIN_CUT = 0.2;
-/** What a new cut is given when there is room for it. */
-export const DEFAULT_CUT_LENGTH = 1;
 /**
  * The shortest the kept clip may be left. The trim's own minimum, so a cut can
  * never leave less picture than dragging the handles together would.
@@ -199,28 +197,10 @@ export function afterCuts(
 }
 
 /**
- * The longest one cut may be without leaving less picture than `MIN_KEPT`.
- *
- * A drag clamps its edges with this rather than being refused by
- * `leavesEnough`, so the edge slides to the limit and stops there instead of
- * sticking wherever the last accepted pointer sample put it.
- */
-export function longestCut(
-  trim: Trim,
-  cuts: readonly Cut[],
-  id: string,
-): number {
-  const others = cuts.filter((cut) => cut.id !== id);
-  return Math.max(keptSeconds(trim, others) - MIN_KEPT, 0);
-}
-
-/**
  * Whether a set of cuts leaves enough of the clip to be worth exporting.
  *
- * `placeCut` will not propose one that does not, but a drag can reach the same
- * place: one cut's two edges, pulled to the in and out points, span the whole
- * trim. So every edit that changes a cut or a trim asks this before taking it,
- * and the edge stops rather than the clip going to nothing.
+ * Deleting a piece asks this before taking it, so the last of the clip cannot
+ * be deleted away.
  */
 export function leavesEnough(trim: Trim, cuts: readonly Cut[]): boolean {
   return keptSeconds(trim, cuts) >= MIN_KEPT - 1e-9;
@@ -251,73 +231,4 @@ export function nearestKept(
   if (back <= trim.start) return forward;
   if (forward >= trim.end) return back;
   return time - cut.start <= cut.end - time ? back : forward;
-}
-
-/**
- * The stretch a cut may occupy without crossing its neighbours, or null when
- * `time` is already inside one. `id` excludes a cut from its own bounds, which
- * is what lets an existing one be dragged.
- */
-export function roomForCut(
-  trim: Trim,
-  cuts: readonly Cut[],
-  time: number,
-  id?: string,
-): { lo: number; hi: number } | null {
-  const others = cuts.filter((cut) => cut.id !== id);
-  const own = id ? cuts.find((cut) => cut.id === id) : undefined;
-  const from = own ? own.start : time;
-  const to = own ? own.end : time;
-
-  if (!own && cutAt(others, time)) return null;
-
-  return {
-    lo: Math.max(
-      trim.start,
-      ...others.filter((cut) => cut.end <= from).map((cut) => cut.end),
-    ),
-    hi: Math.min(
-      trim.end,
-      ...others.filter((cut) => cut.start >= to).map((cut) => cut.start),
-    ),
-  };
-}
-
-/**
- * Where a new cut lands for a press at `time`: the default length from there,
- * or what is left before a neighbour, the out point, or the last `MIN_KEPT` of
- * picture.
- *
- * A press means "from here" whenever that is possible, so the cut is only
- * pulled back to fit when less than the shortest cut is left forward.
- *
- * **A cut is shortened to leave the minimum rather than refused for it.**
- * Unlike a zoom, which either fits or does not, a cut can always be made
- * smaller, and on a two second clip a Cut button that does nothing is worse
- * than one that removes what it can. It refuses only when a cut worth having
- * would not fit at all: a cut already covering `time`, a gap too small, or
- * less than `MIN_CUT` of removable picture left.
- */
-export function placeCut(
-  trim: Trim,
-  cuts: readonly Cut[],
-  time: number,
-  length = DEFAULT_CUT_LENGTH,
-): { start: number; end: number } | null {
-  const room = roomForCut(trim, cuts, time);
-  if (!room) return null;
-
-  // What may still be removed. `time` is not inside a cut, so the whole of a
-  // cut placed within `room` comes off the kept total one for one.
-  const spare = keptSeconds(trim, cuts) - MIN_KEPT;
-  if (spare < MIN_CUT) return null;
-
-  const forward = Math.min(length, room.hi - time, spare);
-  if (forward >= MIN_CUT) return { start: time, end: time + forward };
-
-  // The pull-back takes the shortest, never `length`. Reaching here means
-  // there was almost no room forward, and removing a whole second because the
-  // press landed in the last tenth of one is not what "from here" meant.
-  if (room.hi - room.lo < MIN_CUT) return null;
-  return { start: room.hi - MIN_CUT, end: room.hi };
 }
