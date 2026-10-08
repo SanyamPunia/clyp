@@ -722,32 +722,38 @@ One control does both jobs because they are the same geometry: a lane a reader
 can scrub is a lane a reader can cut, and two timelines under one video would
 have to agree about where a second is.
 
-**The lane draws the output, not the source.** The pieces sit end to end in
-the order they play, so each piece carries its own footage, and trimming one
-moves the pieces after it up rather than leaving a gap. `laneOf` in
-`lib/clip-pieces.ts` is the map, and every lane under the picture's goes
-through it: the playhead, the ruler, the zooms, the fades, the suggestions and
-the soundtrack.
+**The timeline is the output's, on a fixed ruler, the way Canva's is.** The
+ruler starts at zero on the left and runs past the end of the clip. The pieces
+sit end to end from zero in the order they play, so each piece carries its own
+footage, and trimming one moves the pieces after it up rather than leaving a
+gap. `startsOf` in `lib/clip-pieces.ts` places them, and every lane under the
+picture's is on the same seconds: the playhead, the ruler, the zooms, the
+fades, the suggestions and the soundtrack.
 
 - **The first build drew the source, and a piece was a window on it.**
   Dragging a piece into a gap moved the window, so the piece showed whatever
-  footage it slid over: a reader who trimmed the first piece and pulled the
-  second one up to meet it got the cut-away seconds back in place of the
-  second piece's own. Drawing the output removes the gap that invited the
-  drag.
-- **The lane keeps the whole source's width.** Its scale does not change
-  under a drag, so an edge stays under the pointer. In front of the first
-  piece is the footage it can still reach back into, at its own place, which
-  is where its start edge is dragged to bring it back. After the last piece is
-  the footage it can still reach on into. Footage no piece holds takes no
-  room, so the rail ends short of the lane's right edge.
-- **The ruler and the clock read the output's seconds before the speed**,
-  counted from the first piece, so a label says what the file says at that
-  point.
+  footage it slid over. The second build drew the output but started it where
+  the first piece's footage started, so trimming the first piece's start moved
+  the ruler's zero under the pointer. Zero now never moves: only the zoom
+  changes the scale.
+- **The scale is pixels a second, and the zoom is a factor on it.** At a zoom
+  of 1, `timelineExtent`, half as much again as the file rounded up to a step,
+  fills the visible width, so a clip lands with room after it. Zooming out
+  shows up to `MAX_TIMELINE`, ten minutes, and zooming in goes to `MAX_PPS`,
+  eight pixels a frame. Cmd or Ctrl with the wheel zooms about the pointer, so
+  does a trackpad pinch, and a slider in the bottom row shows where the zoom
+  sits on a log scale. The zoom is view state and is not stored.
+- **The timeline scrolls sideways in its own box**, and every lane scrolls with
+  it, so a second sits at the same x on all of them. It runs at least the
+  visible width and past the pieces and the sound. While playing it scrolls to
+  keep the playhead in view, through its own `scrollLeft`.
+- **The ruler is on top and the playhead runs the full height**, from its knob
+  on the ruler down through every lane, the way an editor draws it.
+- **The ruler and the clock read the output's seconds before the speed**, so a
+  label says what the file says at that point.
 
-- **The kept clip is a block and what is cut is a rail.** Two fills a few steps
-  apart across one flat lane read as one lane, however far apart the tones are,
-  so the height is what says which part survives.
+- **The pieces are blocks on a full-height track**, each with its length in
+  its corner, so the track says where the clip is and is not.
 - **A handle sits fully inside the lane at both ends**, so the span a value maps
   onto is the lane less one handle. It is a `calc` rather than a measurement,
   which is what lets the handles and the selection render without knowing the
@@ -847,20 +853,22 @@ the soundtrack.
   whose marks still read as separate ones. They carry no number, so they need
   only be far enough apart to see, and they are what turns a row of numbers
   into a ruler.
-- **Everything lands on the export's frame grid.** Both handles snap to it,
+- **Everything lands on the export's frame grid.** Every end snaps to it,
   dragged or nudged, and the arrow keys step one frame where Shift steps a
   second. An out point between two output frames cannot be honoured, so
-  offering one is a readout that lies by up to 33 ms. The snap is invisible: a
-  frame is 1.5px on a 20 s clip across an 882px lane.
+  offering one is a readout that lies by up to 33 ms.
 - **The playhead's own time is written beside the transport, to the
   millisecond.** Written rather than rendered, like the playhead itself:
   measured at 58 text mutations across one second of playback, which is one a
   frame and no React renders. `formatPrecise` takes the clip's length as well
   as the value, so a readout counting up through a long clip keeps one shape
   instead of growing a `0:` at the minute mark.
-- The axis is `aria-hidden`, since both handles already report their value in
-  seconds and a reader hears the numbers that matter.
-- **A press on the lane seeks and holding it drags the playhead along.** It
+- The ruler is `aria-hidden`, since the playhead's knob and every end report
+  their value in seconds and a reader hears the numbers that matter.
+- **A press on the ruler or the empty track seeks and holding it drags the
+  playhead along.** A press on a piece is the piece's, never the playhead's
+  drag: the two were one gesture once, and a reader reaching for a piece got
+  the playhead. It
   pauses for the drag and resumes on release if it was playing: playback and a
   scrub fight over the same clock, and what comes out is the video stuttering
   rather than being moved.
@@ -895,29 +903,33 @@ piece holds is what was cut, and two pieces of continuous footage side by
 side are what a split leaves. The encode, both audio paths, the preview, every
 readout and the undo history read the one list.
 
-**Two pieces never share footage.** A piece's ends stop at the footage of
-whichever piece holds the source beside it, through `roomOf`, so a source time
-belongs to at most one piece and the map from the source to the output is one
-to one. That is what lets the zooms, the fades, the ripples and a soundtrack's
-anchor stay on the source's axis: they follow their footage wherever its piece
-plays.
+**Every piece is its own reference to the file**, the way a clip is in
+Canva. Its ends reach anywhere from the file's start to its end, whatever the
+other pieces hold, so two pieces can show the same footage, which is what a
+copy is. The zooms, the fades and the ripples stay on the source's axis and
+apply wherever their footage plays, every time it plays. The second build kept
+pieces from sharing footage, and an end then stopped at the next piece's
+footage rather than at the end of the file.
 
 - **The first build kept the source order and called a piece a window on
   it.** Dragging a piece into a gap slid the window, so the piece showed
   whatever footage it slid over. Pieces now carry their own `start` and `end`,
   and nothing moves them but their own ends.
 - **Each end of a piece trims it.** Coming in removes footage from the piece.
-  Going out brings footage back, up to the piece holding the source beside it
-  or the file's own end. It never goes under `MIN_PIECE`.
+  Going out brings footage back, as far as the file's own start or end. It
+  never goes under `MIN_PIECE`. A bubble over the end names the piece's length
+  while it is dragged.
   - **The end being dragged is the only thing that moves.** An end edge moves
     the pieces after it along with it. A start edge cannot do that without
     moving the pieces in front, so while it is held the piece is drawn through
     a `LanePreview`: it and everything after it are shifted so its far end
     holds still. Bringing the start in opens a gap in front of it, taking it
     out runs it over the piece before, and letting go closes the pieces up
-    over 200 ms. The second build kept the pieces packed during the drag, and
-    a start edge then moved the piece's other end, which read as the wrong
-    end being dragged.
+    over 200 ms. The first piece works the same way, which is what Canva does:
+    its start follows the pointer away from zero and the piece goes back to
+    zero on release. Taken out past zero, it grows to the right instead.
+  - The drag measures the pointer's own travel rather than its place on the
+    timeline, so it keeps counting off either end.
   - **In one piece the ends are the clip's in and out points**, labelled Clip
     start and Clip end, and their grips always show. There are no separate
     trim handles, so there is one handle on each end in every state.
@@ -930,9 +942,14 @@ plays.
   is a click and puts the playhead where it landed. While carried, the cursor
   is `grabbing` on the root, since the pointer can leave the lane. Alt with an
   arrow moves a focused piece one place.
+- **Cmd C and Cmd V copy a piece**, and the copy lands right after the
+  selected piece, or after the piece under the playhead, the way a pasted clip
+  does in Canva. The piece's own Duplicate button does the same in one press.
 - **Playback follows the order, not the file.** The frame loop holds which
-  piece the playhead is in, since a time where one piece ends and another
-  opens belongs to either, and only the loop saw the playhead arrive. Playing
+  piece the playhead is in, by id, since two pieces can show the same footage
+  and a time where one piece ends and another opens belongs to either. It
+  tells the owner through `onCursorChange`, which is what the split, the
+  transitions and the soundtrack read. Playing
   past a piece's end goes to the next piece's start, without a seek when the
   footage is continuous, since a seek to where the element already is
   stutters. Every seek the bar makes names the piece it is aimed at.
@@ -942,8 +959,8 @@ plays.
   the owner's play toggle into the bar's `play` listener, since only the bar
   knows the playhead is in the last piece: where the last piece ends another
   can open, and a seek there would play that one.
-- **The playhead is picked up by its knob**, above the pieces, or by a press
-  on the bare lane or the ruler. Its line takes no presses: a split leaves it
+- **The playhead is picked up by its knob** on the ruler, or by a press on the
+  ruler or the empty track. Its line takes no presses: a split leaves it
   standing on the join, and the line's grab area took every press meant for
   the ends either side.
 - **Delete or Backspace removes the selected piece at once**, the same as a
@@ -967,10 +984,9 @@ plays.
 - **A mixed clip is read as one range per piece** and scheduled into the
   `OfflineAudioContext` at its own output time, which is what a context is
   for. All of them come off a single decoder.
-- **A laid soundtrack is scheduled once and plays through.** Its anchor moves
-  with the frame it is anchored to, read off the same lane, but the track
-  itself does not jump with the picture. Music with a jump cut in it sounds
-  broken.
+- **A laid soundtrack is scheduled once and plays through.** It sits on the
+  timeline, so a join under it does not make it jump. Music with a jump cut in
+  it sounds broken.
 - **A draft stored before pieces had an order** holds an in and out point,
   cuts and splits, and `fromLegacy` reads it as the pieces they made. Every
   restore goes through `tidyPieces`, which drops any piece sharing footage
@@ -1149,8 +1165,9 @@ and the Motion radiogroup is one more while a moving preset is chosen.
 | Space | Play and pause, from anywhere on the page |
 | Cmd/Ctrl S | Download |
 | Cmd/Ctrl Shift C | Copy the picture |
-| Cmd/Ctrl C | Copy the selected zoom |
-| Cmd/Ctrl V | Paste it at the playhead |
+| Cmd/Ctrl C | Copy the selected zoom or piece |
+| Cmd/Ctrl V | Paste it: a zoom at the playhead, a piece right after the selected one |
+| Cmd/Ctrl scroll | Zoom the timeline about the pointer |
 | Cmd/Ctrl Z | Undo, Shift to redo |
 | S | Split the clip at the playhead |
 | Delete or Backspace | Remove the selected mark or piece, or join a selected join's pieces back |
@@ -1282,19 +1299,18 @@ export as 120 frames at 60 fps over 2.000 s.
   preview mutes it so the two agree, the trim bar's clip mute is disabled with
   the reason in its tooltip, and the export modal shows a line in place of the
   switch. A hand-written WSOLA is the way to bring it back if it is wanted.
-- **A soundtrack keeps its own tempo and its anchor.** `offset` stays on the
-  source's axis, so trimming never moves the region and a speed change leaves
-  its left edge on the same frame. `start` and `end` are on the track's own
-  clock, which is also the output's, so on the lane the region spans
-  `(end - start) * speed`. Every drag converts between the two: a lane distance
-  is `by / speed` of track. The mix places the region at
-  `(offset - trim.start) / speed`. Verified on a track that steps 440 Hz to
+- **A soundtrack keeps its own tempo.** `offset` is on the timeline, in the
+  output's seconds before speed. `start` and `end` are on the track's own
+  clock, which is also the output's, so on the timeline the region spans
+  `(end - start) * speed`. Every drag converts between the two: a timeline
+  distance is `by / speed` of track. The mix places the region at
+  `offset / speed`. Verified on a track that steps 440 Hz to
   880 Hz at 3 s: exported at 2x over 2 s, the last 0.35 s still reads 440 Hz,
   where a sped track would read 880.
-- **A faster clip has less lane behind the anchor**, so the region's tail is
-  cut to fit when the speed rises, in `handleSpeedChange`, and a track that
-  arrives above 1x is cut on arrival, since `loadSoundtrack` is handed
-  `duration / speed`. It is never drawn past the lane.
+- **A faster clip has less timeline after the region's start**, so its tail
+  is cut to fit when the speed rises, in `handleSpeedChange`, and a track that
+  arrives above 1x is cut on arrival, since `loadSoundtrack` is handed the
+  pieces' length over the speed.
 - **`clipSeconds` is the output's length**, so the toolbar, the modal and the
   size estimate all read the kept seconds over the speed. The trim bar's own
   readout, its ruler and its clock stay in seconds before the speed, since
@@ -1362,14 +1378,12 @@ position, so the marker never reached the file.
   lanes it measures. The slot keeps the row count fixed and keeps the level
   chips off the right side, where they would sit beside the speed pill as two
   runs of "2x" that read as one control. The hint is the marker's tooltip.
-- **A region is not bounded by the trim.** Like a soundtrack, it lives on the
-  file's axis, so trimming never moves or cuts it. One before the in point or
-  after the out point plays nothing and is drawn over the rail there, which
-  says so. One inside a cut shrinks to the join on the lane.
-- **A region is drawn and dragged through the lane's map**, since the lane
-  draws the output. A drag's distance is turned into source seconds at the
-  edge that moves, through `fromLane`, so that edge stays under the pointer
-  across a join.
+- **A region lives on the file's axis**, so trimming never moves it, and it
+  applies wherever its footage plays. On the timeline it is drawn once for
+  every piece showing part of it, through `occurrences`. The first block is
+  the one the keyboard and a reader reach, and the edges sit where the
+  region's own start and end show. Footage no piece shows draws nothing. The
+  fades are drawn the same way, each block showing its part of the ramp.
 - **Adding one lands at the playhead**: the default two seconds from there, or
   what is left before a neighbour or the end. Only when less than the shortest
   region is left is it pulled back to fit, since a press means "from here"
@@ -1514,15 +1528,17 @@ A sound file laid over the clip, on its own lane under the picture's.
 `lib/video-export.ts` encodes it in place of the clip's own audio.
 
 **Three numbers place it, and they are the model a timeline editor uses.**
-`offset` is where the region's left edge sits on the clip's axis, `start` and
+`offset` is where the region's left edge sits on the timeline, `start` and
 `end` are the slice of the file it plays. Dragging the body moves `offset`
 alone. Dragging the left edge moves `offset` and `start` together, so the sound
 stays anchored where it was while the edge comes in. Only the right edge changes
 the region's length on its own.
 
-- **The lane shares the video lane's axis and the same `at()` geometry**, so
-  where the sound starts is read against where the clip does rather than
-  described in a number. Both its edges snap to the same frame grid.
+- **The lane is on the timeline's seconds like every other**, so where the
+  sound starts is read against where the pieces do rather than described in a
+  number. Both its edges snap to the same frame grid. The preview reads the
+  output's time through the piece the playhead is in, so the sound stays with
+  the picture across a join.
 - **Scrolling inside the region slips the sound through it**, which is the
   other half of positioning: the region's place on the clip and its length are
   usually right before the part of the track behind them is. `start` and `end`
