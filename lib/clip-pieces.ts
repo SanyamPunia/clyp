@@ -3,17 +3,16 @@
  * play.
  *
  * This is the model every editor uses. Split at the playhead, drag a piece's
- * edges to trim it, drag the piece itself to put it somewhere else in the
- * order, delete the one that should go. The list is the whole edit: the
- * output is each piece's footage end to end, in list order, and nothing
+ * ends to trim it, drag the piece itself to put it somewhere else in the
+ * order, copy it, delete the one that should go. The list is the whole edit:
+ * the output is each piece's footage end to end, in list order, and nothing
  * between them.
  *
- * **Two pieces never share footage.** A piece's edges stop at the footage of
- * whichever piece holds the source either side of it, so a source time
- * belongs to at most one piece and the map from the source to the output is
- * one to one. That is what lets the zooms, the fades, the marks' ripples and
- * a soundtrack's anchor stay on the source's axis: they follow their footage
- * wherever its piece goes.
+ * **Every piece is its own reference to the file**, the way a clip is in
+ * Canva. Its ends reach anywhere from the file's start to its end, whatever
+ * the other pieces hold, so two pieces can show the same footage: that is
+ * what a copy is. The zooms, the fades and the ripples stay on the source's
+ * axis and go wherever their footage plays, every time it plays.
  *
  * **A transition belongs to the piece it runs into.** Moving a piece takes its
  * way in with it. The first piece's is never read.
@@ -72,11 +71,13 @@ export function lengthOf(pieces: readonly Piece[]): number {
 }
 
 /**
- * The piece holding a source time, or -1.
+ * The first piece in the order holding a source time, or -1. Pieces can
+ * share footage, so where it matters which one, the caller names the piece
+ * by id and this is only the fallback.
  *
- * End exclusive, so a time two pieces share at an edge belongs to the one it
- * opens. A time on a piece's end that opens nothing still counts as that
- * piece, which is where a playhead parks at the end of the clip.
+ * End exclusive, so a time where one piece ends and another opens belongs to
+ * the one it opens. A time on a piece's end that opens nothing still counts
+ * as that piece, which is where a playhead parks at the end of the clip.
  */
 export function indexAt(segments: readonly Segment[], time: number): number {
   const inside = segments.findIndex((s) => time >= s.start && time < s.end);
@@ -84,12 +85,23 @@ export function indexAt(segments: readonly Segment[], time: number): number {
   return segments.findIndex((s) => Math.abs(time - s.end) < 1e-6);
 }
 
-/** Output seconds before speed for a source time in a piece, or null. */
-export function outputOf(segments: readonly Segment[], time: number): number | null {
-  const index = indexAt(segments, time);
-  if (index < 0) return null;
-  const segment = segments[index];
-  return segment.at + (time - segment.start);
+/**
+ * Output seconds before speed for a source time, in the piece at `index` when
+ * it holds that time, or else the first piece that does. Null when none does.
+ */
+export function outputOf(
+  segments: readonly Segment[],
+  time: number,
+  index = -1,
+): number | null {
+  const own = segments[index];
+  const at =
+    own && time >= own.start - 1e-3 && time <= own.end + 1e-3
+      ? index
+      : indexAt(segments, time);
+  if (at < 0) return null;
+  const segment = segments[at];
+  return segment.at + Math.min(Math.max(time - segment.start, 0), segment.end - segment.start);
 }
 
 /** The source time at an output time, and the piece it is in. */
@@ -108,27 +120,6 @@ export function sourceAt(
     }
   }
   return { index: -1, time: 0 };
-}
-
-/**
- * How far a piece's edges may go on the source: back to the footage of the
- * piece that holds the source before it, forward to the next one's, or the
- * file's own ends.
- */
-export function roomOf(
-  pieces: readonly Piece[],
-  index: number,
-  duration: number,
-): { lo: number; hi: number } {
-  const piece = pieces[index];
-  let lo = 0;
-  let hi = duration;
-  pieces.forEach((other, i) => {
-    if (i === index) return;
-    if (other.end <= piece.start + 1e-9) lo = Math.max(lo, other.end);
-    if (other.start >= piece.end - 1e-9) hi = Math.min(hi, other.start);
-  });
-  return { lo, hi };
 }
 
 /**
@@ -162,10 +153,10 @@ export function removePiece(pieces: readonly Piece[], index: number): Piece[] | 
 }
 
 /**
- * Moves one edge of a piece to a source time, the way an editor trims a
- * clip. Coming in removes footage from the piece. Going out brings footage
- * back, up to the piece that holds the source beside it or the file's own
- * end, and no further. It never goes under `MIN_PIECE`.
+ * Moves one end of a piece to a source time, the way an editor trims a clip.
+ * Coming in removes footage from the piece. Going out brings footage back, as
+ * far as the file's own start or end and no further. It never goes under
+ * `MIN_PIECE`.
  */
 export function resizePiece(
   pieces: readonly Piece[],
@@ -176,11 +167,10 @@ export function resizePiece(
 ): Piece[] {
   const piece = pieces[index];
   if (!piece) return [...pieces];
-  const { lo, hi } = roomOf(pieces, index, duration);
   const next =
     edge === "start"
-      ? { ...piece, start: clamp(to, lo, piece.end - MIN_PIECE) }
-      : { ...piece, end: clamp(to, piece.start + MIN_PIECE, hi) };
+      ? { ...piece, start: clamp(to, 0, piece.end - MIN_PIECE) }
+      : { ...piece, end: clamp(to, piece.start + MIN_PIECE, duration) };
   return pieces.map((p, i) => (i === index ? next : p));
 }
 
@@ -195,6 +185,25 @@ export function movePiece(
   if (!moved) return [...pieces];
   next.splice(clamp(to, 0, next.length), 0, moved);
   return next;
+}
+
+/**
+ * The list with a copy of the piece at `index` right after it. The copy is
+ * the same footage under a new id, and joins its original with a straight
+ * cut, whatever way in the original has.
+ */
+export function copyPiece(
+  pieces: readonly Piece[],
+  index: number,
+  id: string,
+): Piece[] {
+  const piece = pieces[index];
+  if (!piece) return [...pieces];
+  return [
+    ...pieces.slice(0, index + 1),
+    { id, start: piece.start, end: piece.end },
+    ...pieces.slice(index + 1),
+  ];
 }
 
 /**
@@ -241,10 +250,9 @@ export function withTransition(
 
 /**
  * Stored pieces made safe for a file of `duration`: clamped to it, put on the
- * frame grid by `snap`, anything under the shortest dropped, and anything
- * sharing footage with a piece earlier in the order dropped too, so a record
- * that disagrees with its file can never break the one-to-one map. Null when
- * nothing usable is left.
+ * frame grid by `snap`, and anything under the shortest dropped, so a record
+ * that disagrees with its file can never cut past its end. Null when nothing
+ * usable is left.
  */
 export function tidyPieces(
   value: unknown,
@@ -259,7 +267,6 @@ export function tidyPieces(
     const start = snap(clamp(raw.start, 0, duration));
     const end = snap(clamp(raw.end, 0, duration));
     if (end - start < MIN_PIECE - 1e-9) continue;
-    if (kept.some((p) => start < p.end - 1e-9 && end > p.start + 1e-9)) continue;
     const transition = tidyTransition(raw.transition);
     kept.push({
       id: typeof raw.id === "string" ? raw.id : newPieceId(),
@@ -329,91 +336,78 @@ function piece(start: number, end: number, way: unknown): Piece {
 }
 
 /**
- * A piece drawn somewhere other than where the list puts it, while one of its
- * edges is being dragged: `index` and every piece after it sit `by` seconds
- * further along, so the edge under the pointer moves and the piece's other
- * edge holds still until the drag lets go.
+ * A piece drawn somewhere other than where the list puts it, while its start
+ * is being dragged: `index` and every piece after it sit `by` seconds further
+ * along, so the start under the pointer moves and the piece's end holds still
+ * until the drag lets go. Then the pieces close up.
  */
 export interface LanePreview {
   index: number;
   by: number;
 }
 
-/** The timeline lane's map between the source and the lane, in seconds. */
-export interface Lane {
-  /** Where the first piece starts on the lane, which is the output's zero. */
-  origin: number;
-  /** The pieces' total length on the lane. */
-  total: number;
-  /** Where each piece starts on the lane, preview included. */
-  starts: number[];
-  toLane: (time: number) => number;
-  fromLane: (x: number) => number;
+/** Where each piece starts on the timeline, in seconds from its zero. */
+export function startsOf(
+  pieces: readonly Piece[],
+  preview: LanePreview | null = null,
+): number[] {
+  return segmentsOf(pieces).map(
+    (s, i) => s.at + (preview && i >= preview.index ? preview.by : 0),
+  );
 }
 
 /**
- * The lane draws the output: the pieces end to end from `origin`, so each one
- * carries its own footage, and there is never a gap between two.
- *
- * In front of the first piece is the footage it can still reach back into,
- * at its own place, so its start edge is dragged out over it and stays under
- * the pointer. After the last piece is the footage it can still reach into,
- * the same way. A source time held by no piece lands where the piece holding
- * the footage after it starts, which is the join a cut made there.
+ * Where a stretch of the source shows on the timeline: once for every piece
+ * whose footage overlaps it. `from` and `to` are timeline seconds, `start`
+ * and `end` the part of the stretch shown there. `head` and `tail` say
+ * whether the stretch's own start and end fall inside that piece, which is
+ * where its edges can be grabbed.
  */
-export function laneOf(
+export interface Occurrence {
+  index: number;
+  from: number;
+  to: number;
+  start: number;
+  end: number;
+  head: boolean;
+  tail: boolean;
+}
+
+export function occurrences(
   pieces: readonly Piece[],
-  preview: LanePreview | null = null,
-): Lane {
-  const segments = segmentsOf(pieces);
-  const total = lengthOf(pieces);
-  const first = pieces[0];
-  const last = pieces[pieces.length - 1];
-  if (!first || !last) {
-    return { origin: 0, total: 0, starts: [], toLane: (t) => t, fromLane: (x) => x };
-  }
-
-  const shift = (index: number) =>
-    preview && index >= preview.index ? preview.by : 0;
-  const lo = roomOf(pieces, 0, Infinity).lo;
-  const hi = roomOf(pieces, pieces.length - 1, Infinity).hi;
-  const origin = first.start - lo;
-  const starts = segments.map((s, i) => origin + s.at + shift(i));
-  const end = origin + total + shift(pieces.length - 1);
-
-  const toLane = (time: number) => {
-    const index = indexAt(segments, time);
-    if (index >= 0) return starts[index] + (time - segments[index].start);
-    if (time < first.start && time >= lo) return origin - (first.start - time);
-    if (time > last.end && time <= hi) return end + (time - last.end);
-    // Footage no piece holds: the join where the footage after it opens.
-    let next = -1;
-    segments.forEach((s, i) => {
-      if (s.start > time && (next < 0 || s.start < segments[next].start)) next = i;
+  starts: readonly number[],
+  start: number,
+  end: number,
+): Occurrence[] {
+  const out: Occurrence[] = [];
+  pieces.forEach((piece, index) => {
+    const a = Math.max(start, piece.start);
+    const b = Math.min(end, piece.end);
+    if (b - a <= 1e-9) return;
+    out.push({
+      index,
+      from: starts[index] + (a - piece.start),
+      to: starts[index] + (b - piece.start),
+      start: a,
+      end: b,
+      head: start >= piece.start - 1e-9,
+      tail: end <= piece.end + 1e-9,
     });
-    return next >= 0 ? starts[next] : end;
-  };
-
-  const fromLane = (x: number) => {
-    if (x < origin) return first.start - (origin - x);
-    if (x >= origin + total) return last.end + (x - origin - total);
-    return sourceAt(segments, x - origin).time;
-  };
-
-  return { origin, total, starts, toLane, fromLane };
+  });
+  return out;
 }
 
 /**
  * Where a drag puts a piece in the order: among the other pieces, before the
- * first whose middle is past `x` on the lane.
+ * first whose middle is past `x`, the dragged piece's own middle in timeline
+ * seconds.
  */
 export function dropIndex(
   pieces: readonly Piece[],
   from: number,
   x: number,
-  origin: number,
 ): number {
-  let at = origin;
+  let at = 0;
   let index = 0;
   pieces.forEach((piece, i) => {
     if (i === from) return;
@@ -422,4 +416,21 @@ export function dropIndex(
     at += length;
   });
   return index;
+}
+
+/** How many seconds the timeline shows at its widest zoom, whatever the clip. */
+export const MAX_TIMELINE = 600;
+
+/** The lengths a timeline's default view is rounded up to. */
+const TIMELINE_STEPS = [10, 15, 20, 30, 45, 60, 90, 120, 180, 240, 300, 450, 600];
+
+/**
+ * How many seconds the timeline shows before it is zoomed: half as much
+ * again as the file, rounded up to a step, so there is room past the end to
+ * see where the clip stops and to grow a piece into. Never under ten seconds
+ * and never over `MAX_TIMELINE`.
+ */
+export function timelineExtent(duration: number): number {
+  const wanted = duration * 1.5;
+  return TIMELINE_STEPS.find((step) => step >= wanted) ?? MAX_TIMELINE;
 }

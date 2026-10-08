@@ -35,7 +35,6 @@ import {
 import {
   type Piece,
   type Segment,
-  laneOf,
   lengthOf,
   segmentsOf,
 } from "@/lib/clip-pieces";
@@ -98,16 +97,10 @@ export async function mixAudio({
   if (!length) return null;
 
   // Where the track's region lands inside the export, and which part of the
-  // file that is. The region is anchored to a source frame, so its place on
-  // the output's clock is that frame's own, read off the same lane the
-  // timeline draws, and the speed divides it. The track itself plays at its
-  // own tempo from there. A negative placement means it starts in front of
-  // the first piece, so the schedule begins at zero and reads that much
-  // further in.
-  const lane = laneOf(pieces);
-  const at = soundtrack
-    ? (lane.toLane(soundtrack.offset) - lane.origin) / speed
-    : 0;
+  // file that is. The region sits on the timeline, whose seconds are the
+  // output's before speed, so the speed divides its place. The track itself
+  // plays at its own tempo from there.
+  const at = soundtrack ? soundtrack.offset / speed : 0;
   const skipped = Math.max(-at, 0);
   const place = Math.max(at, 0);
   const from = soundtrack ? soundtrack.start + skipped : 0;

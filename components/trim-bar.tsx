@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ChevronDownIcon,
   ChevronUpIcon,
+  CopyPlusIcon,
   GaugeIcon,
   LayersIcon,
   Loader2Icon,
@@ -58,18 +59,22 @@ import {
 } from "@/lib/clip-fade";
 import {
   type LanePreview,
+  type Occurrence,
   type Piece,
   continues,
   dropIndex,
   indexAt,
-  laneOf,
   lengthOf,
   movePiece,
+  occurrences,
   resizePiece,
-  roomOf,
   segmentsOf,
   sourceAt,
+  startsOf,
+  timelineExtent,
+  MAX_TIMELINE,
 } from "@/lib/clip-pieces";
+import { Slider } from "@/components/ui/slider";
 import {
   DEFAULT_TRANSITION_DURATION,
   TRANSITION_DURATIONS,
@@ -128,6 +133,12 @@ const FRAME = 1 / EDIT_FPS;
 const COARSE_STEP = 1;
 
 const snap = (seconds: number) => Math.round(seconds / FRAME) * FRAME;
+
+/**
+ * The closest the timeline zooms in, in pixels a second: eight pixels a frame
+ * of the edit grid, which is enough to land an edge on the frame wanted.
+ */
+const MAX_PPS = 240;
 
 /** How far a press on a piece must travel, in px, before it picks the piece up. */
 const DRAG_START = 4;
@@ -264,6 +275,13 @@ interface TrimBarProps {
   /** Joins two pieces of continuous footage back into one. */
   onJoinRemove: (id: string) => void;
   onPieceSelect: (id: string | null) => void;
+  /**
+   * Told which piece the playhead is in whenever that changes. Two pieces can
+   * show the same footage, so the owner cannot read it off the video's clock.
+   */
+  onCursorChange: (id: string | null) => void;
+  /** Puts a copy of the selected piece right after it. */
+  onPieceCopy: () => void;
   /** The pieces after an edge drag, a move, or their keys. */
   onPiecesChange: (pieces: Piece[]) => void;
   onSplit: () => void;
@@ -301,23 +319,22 @@ interface TrimBarProps {
   disabled?: boolean;
 }
 
-/**
- * A fraction's own position along the lane.
- *
- * A handle sits fully inside the lane at both ends rather than half off it, so
- * the span a value maps onto is the lane less one handle. Expressed as a
- * `calc` rather than measured, so nothing here needs the lane's width to
- * render.
- */
-const at = (fraction: number) =>
-  `calc(${fraction * 100}% - ${fraction * HANDLE}px)`;
-
-/** The same position, measured to a value's own centre rather than a handle's left edge. */
-const centre = (fraction: number) => `calc(${at(fraction)} + ${INSET}px)`;
-
-function tickInterval(duration: number, width: number): number {
-  const fits = (step: number) => (step / duration) * width >= MIN_TICK_GAP;
+/** The first interval whose labels sit far enough apart to read at `pps`. */
+function tickInterval(pps: number): number {
+  const fits = (step: number) => step * pps >= MIN_TICK_GAP;
   return TICK_INTERVALS.find(fits) ?? TICK_INTERVALS[TICK_INTERVALS.length - 1];
+}
+
+/**
+ * A piece's length as the timeline names it, to a tenth of a second, which is
+ * what a reader trims to by eye. Past a minute it is a clock.
+ */
+function short(seconds: number): string {
+  if (seconds >= 60) {
+    const minutes = Math.floor(seconds / 60);
+    return `${minutes}:${(seconds - minutes * 60).toFixed(1).padStart(4, "0")}`;
+  }
+  return `${seconds.toFixed(1)}s`;
 }
 
 /** A label is a clock past a minute, since "180s" is a number to convert. */
@@ -354,6 +371,8 @@ export function TrimBar({
   selectedZoom,
   selectedPiece,
   onPieceSelect,
+  onCursorChange,
+  onPieceCopy,
   onPiecesChange,
   onSplit,
   onPieceDelete,
@@ -399,19 +418,35 @@ export function TrimBar({
   // last one's shape while it decodes.
   const [wave, setWave] = useState<{ of: Blob; data: Waveform } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  // The axis reads this to choose its interval. The playhead reads the ref, so
-  // it still costs no render per frame.
-  const [laneWidth, setLaneWidth] = useState(0);
+  /**
+   * The timeline's visible width in px, from the scroller. The zoom is a
+   * factor on the scale that fits `timelineExtent` into it.
+   */
+  const [viewport, setViewport] = useState(0);
+  /**
+   * How far the timeline is zoomed, as a factor on the scale that fits the
+   * default view. View state, like the fold, so it is not stored.
+   */
+  const [zoom, setZoom] = useState(1);
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const laneRef = useRef<HTMLDivElement>(null);
+  /** The end being dragged, for the length bubble over it. */
+  const [trimming, setTrimming] = useState<{ id: string; edge: "start" | "end" } | null>(
+    null,
+  );
   const fadeLaneRef = useRef<HTMLDivElement>(null);
   const regionRef = useRef<HTMLDivElement>(null);
   const playheadRef = useRef<HTMLDivElement>(null);
   const clockRef = useRef<HTMLSpanElement>(null);
   /** The playhead's knob, whose value the loop writes like the clock's text. */
   const knobRef = useRef<HTMLSpanElement>(null);
-  // The lane's usable span in px, kept in a ref because the playhead is
-  // written every frame and must not render anything.
-  const spanRef = useRef(0);
+  // The scale in px a second, kept in a ref because the playhead is written
+  // every frame and must not render anything.
+  const ppsRef = useRef(1);
+  /** The piece last reported to the owner, so it is told only on a change. */
+  const reportedRef = useRef<string | null>(null);
+  const cursorChangeRef = useRef(onCursorChange);
   // The live pieces and the live seek, for the frame loop. It is bound once
   // and would otherwise close over the values this component mounted with.
   // Written in an effect rather than during render, which is not a ref's to
@@ -457,6 +492,25 @@ export function TrimBar({
   /** Wheel movement too small to be a frame yet, held until it is. */
   const restRef = useRef(0);
 
+  /**
+   * The timeline's scale. At a zoom of 1 the default view, `timelineExtent`,
+   * fills the visible width, so a clip lands with room after it rather than
+   * edge to edge. Zooming out shows up to `MAX_TIMELINE`, and zooming in goes
+   * to `MAX_PPS`. The ruler always starts at zero on the left and never moves
+   * under an edit: only the zoom changes the scale.
+   */
+  const extent = timelineExtent(duration);
+  const usable = Math.max(viewport - HANDLE, 1);
+  const fitPps = usable / extent;
+  const minZoom = extent / MAX_TIMELINE;
+  const maxZoom = Math.max(MAX_PPS / fitPps, 1);
+  const pps = fitPps * clamp(zoom, minZoom, maxZoom);
+
+  useEffect(() => {
+    ppsRef.current = pps;
+    cursorChangeRef.current = onCursorChange;
+  }, [pps, onCursorChange]);
+
   useEffect(() => {
     piecesRef.current = pieces;
     previewRef.current = preview;
@@ -488,21 +542,49 @@ export function TrimBar({
   );
 
   useEffect(() => {
-    const lane = laneRef.current;
-    if (!lane) return;
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
 
     // Measured only from the observer, which fires once on `observe`. Calling
     // it in the effect body would be a synchronous setState there, which the
     // lint rejects.
-    const observer = new ResizeObserver(() => {
-      const span = Math.max(lane.clientWidth - HANDLE, 1);
-      spanRef.current = span;
-      setLaneWidth(span);
-    });
-
-    observer.observe(lane);
+    const observer = new ResizeObserver(() => setViewport(scroller.clientWidth));
+    observer.observe(scroller);
     return () => observer.disconnect();
   }, []);
+
+  /**
+   * Cmd or Ctrl with the wheel zooms the timeline about the pointer, and so
+   * does a trackpad pinch, which arrives as the same event. The time under the
+   * pointer stays under it. A plain wheel is left to scroll. Non-passive,
+   * since the zoom takes the gesture from the page.
+   */
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    const content = contentRef.current;
+    if (!scroller || !content) return;
+
+    const onWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      const rect = content.getBoundingClientRect();
+      const time = (event.clientX - rect.left - INSET) / ppsRef.current;
+      const factor = Math.exp(-event.deltaY * 0.004);
+      setZoom((current) => {
+        const next = clamp(current * factor, minZoom, maxZoom);
+        // Kept under the pointer: the content moves by what the time's own
+        // position moves by.
+        const moved = time * fitPps * (next - clamp(current, minZoom, maxZoom));
+        requestAnimationFrame(() => {
+          scroller.scrollLeft += moved;
+        });
+        return next;
+      });
+    };
+
+    scroller.addEventListener("wheel", onWheel, { passive: false });
+    return () => scroller.removeEventListener("wheel", onWheel);
+  }, [fitPps, minZoom, maxZoom]);
 
   // The playhead and the loop, both per frame. `timeupdate` fires about four
   // times a second, which is too coarse to draw a playhead with and too coarse
@@ -516,7 +598,7 @@ export function TrimBar({
 
       const element = video.current;
       const playhead = playheadRef.current;
-      if (!element || !playhead || !duration) return;
+      if (!element || !playhead) return;
 
       const list = piecesRef.current;
       const segments = segmentsOf(list);
@@ -578,10 +660,17 @@ export function TrimBar({
         if (!holds) {
           const found = indexAt(segments, time);
           if (found < 0) {
-            const lane = laneOf(list);
-            const kept = lane.fromLane(lane.toLane(time));
-            currentRef.current = list[Math.max(indexAt(segments, kept), 0)].id;
-            seekRef.current(kept);
+            // The piece whose footage opens soonest after it, or the first.
+            let next = 0;
+            let best = Infinity;
+            segments.forEach((s, i) => {
+              if (s.start > time && s.start < best) {
+                best = s.start;
+                next = i;
+              }
+            });
+            currentRef.current = list[next].id;
+            seekRef.current(segments[next].start);
             return;
           }
           index = found;
@@ -594,10 +683,29 @@ export function TrimBar({
       // first piece, so it agrees with the ruler.
       const segment = segments[index] ?? segments[0];
       const into = Math.min(Math.max(time - segment.start, 0), segment.end - segment.start);
-      const lane = laneOf(list, previewRef.current);
-      const x = (lane.starts[index] ?? lane.origin) + into;
-      const fraction = Math.min(Math.max(x / duration, 0), 1);
-      playhead.style.transform = `translateX(${fraction * spanRef.current}px)`;
+      const starts = startsOf(list, previewRef.current);
+      const x = (starts[index] ?? 0) + into;
+      const px = x * ppsRef.current;
+      playhead.style.transform = `translateX(${px}px)`;
+
+      // The owner is told which piece is playing, since the video's clock
+      // cannot say when two pieces show the same footage.
+      const id = list[index]?.id ?? null;
+      if (id !== reportedRef.current) {
+        reportedRef.current = id;
+        cursorChangeRef.current(id);
+      }
+
+      // While playing, the timeline scrolls to keep the playhead in view, the
+      // way an editor's does. Only the timeline's own scroller moves.
+      const scroller = scrollerRef.current;
+      if (scroller && !element.paused) {
+        const left = scroller.scrollLeft;
+        const right = left + scroller.clientWidth;
+        if (px + INSET > right - 24 || px + INSET < left) {
+          scroller.scrollLeft = Math.max(px - 24, 0);
+        }
+      }
 
       // Written rather than rendered, for the same reason as the playhead: a
       // readout to the millisecond changes on every frame, and none of those
@@ -727,29 +835,19 @@ export function TrimBar({
 
   const shape = track && wave?.of === track ? wave.data : null;
 
-  /** Where a client x lands on the lane, in the lane's own seconds. */
+  /**
+   * Where a client x lands on the timeline, in its seconds. Not clamped, so a
+   * drag that runs off either end still measures how far it went. The
+   * content's own box moves with the scroll, so this needs no scroll offset.
+   */
   const timeAt = useCallback(
     (clientX: number) => {
-      const lane = laneRef.current;
-      if (!lane) return 0;
-
-      const rect = lane.getBoundingClientRect();
-      const fraction = (clientX - rect.left - INSET) / (rect.width - HANDLE);
-      return Math.min(Math.max(fraction, 0), 1) * duration;
+      const content = contentRef.current;
+      if (!content) return 0;
+      return (clientX - content.getBoundingClientRect().left - INSET) / pps;
     },
-    [duration],
+    [pps],
   );
-
-  /**
-   * A drag's lane distance as a source distance, measured at the point that
-   * moves. Across a join the two differ by the cut under it, and measuring at
-   * the moving point keeps that point under the pointer. Read at event time,
-   * so the refs are current.
-   */
-  const sourceBy = useCallback((time: number, by: number) => {
-    const lane = laneOf(piecesRef.current);
-    return lane.fromLane(lane.toLane(time) + by) - time;
-  }, []);
 
   /**
    * A press on the lane seeks, and holding it drags the playhead along. The
@@ -767,8 +865,7 @@ export function TrimBar({
       // what comes out is the video stuttering rather than being moved.
       onPlayback(false);
 
-      const origin = laneOf(piecesRef.current).origin;
-      const to = (clientX: number) => seekOutput(timeAt(clientX) - origin);
+      const to = (clientX: number) => seekOutput(timeAt(clientX));
       to(event.clientX);
 
       const move = (moved: PointerEvent) => to(moved.clientX);
@@ -801,70 +898,66 @@ export function TrimBar({
   );
 
   /**
-   * A press on a piece selects it. Dragging it picks it up and puts it
-   * somewhere else in the order: the other pieces make room where it would
-   * land, and it drops there with its footage. A press that does not travel
-   * is a click, and puts the playhead where it landed. In one piece there is
-   * nothing to select or move, so a press scrubs.
+   * A press on a piece is about the piece, never the playhead's drag: that
+   * is the ruler's and the empty track's. It selects the piece, and a press
+   * that does not travel puts the playhead where it landed. Dragging picks
+   * the piece up and puts it somewhere else in the order: the other pieces
+   * make room where it would land, and it drops there with its footage. A
+   * clip in one piece has nowhere to move it, so the drag does nothing.
    */
   const pressPiece = useCallback(
-    (index: number, selectable: boolean) =>
-      (event: React.PointerEvent<HTMLDivElement>) => {
-        if (disabled || event.button !== 0) return;
-        onJoinSelect(null);
-        if (!selectable) {
-          onPieceSelect(null);
-          scrubFrom(event);
+    (index: number) => (event: React.PointerEvent<HTMLDivElement>) => {
+      if (disabled || event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      onJoinSelect(null);
+      onPlayback(false);
+
+      const base = piecesRef.current;
+      const movable = base.length > 1;
+      onPieceSelect(movable ? base[index].id : null);
+      const starts = startsOf(base);
+      const length = base[index].end - base[index].start;
+      const pressedX = event.clientX;
+      const grab = timeAt(event.clientX) - starts[index];
+      let moved = false;
+      let to = index;
+      const root = document.documentElement;
+
+      const move = (ev: PointerEvent) => {
+        if (!movable) return;
+        if (!moved && Math.abs(ev.clientX - pressedX) < DRAG_START) return;
+        moved = true;
+        root.dataset.dragging = "true";
+        const left = timeAt(ev.clientX) - grab;
+        to = dropIndex(base, index, left + length / 2);
+        setCarry({ from: index, to, x: left });
+      };
+      const release = (ev: PointerEvent | FocusEvent) => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", release);
+        window.removeEventListener("pointercancel", release);
+        window.removeEventListener("blur", release);
+        root.dataset.dragging = "false";
+        if (!moved) {
+          if ("clientX" in ev) seekOutput(timeAt(ev.clientX));
           return;
         }
-        event.preventDefault();
-        event.stopPropagation();
-        onPlayback(false);
+        if (to !== index) onPiecesChange(movePiece(base, index, to));
+        settle();
+      };
 
-        const base = piecesRef.current;
-        onPieceSelect(base[index].id);
-        const lane = laneOf(base);
-        const length = base[index].end - base[index].start;
-        const pressedX = event.clientX;
-        const grab = timeAt(event.clientX) - lane.starts[index];
-        let moved = false;
-        let to = index;
-        const root = document.documentElement;
-
-        const move = (ev: PointerEvent) => {
-          if (!moved && Math.abs(ev.clientX - pressedX) < DRAG_START) return;
-          moved = true;
-          root.dataset.dragging = "true";
-          const left = timeAt(ev.clientX) - grab;
-          to = dropIndex(base, index, left + length / 2, lane.origin);
-          setCarry({ from: index, to, x: left });
-        };
-        const release = (ev: PointerEvent | FocusEvent) => {
-          window.removeEventListener("pointermove", move);
-          window.removeEventListener("pointerup", release);
-          window.removeEventListener("pointercancel", release);
-          window.removeEventListener("blur", release);
-          root.dataset.dragging = "false";
-          if (!moved) {
-            if ("clientX" in ev) seekOutput(timeAt(ev.clientX) - lane.origin);
-            return;
-          }
-          if (to !== index) onPiecesChange(movePiece(base, index, to));
-          settle();
-        };
-
-        window.addEventListener("pointermove", move);
-        window.addEventListener("pointerup", release);
-        window.addEventListener("pointercancel", release);
-        window.addEventListener("blur", release);
-      },
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", release);
+      window.addEventListener("pointercancel", release);
+      window.addEventListener("blur", release);
+    },
     [
       disabled,
       onJoinSelect,
       onPieceSelect,
       onPiecesChange,
       onPlayback,
-      scrubFrom,
       seekOutput,
       settle,
       timeAt,
@@ -872,16 +965,18 @@ export function TrimBar({
   );
 
   /**
-   * Drags one edge of a piece, the way a clip is trimmed in an editor. The
-   * pointer's travel is the edge's travel through the footage, and the edge
-   * stays under the pointer while the piece's other edge holds still.
+   * Drags one end of a piece, the way a clip is trimmed in Canva. The end
+   * stays under the pointer and the piece's other end holds still, with a
+   * bubble over the end saying how long the piece now is. It reaches as far
+   * as the file's own start or end.
    *
    * An end edge moves the pieces after it along with it. A start edge cannot
    * do that without moving the pieces in front, so while it is held the piece
    * is drawn through a `LanePreview`: bringing it in opens a gap in front of
-   * it, and taking it out runs it over the piece before. Letting go closes
-   * the pieces up. The playhead follows the edge, so the frame under it is on
-   * the canvas.
+   * it, and taking it out runs it over the piece before, or, for the first
+   * piece, grows it to the right, since the timeline starts at zero. Letting
+   * go closes the pieces up. The playhead follows the end, so the frame under
+   * it is on the canvas.
    */
   const resizeEdge = useCallback(
     (index: number, edge: "start" | "end", selectable: boolean) =>
@@ -893,23 +988,25 @@ export function TrimBar({
         onPlayback(false);
 
         const base = piecesRef.current;
+        const starts = startsOf(base);
         onPieceSelect(selectable ? base[index].id : null);
-        const origin = timeAt(event.clientX);
+        setTrimming({ id: base[index].id, edge });
+        const pressedX = event.clientX;
         const from = edge === "start" ? base[index].start : base[index].end;
         const move = (ev: PointerEvent) => {
           const next = resizePiece(
             base,
             index,
             edge,
-            snap(from + timeAt(ev.clientX) - origin),
+            snap(from + (ev.clientX - pressedX) / ppsRef.current),
             duration,
           );
           const piece = next[index];
-          // The first piece needs no preview: the room in front of it is its
-          // own footage at its own place, so its start is under the pointer
-          // already and nothing after it moves.
-          if (edge === "start" && index > 0) {
-            setPreview({ index, by: piece.start - base[index].start });
+          if (edge === "start") {
+            setPreview({
+              index,
+              by: Math.max(piece.start - base[index].start, -starts[index]),
+            });
           }
           onPiecesChange(next);
           seekTo(
@@ -921,6 +1018,7 @@ export function TrimBar({
           window.removeEventListener("pointermove", move);
           window.removeEventListener("pointerup", release);
           window.removeEventListener("pointercancel", release);
+          setTrimming(null);
           settle();
         };
         window.addEventListener("pointermove", move);
@@ -936,7 +1034,6 @@ export function TrimBar({
       onPlayback,
       seekTo,
       settle,
-      timeAt,
     ],
   );
 
@@ -999,17 +1096,19 @@ export function TrimBar({
     if (!node || disabled) return;
 
     const onWheel = (event: WheelEvent) => {
+      // Cmd or Ctrl is the timeline's zoom, which the scroller handles.
+      if (event.ctrlKey || event.metaKey) return;
       event.preventDefault();
-      // Scaled to the lane, so a wheel of so many pixels slips the same amount
-      // a drag of so many pixels would. The region is stretched by the speed,
-      // so a pixel of it is that much less of the track.
-      const perPixel = duration / Math.max(spanRef.current, 1) / speed;
+      // Scaled to the timeline, so a wheel of so many pixels slips the same
+      // amount a drag of so many pixels would. The region is stretched by the
+      // speed, so a pixel of it is that much less of the track.
+      const perPixel = 1 / ppsRef.current / speed;
       slip((event.deltaX || event.deltaY) * perPixel);
     };
 
     node.addEventListener("wheel", onWheel, { passive: false });
     return () => node.removeEventListener("wheel", onWheel);
-  }, [disabled, duration, slip, placed, speed]);
+  }, [disabled, slip, placed, speed]);
 
   /**
    * Space plays and pauses, from anywhere on the page.
@@ -1065,18 +1164,17 @@ export function TrimBar({
         return { ...from, start: from.start + step, end: from.end + step };
       }
 
-      // The region sits on the lane, which draws the output, and the sound
-      // plays straight through a join. So it is moved in lane seconds and its
-      // anchor is read back off the lane. The props rather than the mirror
-      // refs: the edit cannot change while the sound is being moved.
-      const lane = laneOf(pieces);
-      const end = Math.max(lane.toLane(duration), lane.origin + lane.total);
-      const left = lane.toLane(from.offset);
+      // The region sits on the timeline and plays straight through a join,
+      // so it is moved in timeline seconds and stays inside the clip's own
+      // length. The prop rather than the mirror ref: the edit cannot change
+      // while the sound is being moved.
+      const end = lengthOf(pieces);
+      const left = from.offset;
 
       if (part === "body") {
         return {
           ...from,
-          offset: lane.fromLane(snap(clamp(left + by, 0, Math.max(end - span, 0)))),
+          offset: snap(clamp(left + by, 0, Math.max(end - span, 0))),
         };
       }
       if (part === "head") {
@@ -1091,7 +1189,7 @@ export function TrimBar({
           ) - left;
         return {
           ...from,
-          offset: lane.fromLane(left + room),
+          offset: left + room,
           start: from.start + room / speed,
         };
       }
@@ -1106,7 +1204,7 @@ export function TrimBar({
         ),
       };
     },
-    [duration, pieces, speed],
+    [pieces, speed],
   );
 
   /**
@@ -1238,7 +1336,7 @@ export function TrimBar({
           const next = shiftZoom(
             from,
             part,
-            sourceBy(part === "tail" ? from.end : from.start, by),
+            by,
           );
           onZoomChange(next);
           show(part === "tail" ? next.end - FRAME : next.start);
@@ -1263,7 +1361,6 @@ export function TrimBar({
       onZoomSelect,
       selectedZoom,
       shiftZoom,
-      sourceBy,
       timeAt,
     ],
   );
@@ -1316,7 +1413,7 @@ export function TrimBar({
           const next = shiftFade(
             from,
             part,
-            sourceBy(part === "tail" ? from.end : from.start, by),
+            by,
           );
           onFadeChange(next);
           show(part === "tail" ? next.end - FRAME : next.start);
@@ -1341,7 +1438,6 @@ export function TrimBar({
       onSeek,
       selectedFade,
       shiftFade,
-      sourceBy,
       timeAt,
     ],
   );
@@ -1452,48 +1548,45 @@ export function TrimBar({
   const selectedRamp = fades.find((f) => f.id === selectedFade) ?? null;
 
   // What the file will run, in seconds before the speed. It is also the
-  // length the pieces take on the lane.
+  // length the pieces take on the timeline.
   const kept = lengthOf(pieces);
-  // The lane's map, and where on it a source time or a stretch lands, as a
-  // fraction of the lane. The lane keeps the whole source's width, so its
-  // scale does not change under a drag.
-  const layout = laneOf(pieces, preview);
-  const lane = (time: number) => layout.toLane(time) / duration;
-  const laneSpan = (start: number, end: number) => lane(end) - lane(start);
-  /** Where the first piece starts on the lane, which is the output's zero. */
-  const origin = layout.origin;
+  /** Where each piece starts on the timeline, a start being dragged included. */
+  const starts = startsOf(pieces, preview);
+  /** A timeline second's own x on the content, in px. */
+  const xOf = (time: number) => INSET + time * pps;
   /**
-   * The footage the last piece can still reach into, drawn as rail after it.
-   * Capped at the lane's own width: a piece played out of its source order
-   * can have the same footage in reach in front of the first piece and after
-   * the last.
+   * How many seconds the timeline runs: at least what fills the visible
+   * width, and past the end of the pieces and the sound, so there is always
+   * room to see where the clip stops.
    */
-  const tail = Math.max(
-    Math.min(
-      roomOf(pieces, pieces.length - 1, duration).hi - pieces[pieces.length - 1].end,
-      duration - origin - kept,
-    ),
-    0,
+  const span = Math.max(
+    usable / pps,
+    (kept + Math.abs(preview?.by ?? 0)) * 1.1,
+    soundtrack ? soundtrack.offset + (soundtrack.end - soundtrack.start) * speed : 0,
   );
+  /** Where a stretch of the source shows on the timeline, for each piece showing it. */
+  const spansOf = (start: number, end: number): Occurrence[] =>
+    occurrences(pieces, startsOf(pieces), start, end);
   // `split` is whether the clip is in more than one piece, which is when a
   // piece is something to pick and to move.
   const split = pieces.length > 1;
   /**
-   * Where each piece is drawn, in the lane's seconds. While one is carried,
-   * the others sit in the order it would drop into and it follows the
-   * pointer, so the gap it would fill is visible before it is let go.
+   * Where each piece is drawn, in timeline seconds. While one is carried, the
+   * others sit in the order it would drop into and it follows the pointer, so
+   * the gap it would fill is visible before it is let go.
    */
   const carried = carry ? movePiece(pieces, carry.from, carry.to) : null;
   const leftOf = (index: number): number => {
-    if (!carry || !carried) return layout.starts[index];
+    if (!carry || !carried) return starts[index];
     if (index === carry.from) return carry.x;
-    let at = origin;
+    let at = 0;
     for (const piece of carried) {
       if (piece.id === pieces[index].id) return at;
       at += piece.end - piece.start;
     }
     return at;
   };
+  const trimmingIndex = trimming ? pieces.findIndex((p) => p.id === trimming.id) : -1;
   const selectedIndex = split
     ? pieces.findIndex((p) => p.id === selectedPiece)
     : -1;
@@ -1505,7 +1598,17 @@ export function TrimBar({
   const selectedJoinValue = joinIndex > 0 ? pieces[joinIndex] : null;
   // Only continuous footage can be joined back into one piece.
   const joinable = joinIndex > 0 && continues(pieces, joinIndex);
-  const trimmed = Math.abs(kept - duration) > 1e-6;
+  // The readout names the source's length too while the clip is shorter.
+  const trimmed = kept < duration - 1e-6;
+  /**
+   * The zoom as a slider position, 0 to 100, on a log scale: each step is the
+   * same ratio of scale, which is how a zoom feels even.
+   */
+  const zoomRange = Math.log(maxZoom / minZoom);
+  const zoomValue =
+    zoomRange > 0
+      ? (Math.log(clamp(zoom, minZoom, maxZoom) / minZoom) / zoomRange) * 100
+      : 0;
 
   return (
     <div
@@ -1645,654 +1748,716 @@ export function TrimBar({
             which the clip would otherwise take the lower edge off. */}
         <div className="min-h-0 overflow-hidden">
           <div className="pt-2 pb-1">
-            {/* The lane is a region the pointer scrubs rather than a control. Both
-                handles in it are real sliders with their own keyboard behaviour,
-                which is what a keyboard needs here. */}
+            {/* The timeline scrolls sideways inside its own box once it is
+                zoomed past the panel's width, and every lane scrolls with it,
+                so a second sits at the same x on all of them. */}
             <div
-              ref={laneRef}
-              data-lane="video"
-              onPointerDown={scrub}
-              className="relative h-9 cursor-pointer touch-none"
+              ref={scrollerRef}
+              data-timeline
+              className="overflow-x-auto overflow-y-hidden pt-1"
             >
-              {/* The footage the pieces can still reach, as a rail: in front
-                  of the first piece what it can reach back into, after the
-                  last what it can reach on into. A cut takes no room, so the
-                  rail ends short of the lane by what the pieces left out. */}
               <div
-                className="absolute left-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-track"
-                style={{
-                  width: `calc(${at((origin + kept + tail) / duration)} + ${HANDLE}px)`,
-                }}
-              />
-
-              {/* The pieces, end to end in the order they play. Each is drawn
-                  where the output has it, so a piece carries its own footage
-                  wherever it goes, and there is never a gap to close. Two
-                  pieces are drawn a hairline apart, so the join reads as a
-                  division of the block. A piece is a lane instance once there
-                  is more than one: selectable, movable by dragging it, and
-                  removable from the keyboard. The selected one is ringed in
-                  the selection tone, since brand is the playhead's. They ease
-                  only while they close up after a gesture, and follow the
-                  pointer during one. */}
-              {pieces.map((piece, index) => {
-                const lastPiece = index === pieces.length - 1;
-                const selected = split && piece.id === selectedPiece;
-                const lifted = carry?.from === index;
-                return (
-                  <div
-                    key={piece.id}
-                    role={split ? "button" : undefined}
-                    tabIndex={split ? 0 : undefined}
-                    aria-label={
-                      split
-                        ? `Piece, ${formatPrecise(piece.start, duration)} to ${formatPrecise(piece.end, duration)}`
-                        : undefined
-                    }
-                    aria-pressed={split ? selected : undefined}
-                    onPointerDown={pressPiece(index, split)}
-                    onKeyDown={
-                      split
-                        ? (event) => {
-                            const by =
-                              event.key === "ArrowLeft"
-                                ? -1
-                                : event.key === "ArrowRight"
-                                  ? 1
-                                  : 0;
-                            if (by && event.altKey) {
-                              // Alt with an arrow moves the piece one place in
-                              // the order, the keyboard's way to drag it.
-                              event.preventDefault();
-                              onPiecesChange(movePiece(pieces, index, index + by));
-                            } else if (event.key === "Delete" || event.key === "Backspace") {
-                              event.preventDefault();
-                              onPieceDelete();
-                            } else if (event.key === "Enter" || event.key === " ") {
-                              event.preventDefault();
-                              onPieceSelect(selected ? null : piece.id);
-                            }
-                          }
-                        : undefined
-                    }
-                    onFocus={split ? () => onPieceSelect(piece.id) : undefined}
-                    className={cn(
-                      "group absolute inset-y-0 cursor-pointer rounded-md bg-track-active outline-none",
-                      "focus-visible:ring-[3px] focus-visible:ring-ring/50",
-                      selected && "ring-2 ring-selected ring-inset",
-                      lifted && "z-20 shadow-lg ring-2 ring-selected",
-                      settling &&
-                        "transition-[left,width] duration-200 ease-out motion-reduce:transition-none",
-                    )}
-                    style={{
-                      left: `calc(${at(leftOf(index) / duration)} + ${INSET}px)`,
-                      width: `calc(${at((piece.end - piece.start) / duration)} - ${lastPiece || lifted ? 0 : 2}px)`,
-                    }}
-                  >
-                    {/* Each edge trims the piece, the way a clip's does in an
-                        editor, and the first piece's start and the last
-                        piece's end are the clip's in and out points. A grip
-                        shows on hover and stays on the selected piece, so
-                        where to grab is never a guess. In one piece the grips
-                        always show, since they are the only handles there
-                        are. In the tab order only while the piece is selected
-                        or alone, the rule every lane instance's edges
-                        follow. */}
-                    {(["start", "end"] as const).map((edge) => {
-                      const value = edge === "start" ? piece.start : piece.end;
-                      return (
-                        <div
-                          key={edge}
-                          role="slider"
-                          tabIndex={selected || !split ? 0 : -1}
-                          aria-label={
-                            split
-                              ? edge === "start"
-                                ? "Piece start"
-                                : "Piece end"
-                              : edge === "start"
-                                ? "Clip start"
-                                : "Clip end"
-                          }
-                          aria-valuemin={0}
-                          aria-valuemax={duration}
-                          aria-valuenow={Number(value.toFixed(3))}
-                          aria-valuetext={formatPrecise(value, duration)}
-                          onPointerDown={resizeEdge(index, edge, split)}
-                          onKeyDown={laneKeys({
-                            part: edge === "start" ? "head" : "tail",
-                            shift: (by) =>
-                              resizePiece(pieces, index, edge, value + by, duration),
-                            apply: onPiecesChange,
-                            at: (next) =>
-                              edge === "start"
-                                ? next[index].start
-                                : Math.max(next[index].end - FRAME, next[index].start),
-                            piece: piece.id,
-                          })}
+                ref={contentRef}
+                className="relative pb-2"
+                style={{ width: span * pps + HANDLE }}
+              >
+                {/* The ruler, on top, the way an editor has it. Zero is always
+                    its left edge and an edit never moves it: only the zoom
+                    changes its scale. It scrubs, as the empty track does, so
+                    moving the playhead never needs a piece. It is
+                    `aria-hidden` because the playhead's knob reports where it
+                    is in seconds. */}
+                <div
+                  aria-hidden="true"
+                  onPointerDown={scrub}
+                  className="relative h-5 cursor-pointer touch-none"
+                >
+                  {ticks(span, pps).map(({ at, major, label }) => (
+                    <div
+                      key={at}
+                      className="absolute top-0 flex flex-col items-start"
+                      style={{ left: xOf(at) }}
+                    >
+                      {label && (
+                        <span
                           className={cn(
-                            "absolute inset-y-0 z-10 flex w-2.5 cursor-ew-resize touch-none items-center justify-center rounded-md outline-none",
-                            "focus-visible:ring-[3px] focus-visible:ring-ring/50",
-                            edge === "start" ? "left-0" : "right-0",
+                            "mb-0.5 block text-[11px] tabular-nums leading-none text-muted-foreground",
+                            at > 0 && "-translate-x-1/2",
                           )}
                         >
+                          {label}
+                        </span>
+                      )}
+                      <span
+                        className={cn(
+                          "block w-px",
+                          major ? "h-1 bg-stroke-strong" : "mt-auto h-0.5 bg-stroke",
+                          !label && "mt-3",
+                          at > 0 && "-translate-x-1/2",
+                        )}
+                      />
+                    </div>
+                  ))}
+                </div>
+
+                {/* The picture's track. A press on its empty part scrubs and
+                    puts any selection away. Both ends of every piece are real
+                    sliders with their own keyboard behaviour, which is what a
+                    keyboard needs here. */}
+                <div
+                  ref={laneRef}
+                  data-lane="video"
+                  onPointerDown={scrub}
+                  className="relative mt-1 h-9 cursor-pointer touch-none rounded-md bg-track/40"
+                >
+                  {/* The pieces, end to end from zero in the order they
+                      play. Each carries its own footage, so there is never a
+                      gap to close. Two pieces are drawn a hairline apart, so
+                      the join reads as a division of the block, and each
+                      names its length in its corner. A piece is a lane
+                      instance once there is more than one: selectable,
+                      movable by dragging it, and removable from the keyboard.
+                      The selected one is ringed in the selection tone, since
+                      brand is the playhead's. They ease only while they close
+                      up after a gesture, and follow the pointer during one. */}
+                  {pieces.map((piece, index) => {
+                    const lastPiece = index === pieces.length - 1;
+                    const selected = split && piece.id === selectedPiece;
+                    const lifted = carry?.from === index;
+                    const length = piece.end - piece.start;
+                    const width = length * pps;
+                    return (
+                      <div
+                        key={piece.id}
+                        role={split ? "button" : undefined}
+                        tabIndex={split ? 0 : undefined}
+                        aria-label={
+                          split
+                            ? `Piece, ${formatPrecise(piece.start, duration)} to ${formatPrecise(piece.end, duration)}`
+                            : undefined
+                        }
+                        aria-pressed={split ? selected : undefined}
+                        onPointerDown={pressPiece(index)}
+                        onKeyDown={
+                          split
+                            ? (event) => {
+                                const by =
+                                  event.key === "ArrowLeft"
+                                    ? -1
+                                    : event.key === "ArrowRight"
+                                      ? 1
+                                      : 0;
+                                if (by && event.altKey) {
+                                  // Alt with an arrow moves the piece one place
+                                  // in the order, the keyboard's way to drag it.
+                                  event.preventDefault();
+                                  onPiecesChange(movePiece(pieces, index, index + by));
+                                } else if (
+                                  event.key === "Delete" ||
+                                  event.key === "Backspace"
+                                ) {
+                                  event.preventDefault();
+                                  onPieceDelete();
+                                } else if (event.key === "Enter" || event.key === " ") {
+                                  event.preventDefault();
+                                  onPieceSelect(selected ? null : piece.id);
+                                }
+                              }
+                            : undefined
+                        }
+                        onFocus={split ? () => onPieceSelect(piece.id) : undefined}
+                        className={cn(
+                          "group absolute inset-y-0 cursor-pointer overflow-hidden rounded-md bg-track-active outline-none",
+                          "focus-visible:ring-[3px] focus-visible:ring-ring/50",
+                          selected && "ring-2 ring-selected ring-inset",
+                          lifted && "z-20 shadow-lg ring-2 ring-selected",
+                          settling &&
+                            "transition-[left,width] duration-200 ease-out motion-reduce:transition-none",
+                        )}
+                        style={{
+                          left: xOf(leftOf(index)),
+                          width: Math.max(width - (lastPiece || lifted ? 0 : 2), 1),
+                        }}
+                      >
+                        {width >= 44 && (
                           <span
                             aria-hidden="true"
-                            className={cn(
-                              "h-4 w-1 rounded-full transition-colors duration-150",
-                              selected || !split
-                                ? "bg-foreground"
-                                : "bg-transparent group-hover:bg-stroke-strong",
-                            )}
-                          />
+                            className="pointer-events-none absolute bottom-0.5 left-3 text-[11px] tabular-nums leading-none text-muted-foreground"
+                          >
+                            {short(length)}
+                          </span>
+                        )}
+                        {/* Each end trims the piece, the way a clip's does in
+                            an editor, and in one piece they are the clip's in
+                            and out points. A grip shows on hover and stays on
+                            the selected piece, so where to grab is never a
+                            guess. In one piece the grips always show, since
+                            they are the only handles there are. In the tab
+                            order only while the piece is selected or alone,
+                            the rule every lane instance's edges follow. */}
+                        {(["start", "end"] as const).map((edge) => {
+                          const value = edge === "start" ? piece.start : piece.end;
+                          return (
+                            <div
+                              key={edge}
+                              role="slider"
+                              tabIndex={selected || !split ? 0 : -1}
+                              aria-label={
+                                split
+                                  ? edge === "start"
+                                    ? "Piece start"
+                                    : "Piece end"
+                                  : edge === "start"
+                                    ? "Clip start"
+                                    : "Clip end"
+                              }
+                              aria-valuemin={0}
+                              aria-valuemax={duration}
+                              aria-valuenow={Number(value.toFixed(3))}
+                              aria-valuetext={formatPrecise(value, duration)}
+                              onPointerDown={resizeEdge(index, edge, split)}
+                              onKeyDown={laneKeys({
+                                part: edge === "start" ? "head" : "tail",
+                                shift: (by) =>
+                                  resizePiece(pieces, index, edge, value + by, duration),
+                                apply: onPiecesChange,
+                                at: (next) =>
+                                  edge === "start"
+                                    ? next[index].start
+                                    : Math.max(next[index].end - FRAME, next[index].start),
+                                piece: piece.id,
+                              })}
+                              className={cn(
+                                "absolute inset-y-0 z-10 flex w-2.5 cursor-ew-resize touch-none items-center justify-center rounded-md outline-none",
+                                "focus-visible:ring-[3px] focus-visible:ring-ring/50",
+                                edge === "start" ? "left-0" : "right-0",
+                              )}
+                            >
+                              <span
+                                aria-hidden="true"
+                                className={cn(
+                                  "h-4 w-1 rounded-full transition-colors duration-150",
+                                  selected || !split
+                                    ? "bg-foreground"
+                                    : "bg-transparent group-hover:bg-stroke-strong",
+                                )}
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+
+                  {/* How long the piece is, over the end being dragged, so a
+                      trim to a length needs no arithmetic. */}
+                  {trimmingIndex >= 0 && trimming && (
+                    <span
+                      aria-hidden="true"
+                      className="pointer-events-none absolute -top-6 z-40 -translate-x-1/2 rounded-md bg-elevated px-1.5 py-0.5 text-[11px] tabular-nums text-foreground shadow-sm ring-1 ring-stroke"
+                      style={{
+                        left: xOf(
+                          leftOf(trimmingIndex) +
+                            (trimming.edge === "end"
+                              ? pieces[trimmingIndex].end - pieces[trimmingIndex].start
+                              : 0),
+                        ),
+                      }}
+                    >
+                      {short(pieces[trimmingIndex].end - pieces[trimmingIndex].start)}
+                    </span>
+                  )}
+
+                  {/* Every join between two pieces can take a transition into
+                      the second. A dot on the join's bottom edge rather than
+                      the whole height of the hairline, so a press higher up
+                      reaches the pieces' own ends. At the bottom rather than
+                      the top, since a split leaves the playhead standing on
+                      the join, and its knob is at the top. Hidden while a
+                      piece is carried, since the joins are about to change. */}
+                  {!carry &&
+                    pieces.slice(1).map((piece, i) => {
+                      const index = i + 1;
+                      const selected = piece.id === selectedJoin;
+                      const toggle = () => onJoinSelect(selected ? null : piece.id);
+                      return (
+                        <Tooltip key={`join-${piece.id}`}>
+                          <TooltipTrigger asChild>
+                            <div
+                              role="button"
+                              tabIndex={0}
+                              aria-label={`Join at ${formatPrecise(starts[index], duration)}`}
+                              aria-pressed={selected}
+                              onPointerDown={(event) => {
+                                if (disabled) return;
+                                event.preventDefault();
+                                event.stopPropagation();
+                                onPlayback(false);
+                                toggle();
+                                seekTo(piece.start, piece.id);
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key !== "Enter" && event.key !== " ") return;
+                                event.preventDefault();
+                                toggle();
+                              }}
+                              className={cn(
+                                "absolute -bottom-1.5 z-20 grid size-3.5 cursor-pointer place-items-center rounded-full outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+                                settling &&
+                                  "transition-[left] duration-200 ease-out motion-reduce:transition-none",
+                              )}
+                              style={{ left: xOf(starts[index]) - 8 }}
+                            >
+                              {piece.transition ? (
+                                <BlendIcon
+                                  className={cn(
+                                    "size-3.5 rounded-full bg-panel",
+                                    selected ? "text-foreground" : "text-muted-foreground",
+                                  )}
+                                  aria-hidden="true"
+                                />
+                              ) : (
+                                <span
+                                  aria-hidden="true"
+                                  className={cn(
+                                    "size-2 rounded-full border transition-colors duration-150",
+                                    selected
+                                      ? "border-selected bg-selected"
+                                      : "border-stroke-strong bg-panel hover:bg-stroke-strong",
+                                  )}
+                                />
+                              )}
+                            </div>
+                          </TooltipTrigger>
+                          <TooltipContent>Transition at this join</TooltipContent>
+                        </Tooltip>
+                      );
+                    })}
+                </div>
+
+                {/* Zoom regions, under the picture's track. A region is on the
+                    source's axis, so it is drawn wherever its footage plays: a
+                    block for every piece that shows part of it. The first is
+                    the one the keyboard and a reader reach, and the edges sit
+                    where the region's own start and end show. A press on the
+                    bare lane puts the marker away. Suggested regions sit on
+                    the same lane as ghosts, dashed and dim, since a suggestion
+                    is a region that has not been agreed to yet. A press
+                    agrees. */}
+                {(zooms.length > 0 || suggestions.length > 0) && (
+                  <div
+                    className="relative mt-1 h-7"
+                    onPointerDown={() => onZoomSelect(null)}
+                  >
+                    {suggestions.map((suggestion) => {
+                      const show = spansOf(suggestion.start, suggestion.end)[0];
+                      if (!show) return null;
+                      return (
+                        <Tooltip key={`${suggestion.start}:${suggestion.end}`}>
+                          <TooltipTrigger asChild>
+                            <button
+                              type="button"
+                              aria-label={`Suggested zoom, ${formatPrecise(suggestion.start, duration)} to ${formatPrecise(suggestion.end, duration)}. Press to add it.`}
+                              onPointerDown={(event) => event.stopPropagation()}
+                              onClick={() => onSuggestionAccept(suggestion)}
+                              className={cn(
+                                "absolute inset-y-0 flex cursor-pointer items-center justify-center rounded-md border border-dashed border-stroke-strong text-muted-foreground",
+                                "transition-all duration-150 hover:border-foreground/60 hover:bg-elevated hover:text-foreground active:scale-[0.98]",
+                                "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+                              )}
+                              style={{ left: xOf(show.from), width: (show.to - show.from) * pps }}
+                            >
+                              <PlusIcon className="size-3.5" aria-hidden="true" />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent>Suggested zoom. Press to add it.</TooltipContent>
+                        </Tooltip>
+                      );
+                    })}
+                    {zooms.map((region) => {
+                      const selected = region.id === selectedZoom;
+                      const shows = spansOf(region.start, region.end);
+                      const head = shows.find((o) => o.head);
+                      const tail = shows.find((o) => o.tail);
+                      return (
+                        <div key={region.id}>
+                          {shows.map((show, k) => (
+                            <div
+                              key={k}
+                              role={k === 0 ? "button" : undefined}
+                              tabIndex={k === 0 ? 0 : undefined}
+                              aria-hidden={k === 0 ? undefined : true}
+                              aria-label={
+                                k === 0
+                                  ? `Zoom ${formatSpeed(region.scale)}, ${formatPrecise(region.start, duration)} to ${formatPrecise(region.end, duration)}`
+                                  : undefined
+                              }
+                              aria-pressed={k === 0 ? selected : undefined}
+                              onPointerDown={dragZoom(region, "body")}
+                              onKeyDown={
+                                k === 0
+                                  ? laneKeys({
+                                      part: "body",
+                                      shift: (by) => shiftZoom(region, "body", by),
+                                      apply: onZoomChange,
+                                      at: (next) => next.start,
+                                      onRemove: onZoomRemove,
+                                      onToggle: () =>
+                                        onZoomSelect(selected ? null : region.id),
+                                    })
+                                  : undefined
+                              }
+                              className={cn(
+                                "absolute inset-y-0 flex cursor-grab items-center justify-center overflow-hidden rounded-md bg-elevated text-[11px] tabular-nums ring-1 transition-colors duration-150 active:cursor-grabbing",
+                                "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+                                selected
+                                  ? "text-foreground ring-brand"
+                                  : "text-muted-foreground ring-stroke hover:text-foreground",
+                              )}
+                              style={{ left: xOf(show.from), width: (show.to - show.from) * pps }}
+                            >
+                              {formatSpeed(region.scale)}
+                            </div>
+                          ))}
+                          {head && (
+                            <LaneEdge
+                              label="Zoom start"
+                              value={region.start}
+                              duration={duration}
+                              reachable={selected}
+                              position={`${head.from * pps}px`}
+                              onPointerDown={dragZoom(region, "head")}
+                              onKeyDown={laneKeys({
+                                part: "head",
+                                shift: (by) => shiftZoom(region, "head", by),
+                                apply: onZoomChange,
+                                at: (next) => next.start,
+                              })}
+                            />
+                          )}
+                          {tail && (
+                            <LaneEdge
+                              label="Zoom end"
+                              value={region.end}
+                              duration={duration}
+                              reachable={selected}
+                              position={`${tail.to * pps}px`}
+                              onPointerDown={dragZoom(region, "tail")}
+                              onKeyDown={laneKeys({
+                                part: "tail",
+                                shift: (by) => shiftZoom(region, "tail", by),
+                                apply: onZoomChange,
+                                at: (next) => next.end - FRAME,
+                              })}
+                            />
+                          )}
                         </div>
                       );
                     })}
                   </div>
-                );
-              })}
+                )}
 
-              {/* Every join between two pieces can take a transition into the
-                  second. A dot on the join's bottom edge rather than the whole
-                  height of the hairline, so a press higher up reaches the
-                  pieces' own edges. At the bottom rather than the top, since a
-                  split leaves the playhead standing on the join, and its knob
-                  is at the top. Hidden while a piece is carried, since the
-                  joins are about to change. */}
-              {!carry &&
-                pieces.slice(1).map((piece, i) => {
-                  const index = i + 1;
-                  const selected = piece.id === selectedJoin;
-                  const toggle = () => onJoinSelect(selected ? null : piece.id);
-                  return (
-                    <Tooltip key={`join-${piece.id}`}>
-                      <TooltipTrigger asChild>
-                        <div
-                          role="button"
-                          tabIndex={0}
-                          aria-label={`Join at ${formatPrecise(layout.starts[index] - origin, duration)}`}
-                          aria-pressed={selected}
-                          onPointerDown={(event) => {
-                            if (disabled) return;
-                            event.preventDefault();
-                            event.stopPropagation();
-                            onPlayback(false);
-                            toggle();
-                            seekTo(piece.start, piece.id);
-                          }}
-                          onKeyDown={(event) => {
-                            if (event.key !== "Enter" && event.key !== " ") return;
-                            event.preventDefault();
-                            toggle();
-                          }}
-                          className={cn(
-                            "absolute -bottom-1.5 z-20 grid size-3.5 cursor-pointer place-items-center rounded-full outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
-                            settling &&
-                              "transition-[left] duration-200 ease-out motion-reduce:transition-none",
-                          )}
-                          style={{
-                            left: `calc(${centre(layout.starts[index] / duration)} - 8px)`,
-                          }}
-                        >
-                          {piece.transition ? (
-                            <BlendIcon
+                {/* Fades, on a lane of their own, drawn wherever their footage
+                    plays like the zooms. Only mounted when there are any: a
+                    bar that grows a row for a feature nobody is using is a bar
+                    that is too tall by default. Each block is drawn as the
+                    ramp it is, so which way it runs is read off the lane
+                    rather than off a label. Taller than the zoom's lane,
+                    because the ramp is drawn in it and bent by hand. */}
+                {fades.length > 0 && (
+                  <div
+                    ref={fadeLaneRef}
+                    className="relative mt-1 h-8"
+                    onPointerDown={() => onFadeSelect(null)}
+                  >
+                    {fades.map((fade) => {
+                      const selected = fade.id === selectedFade;
+                      const shows = spansOf(fade.start, fade.end);
+                      const head = shows.find((o) => o.head);
+                      const tail = shows.find((o) => o.tail);
+                      const middle = (fade.start + fade.end) / 2;
+                      const centre =
+                        shows.find((o) => middle >= o.start && middle <= o.end) ?? shows[0];
+                      return (
+                        <div key={fade.id}>
+                          {shows.map((show, k) => (
+                            <div
+                              key={k}
+                              role={k === 0 ? "button" : undefined}
+                              tabIndex={k === 0 ? 0 : undefined}
+                              aria-hidden={k === 0 ? undefined : true}
+                              aria-label={
+                                k === 0
+                                  ? `Fade ${fade.kind}, ${formatPrecise(fade.start, duration)} to ${formatPrecise(fade.end, duration)}`
+                                  : undefined
+                              }
+                              aria-pressed={k === 0 ? selected : undefined}
+                              onPointerDown={dragFade(fade, "body")}
+                              onKeyDown={
+                                k === 0
+                                  ? laneKeys({
+                                      part: "body",
+                                      shift: (by) => shiftFade(fade, "body", by),
+                                      apply: onFadeChange,
+                                      at: (next) => next.start,
+                                      onRemove: onFadeRemove,
+                                      onToggle: () =>
+                                        onFadeSelect(selected ? null : fade.id),
+                                    })
+                                  : undefined
+                              }
                               className={cn(
-                                "size-3.5 rounded-full bg-panel",
-                                selected ? "text-foreground" : "text-muted-foreground",
+                                "absolute inset-y-0 cursor-grab overflow-hidden rounded-md bg-track ring-1 transition-colors duration-150 active:cursor-grabbing",
+                                "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+                                selected ? "ring-brand" : "ring-stroke",
                               )}
-                              aria-hidden="true"
+                              style={{ left: xOf(show.from), width: (show.to - show.from) * pps }}
+                            >
+                              {/* The ramp, drawn from the fade's own curve and
+                                  as wide as the whole fade, so a block showing
+                                  part of it shows that part of the ramp. It is
+                                  the direction and the shape at once, so
+                                  neither needs a label. */}
+                              <svg
+                                viewBox="0 0 100 100"
+                                preserveAspectRatio="none"
+                                aria-hidden="true"
+                                className="absolute inset-y-0 h-full"
+                                style={{
+                                  left: -(show.start - fade.start) * pps,
+                                  width: (fade.end - fade.start) * pps,
+                                }}
+                              >
+                                <path
+                                  d={rampPath(fade)}
+                                  fill="var(--track-active)"
+                                  fillOpacity={0.55}
+                                  stroke="none"
+                                />
+                                <path
+                                  d={rampLine(fade)}
+                                  fill="none"
+                                  stroke={selected ? "var(--brand)" : "var(--stroke-strong)"}
+                                  strokeWidth={2}
+                                  vectorEffect="non-scaling-stroke"
+                                />
+                              </svg>
+                            </div>
+                          ))}
+
+                          {/* One handle, on the ramp, the way an editor puts
+                              it there. A bezier has two control points, which
+                              is more than a fade needs by hand: this moves the
+                              symmetric family, and the dialog is still where
+                              both points move independently. */}
+                          {centre && (
+                            <div
+                              role="slider"
+                              tabIndex={selected ? 0 : -1}
+                              aria-label="Fade curve"
+                              aria-valuemin={-100}
+                              aria-valuemax={100}
+                              aria-valuenow={Math.round(bendOf(fade.curve) * 100)}
+                              onPointerDown={bendFade(fade)}
+                              onKeyDown={(event) => {
+                                const step = event.shiftKey ? 0.1 : 0.02;
+                                const by =
+                                  event.key === "ArrowUp"
+                                    ? step
+                                    : event.key === "ArrowDown"
+                                      ? -step
+                                      : 0;
+                                if (!by) return;
+                                event.preventDefault();
+                                onFadeChange({
+                                  ...fade,
+                                  curve: bendCurve(bendOf(fade.curve) + by),
+                                });
+                              }}
+                              className={cn(
+                                "absolute size-3 -translate-x-1/2 -translate-y-1/2 cursor-ns-resize rounded-full",
+                                "border-2 border-brand bg-panel transition-opacity duration-150",
+                                "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+                                selected ? "opacity-100" : "pointer-events-none opacity-0",
+                              )}
+                              style={{
+                                left: xOf(centre.from + (middle - centre.start)),
+                                top: `${rampMid(fade) * 100}%`,
+                              }}
                             />
-                          ) : (
-                            <span
-                              aria-hidden="true"
-                              className={cn(
-                                "size-2 rounded-full border transition-colors duration-150",
-                                selected
-                                  ? "border-selected bg-selected"
-                                  : "border-stroke-strong bg-panel hover:bg-stroke-strong",
-                              )}
+                          )}
+                          {head && (
+                            <LaneEdge
+                              label="Fade start"
+                              value={fade.start}
+                              duration={duration}
+                              reachable={selected}
+                              position={`${head.from * pps}px`}
+                              onPointerDown={dragFade(fade, "head")}
+                              onKeyDown={laneKeys({
+                                part: "head",
+                                shift: (by) => shiftFade(fade, "head", by),
+                                apply: onFadeChange,
+                                at: (next) => next.start,
+                              })}
+                            />
+                          )}
+                          {tail && (
+                            <LaneEdge
+                              label="Fade end"
+                              value={fade.end}
+                              duration={duration}
+                              reachable={selected}
+                              position={`${tail.to * pps}px`}
+                              onPointerDown={dragFade(fade, "tail")}
+                              onKeyDown={laneKeys({
+                                part: "tail",
+                                shift: (by) => shiftFade(fade, "tail", by),
+                                apply: onFadeChange,
+                                at: (next) => next.end - FRAME,
+                              })}
                             />
                           )}
                         </div>
-                      </TooltipTrigger>
-                      <TooltipContent>Transition at this join</TooltipContent>
-                    </Tooltip>
-                  );
-                })}
+                      );
+                    })}
+                  </div>
+                )}
 
-              {/* Brand is spent once on this surface, and this is it: the playhead
-                  has to be told apart from the two handles at a glance. */}
-              {/* The playhead is picked up by its knob, above the pieces. Its
-                  line takes no presses: a split leaves it standing on the
-                  join, and a grab area there took every press meant for the
-                  edges either side. A press anywhere on a piece scrubs
-                  anyway. The loop positions this box, so React sets
-                  nothing. */}
-              <div
-                ref={playheadRef}
-                className="pointer-events-none absolute -top-2 bottom-0 left-1 z-30 w-0.5"
-              >
-                <span
-                  aria-hidden="true"
-                  className="absolute inset-x-0 top-2 bottom-1.5 rounded-full bg-brand"
-                />
-                <span
-                  ref={knobRef}
-                  role="slider"
-                  tabIndex={0}
-                  aria-label="Playhead"
-                  aria-valuemin={0}
-                  aria-valuemax={duration}
-                  aria-valuenow={0}
-                  onPointerDown={scrubFrom}
-                  onKeyDown={nudgePlayhead}
-                  className="pointer-events-auto absolute top-0 left-1/2 size-3 -translate-x-1/2 cursor-ew-resize touch-none rounded-full bg-brand shadow-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
-                />
-              </div>
-            </div>
-
-            {/* Zoom regions, under the picture's lane and on its axis. A press on
-                the bare lane puts the marker away. Suggested regions sit on the same
-                lane as ghosts, dashed and dim, since a suggestion is a region that
-                has not been agreed to yet. A press agrees. */}
-            {(zooms.length > 0 || suggestions.length > 0) && (
-              <div
-                className="relative mt-1 h-7"
-                onPointerDown={() => onZoomSelect(null)}
-              >
-                {suggestions.map((suggestion) => (
-                  <Tooltip key={`${suggestion.start}:${suggestion.end}`}>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        aria-label={`Suggested zoom, ${formatPrecise(suggestion.start, duration)} to ${formatPrecise(suggestion.end, duration)}. Press to add it.`}
-                        onPointerDown={(event) => event.stopPropagation()}
-                        onClick={() => onSuggestionAccept(suggestion)}
-                        className={cn(
-                          "absolute inset-y-0 flex cursor-pointer items-center justify-center rounded-md border border-dashed border-stroke-strong text-muted-foreground",
-                          "transition-all duration-150 hover:border-foreground/60 hover:bg-elevated hover:text-foreground active:scale-[0.98]",
-                          "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
-                        )}
-                        style={{
-                          left: `calc(${at(lane(suggestion.start))} + ${INSET}px)`,
-                          width: at(laneSpan(suggestion.start, suggestion.end)),
-                        }}
-                      >
-                        <PlusIcon className="size-3.5" aria-hidden="true" />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent>Suggested zoom. Press to add it.</TooltipContent>
-                  </Tooltip>
-                ))}
-                {zooms.map((region) => {
-                  const selected = region.id === selectedZoom;
-                  return (
-                    <div key={region.id}>
-                      <div
-                        role="button"
-                        tabIndex={0}
-                        aria-label={`Zoom ${formatSpeed(region.scale)}, ${formatPrecise(region.start, duration)} to ${formatPrecise(region.end, duration)}`}
-                        aria-pressed={selected}
-                        onPointerDown={dragZoom(region, "body")}
-                        onKeyDown={laneKeys({
-                          part: "body",
-                          shift: (by) => shiftZoom(region, "body", by),
-                          apply: onZoomChange,
-                          at: (next) => next.start,
-                          onRemove: onZoomRemove,
-                          onToggle: () =>
-                            onZoomSelect(selected ? null : region.id),
-                        })}
-                        className={cn(
-                          "absolute inset-y-0 flex cursor-grab items-center justify-center overflow-hidden rounded-md bg-elevated text-[11px] tabular-nums ring-1 transition-colors duration-150 active:cursor-grabbing",
-                          "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
-                          selected
-                            ? "text-foreground ring-brand"
-                            : "text-muted-foreground ring-stroke hover:text-foreground",
-                        )}
-                        style={{
-                          left: `calc(${at(lane(region.start))} + ${INSET}px)`,
-                          width: at(laneSpan(region.start, region.end)),
-                        }}
-                      >
-                        {formatSpeed(region.scale)}
-                      </div>
-                      <LaneEdge
-                        label="Zoom start"
-                        value={region.start}
-                        duration={duration}
-                        reachable={selected}
-                        position={at(lane(region.start))}
-                        onPointerDown={dragZoom(region, "head")}
-                        onKeyDown={laneKeys({
-                          part: "head",
-                          shift: (by) => shiftZoom(region, "head", by),
-                          apply: onZoomChange,
-                          at: (next) => next.start,
-                        })}
-                      />
-                      <LaneEdge
-                        label="Zoom end"
-                        value={region.end}
-                        duration={duration}
-                        reachable={selected}
-                        position={at(lane(region.end))}
-                        onPointerDown={dragZoom(region, "tail")}
-                        onKeyDown={laneKeys({
-                          part: "tail",
-                          shift: (by) => shiftZoom(region, "tail", by),
-                          apply: onZoomChange,
-                          at: (next) => next.end - FRAME,
-                        })}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            {/* Fades, on a lane of their own. Only mounted when there are
-                any, the same as the zoom lane: a bar that grows a row for a
-                feature nobody is using is a bar that is too tall by default.
-                Each block is drawn as the ramp it is, so which way it runs is
-                read off the lane rather than off a label. */}
-            {/* Taller than the zoom's lane, because the ramp is drawn in it
-                and bent by hand. A 20px block has no room for a curve to be
-                read, let alone grabbed. */}
-            {fades.length > 0 && (
-              <div
-                ref={fadeLaneRef}
-                className="relative mt-1 h-8"
-                onPointerDown={() => onFadeSelect(null)}
-              >
-                {fades.map((fade) => {
-                  const selected = fade.id === selectedFade;
-                  return (
-                    <div key={fade.id}>
-                      <div
-                        role="button"
-                        tabIndex={0}
-                        aria-label={`Fade ${fade.kind}, ${formatPrecise(fade.start, duration)} to ${formatPrecise(fade.end, duration)}`}
-                        aria-pressed={selected}
-                        onPointerDown={dragFade(fade, "body")}
-                        onKeyDown={laneKeys({
-                          part: "body",
-                          shift: (by) => shiftFade(fade, "body", by),
-                          apply: onFadeChange,
-                          at: (next) => next.start,
-                          onRemove: onFadeRemove,
-                          onToggle: () => onFadeSelect(selected ? null : fade.id),
-                        })}
-                        className={cn(
-                          "absolute inset-y-0 cursor-grab overflow-hidden rounded-md bg-track ring-1 transition-colors duration-150 active:cursor-grabbing",
-                          "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
-                          selected ? "ring-brand" : "ring-stroke",
-                        )}
-                        style={{
-                          left: `calc(${at(lane(fade.start))} + ${INSET}px)`,
-                          width: at(laneSpan(fade.start, fade.end)),
-                        }}
-                      >
-                        {/* The ramp, drawn from the fade's own curve. It is
-                            the direction and the shape at once, so neither
-                            needs a label, and it is the thing the handle
-                            below bends. `preserveAspectRatio` is off so the
-                            unit square stretches to whatever width the block
-                            has on the lane. */}
-                        <svg
-                          viewBox="0 0 100 100"
-                          preserveAspectRatio="none"
-                          aria-hidden="true"
-                          className="absolute inset-0 size-full"
-                        >
-                          <path
-                            d={rampPath(fade)}
-                            fill="var(--track-active)"
-                            fillOpacity={0.55}
-                            stroke="none"
-                          />
-                          <path
-                            d={rampLine(fade)}
-                            fill="none"
-                            stroke={
-                              selected ? "var(--brand)" : "var(--stroke-strong)"
+                {/* The laid sound, on the timeline's own seconds, so where it
+                    starts is read against the pieces above it rather than
+                    described in a number. */}
+                {soundtrack && (
+                  <div className="relative mt-1 h-7">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div
+                          ref={regionRef}
+                          role="slider"
+                          tabIndex={0}
+                          aria-label={`Soundtrack, ${soundtrack.name}`}
+                          aria-valuemin={0}
+                          aria-valuemax={duration}
+                          aria-valuenow={Number(soundtrack.offset.toFixed(3))}
+                          aria-valuetext={formatPrecise(soundtrack.offset, duration)}
+                          onPointerDown={dragSound("body")}
+                          // Alt with an arrow slips the sound through the region,
+                          // which is what Alt with a drag and the wheel both do.
+                          onKeyDown={(event) => {
+                            if (event.key === "Home" || event.key === "End") {
+                              event.preventDefault();
+                              onSoundtrackChange(
+                                shiftSound(
+                                  soundtrack,
+                                  "body",
+                                  event.key === "Home" ? -kept : kept,
+                                ),
+                              );
+                              return;
                             }
-                            strokeWidth={2}
-                            vectorEffect="non-scaling-stroke"
+                            laneKeys({
+                              part: "body",
+                              shift: (by) =>
+                                shiftSound(soundtrack, event.altKey ? "slip" : "body", by),
+                              apply: onSoundtrackChange,
+                              at: (next) => sourceAt(segmentsOf(pieces), next.offset).time,
+                            })(event);
+                          }}
+                          // Back to the top of the file, keeping the region where it is.
+                          // A slip is easy to lose track of and this is the way back.
+                          onDoubleClick={() =>
+                            onSoundtrackChange({
+                              ...soundtrack,
+                              start: 0,
+                              end: soundtrack.end - soundtrack.start,
+                            })
+                          }
+                          className="absolute inset-y-0 cursor-grab overflow-hidden rounded-md bg-elevated ring-1 ring-stroke active:cursor-grabbing"
+                          // Stretched by the speed. The track keeps its own tempo while
+                          // the picture races past it, so a second of sound covers two
+                          // seconds of a 2x timeline, and the waveform is drawn to that.
+                          style={{
+                            left: xOf(soundtrack.offset),
+                            width: (soundtrack.end - soundtrack.start) * speed * pps,
+                          }}
+                        >
+                          <Wave
+                            wave={shape}
+                            from={soundtrack.start}
+                            to={soundtrack.end}
+                            width={pps}
+                            duration={duration}
                           />
-                        </svg>
-                      </div>
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        Drag to move, scroll to slip, double-click to reset
+                      </TooltipContent>
+                    </Tooltip>
 
-                      {/* One handle, on the ramp, the way an editor puts it
-                          there. A bezier has two control points, which is more
-                          than a fade needs by hand: this moves the symmetric
-                          family, and the dialog is still where both points
-                          move independently. */}
-                      <div
-                        role="slider"
-                        tabIndex={selected ? 0 : -1}
-                        aria-label="Fade curve"
-                        aria-valuemin={-100}
-                        aria-valuemax={100}
-                        aria-valuenow={Math.round(bendOf(fade.curve) * 100)}
-                        onPointerDown={bendFade(fade)}
-                        onKeyDown={(event) => {
-                          const step = event.shiftKey ? 0.1 : 0.02;
-                          const by =
-                            event.key === "ArrowUp"
-                              ? step
-                              : event.key === "ArrowDown"
-                                ? -step
-                                : 0;
-                          if (!by) return;
-                          event.preventDefault();
-                          onFadeChange({
-                            ...fade,
-                            curve: bendCurve(bendOf(fade.curve) + by),
-                          });
-                        }}
-                        className={cn(
-                          "absolute size-3 -translate-x-1/2 -translate-y-1/2 cursor-ns-resize rounded-full",
-                          "border-2 border-brand bg-panel transition-opacity duration-150",
-                          "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
-                          selected ? "opacity-100" : "pointer-events-none opacity-0",
-                        )}
-                        style={{
-                          left: `calc(${at(lane(fade.start))} + ${INSET}px + ${at(laneSpan(fade.start, fade.end))} / 2)`,
-                          top: `${rampMid(fade) * 100}%`,
-                        }}
-                      />
-                      <LaneEdge
-                        label="Fade start"
-                        value={fade.start}
-                        duration={duration}
-                        reachable={selected}
-                        position={at(lane(fade.start))}
-                        onPointerDown={dragFade(fade, "head")}
-                        onKeyDown={laneKeys({
-                          part: "head",
-                          shift: (by) => shiftFade(fade, "head", by),
-                          apply: onFadeChange,
-                          at: (next) => next.start,
-                        })}
-                      />
-                      <LaneEdge
-                        label="Fade end"
-                        value={fade.end}
-                        duration={duration}
-                        reachable={selected}
-                        position={at(lane(fade.end))}
-                        onPointerDown={dragFade(fade, "tail")}
-                        onKeyDown={laneKeys({
-                          part: "tail",
-                          shift: (by) => shiftFade(fade, "tail", by),
-                          apply: onFadeChange,
-                          at: (next) => next.end - FRAME,
-                        })}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+                    <LaneEdge
+                      label="Soundtrack start"
+                      value={soundtrack.offset}
+                      duration={duration}
+                      position={`${soundtrack.offset * pps}px`}
+                      onPointerDown={dragSound("head")}
+                      onKeyDown={laneKeys({
+                        part: "head",
+                        shift: (by) => shiftSound(soundtrack, "head", by),
+                        apply: onSoundtrackChange,
+                        at: (next) => sourceAt(segmentsOf(pieces), next.offset).time,
+                      })}
+                    />
+                    <LaneEdge
+                      label="Soundtrack end"
+                      value={soundtrack.offset + (soundtrack.end - soundtrack.start) * speed}
+                      duration={duration}
+                      position={`${(soundtrack.offset + (soundtrack.end - soundtrack.start) * speed) * pps}px`}
+                      onPointerDown={dragSound("tail")}
+                      onKeyDown={laneKeys({
+                        part: "tail",
+                        shift: (by) => shiftSound(soundtrack, "tail", by),
+                        apply: onSoundtrackChange,
+                        at: (next) =>
+                          sourceAt(
+                            segmentsOf(pieces),
+                            next.offset + (next.end - next.start) * speed,
+                          ).time,
+                      })}
+                    />
+                  </div>
+                )}
 
-            {/* Laid under the picture on the same axis, so where the sound starts is
-                read against where the clip does rather than described in a number. */}
-            {soundtrack && (
-              <div className="relative mt-1 h-7">
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <div
-                      ref={regionRef}
-                      role="slider"
-                      tabIndex={0}
-                      aria-label={`Soundtrack, ${soundtrack.name}`}
-                      aria-valuemin={0}
-                      aria-valuemax={duration}
-                      aria-valuenow={Number(soundtrack.offset.toFixed(3))}
-                      aria-valuetext={formatPrecise(soundtrack.offset, duration)}
-                      onPointerDown={dragSound("body")}
-                      // Alt with an arrow slips the sound through the region,
-                      // which is what Alt with a drag and the wheel both do.
-                      onKeyDown={(event) => {
-                        if (event.key === "Home" || event.key === "End") {
-                          event.preventDefault();
-                          onSoundtrackChange(
-                            shiftSound(
-                              soundtrack,
-                              "body",
-                              event.key === "Home" ? -duration : duration,
-                            ),
-                          );
-                          return;
-                        }
-                        laneKeys({
-                          part: "body",
-                          shift: (by) =>
-                            shiftSound(
-                              soundtrack,
-                              event.altKey ? "slip" : "body",
-                              by,
-                            ),
-                          apply: onSoundtrackChange,
-                          at: (next) => next.offset,
-                        })(event);
-                      }}
-                      // Back to the top of the file, keeping the region where it is.
-                      // A slip is easy to lose track of and this is the way back.
-                      onDoubleClick={() =>
-                        onSoundtrackChange({
-                          ...soundtrack,
-                          start: 0,
-                          end: soundtrack.end - soundtrack.start,
-                        })
-                      }
-                      className="absolute inset-y-0 cursor-grab overflow-hidden rounded-md bg-elevated ring-1 ring-stroke active:cursor-grabbing"
-                      // Stretched by the speed. The track keeps its own tempo while
-                      // the picture races past it, so a second of sound covers two
-                      // seconds of a 2x lane, and the waveform is drawn to that.
-                      style={{
-                        left: `calc(${at(lane(soundtrack.offset))} + ${INSET}px)`,
-                        width: at(
-                          ((soundtrack.end - soundtrack.start) * speed) / duration,
-                        ),
-                      }}
-                    >
-                      <Wave
-                        wave={shape}
-                        from={soundtrack.start}
-                        to={soundtrack.end}
-                        width={laneWidth}
-                        duration={duration}
-                      />
-                    </div>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    Drag to move, scroll to slip, double-click to reset
-                  </TooltipContent>
-                </Tooltip>
-
-                <LaneEdge
-                  label="Soundtrack start"
-                  value={soundtrack.offset}
-                  duration={duration}
-                  position={at(lane(soundtrack.offset))}
-                  onPointerDown={dragSound("head")}
-                  onKeyDown={laneKeys({
-                    part: "head",
-                    shift: (by) => shiftSound(soundtrack, "head", by),
-                    apply: onSoundtrackChange,
-                    at: (next) => next.offset,
-                  })}
-                />
-                <LaneEdge
-                  label="Soundtrack end"
-                  value={
-                    soundtrack.offset +
-                    (soundtrack.end - soundtrack.start) * speed
-                  }
-                  duration={duration}
-                  position={at(
-                    lane(soundtrack.offset) +
-                      ((soundtrack.end - soundtrack.start) * speed) / duration,
-                  )}
-                  onPointerDown={dragSound("tail")}
-                  onKeyDown={laneKeys({
-                    part: "tail",
-                    shift: (by) => shiftSound(soundtrack, "tail", by),
-                    apply: onSoundtrackChange,
-                    at: (next) => next.offset + (next.end - next.start) * speed,
-                  })}
-                />
-              </div>
-            )}
-
-            {/* The axis is what turns the lane from two proportions into a length.
-                It is `aria-hidden` because both handles already report their value in
-                seconds, so a reader hears the numbers that matter. */}
-            {/* `h-5` is what the row actually occupies: a 4px tick, 2px of gap, and
-                an 11px label. At `h-4` the numbers painted outside their own box, so
-                the margin below could not see them and the control under the axis sat
-                against the labels however much it was given. */}
-            {/* The ruler scrubs too, the way a timeline's does, so there is
-                always a surface for moving the playhead that nothing else
-                claims. */}
-            <div
-              aria-hidden="true"
-              onPointerDown={scrubFrom}
-              className="relative mt-1.5 h-5 cursor-pointer touch-none"
-            >
-              {/* The output's seconds, from the first piece, so a label
-                  reads what the file will say at that point. */}
-              {ticks(duration, laneWidth, kept).map(({ at, major, label }) => {
-                const x = origin + at;
-                return (
+                {/* The playhead runs the timeline's full height, from the
+                    ruler down through every lane, and is picked up by its knob
+                    on the ruler. Its line takes no presses: a split leaves it
+                    standing on the join, and a grab area there took every
+                    press meant for the ends either side. Brand is spent once
+                    on this surface, and this is it. The loop positions this
+                    box, so React sets nothing. */}
                 <div
-                  key={at}
-                  className="absolute top-0 flex flex-col items-start"
-                  style={{ left: centre(x / duration) }}
+                  ref={playheadRef}
+                  className="pointer-events-none absolute top-0 bottom-0 z-30 w-0.5"
+                  style={{ left: INSET - 1 }}
                 >
                   <span
-                    className={cn(
-                      "block w-px",
-                      major ? "h-1 bg-stroke-strong" : "h-0.5 bg-stroke",
-                      x > 0 && "-translate-x-1/2",
-                    )}
+                    aria-hidden="true"
+                    className="absolute inset-x-0 top-1 bottom-0 rounded-full bg-brand"
                   />
-                  {label && (
-                    <span
-                      className={cn(
-                        "mt-0.5 block text-[11px] tabular-nums leading-none text-muted-foreground",
-                        x > 0 && x < duration - 1e-6 && "-translate-x-1/2",
-                        x >= duration - 1e-6 && "-translate-x-full",
-                      )}
-                    >
-                      {label}
-                    </span>
-                  )}
+                  <span
+                    ref={knobRef}
+                    role="slider"
+                    tabIndex={0}
+                    aria-label="Playhead"
+                    aria-valuemin={0}
+                    aria-valuemax={duration}
+                    aria-valuenow={0}
+                    onPointerDown={scrubFrom}
+                    onKeyDown={nudgePlayhead}
+                    className="pointer-events-auto absolute top-0 left-1/2 size-3 -translate-x-1/2 cursor-ew-resize touch-none rounded-full bg-brand shadow-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                  />
                 </div>
-                );
-              })}
+              </div>
             </div>
 
             <input
@@ -2513,6 +2678,9 @@ export function TrimBar({
                         duration,
                       )}
                     </span>
+                    <Transport label="Duplicate this piece" onClick={onPieceCopy}>
+                      <CopyPlusIcon className="size-4" aria-hidden="true" />
+                    </Transport>
                     <Transport label="Delete this piece (Delete)" onClick={onPieceRemove}>
                       <Trash2Icon className="size-4" aria-hidden="true" />
                     </Transport>
@@ -2552,6 +2720,32 @@ export function TrimBar({
               {/* Wraps too, so at 320px the mutes drop under the speed pill rather
             than pushing the row past the panel. */}
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+                {/* The timeline's zoom, the slider Canva puts under its own:
+                    each step is the same ratio of scale, and the readout is
+                    where the slider sits. Cmd or Ctrl with the wheel does the
+                    same over the timeline. */}
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="flex items-center gap-2">
+                      <Slider
+                        label="Timeline zoom"
+                        className="w-24"
+                        min={0}
+                        max={100}
+                        step={1}
+                        value={[zoomValue]}
+                        onValueChange={([value]) =>
+                          setZoom(minZoom * Math.exp((value / 100) * zoomRange))
+                        }
+                      />
+                      <span className="w-8 text-[13px] tabular-nums text-muted-foreground">
+                        {Math.round(zoomValue)}%
+                      </span>
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent>Timeline zoom (Cmd scroll)</TooltipContent>
+                </Tooltip>
+
                 {/* The same recessed pill as the transport, with text chips rather
                     than glyphs: "2x" is its own label and needs no tooltip. The gauge
                     is what says the numbers are a rate rather than a zoom. */}
@@ -2760,27 +2954,22 @@ interface Tick {
   label?: string;
 }
 
-/**
- * The ruler's marks over `length` seconds of output, at the lane's own scale,
- * which is the whole source across `width`.
- */
-function ticks(duration: number, width: number, length: number): Tick[] {
-  if (!duration || !width) return [];
+/** The ruler's marks over `span` seconds of the timeline at `pps`. */
+function ticks(span: number, pps: number): Tick[] {
+  if (!span || !pps) return [];
 
-  const step = tickInterval(duration, width);
-  const perPixel = duration / width;
+  const step = tickInterval(pps);
   // The finest subdivision whose marks still read as separate ones. None of
-  // them fitting is the answer for a lane that is already dense with labels.
-  const parts =
-    SUBDIVISIONS.find((n) => step / n / perPixel >= MIN_MINOR_GAP) ?? 1;
+  // them fitting is the answer for a ruler that is already dense with labels.
+  const parts = SUBDIVISIONS.find((n) => (step / n) * pps >= MIN_MINOR_GAP) ?? 1;
 
   const marks: Tick[] = [];
   const minor = step / parts;
 
-  for (let index = 0; index * minor <= length + 1e-6; index++) {
+  for (let index = 0; index * minor <= span + 1e-6; index++) {
     const at = Number((index * minor).toFixed(4));
     const major = index % parts === 0;
-    marks.push({ at, major, label: major ? axisLabel(at, step, length) : undefined });
+    marks.push({ at, major, label: major ? axisLabel(at, step, span) : undefined });
   }
   return marks;
 }

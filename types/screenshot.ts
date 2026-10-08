@@ -13,8 +13,9 @@ export type MediaKind = "image" | "video";
  * A sound file laid over the clip.
  *
  * Three numbers place it, and they are the model a timeline editor uses.
- * `offset` is where the region's left edge sits on the clip's own axis, and
- * `start` and `end` are the slice of the file it plays. Dragging the body
+ * `offset` is where the region's left edge sits on the timeline, in the
+ * output's seconds before speed, and `start` and `end` are the slice of the
+ * file it plays. Dragging the body
  * moves `offset` alone. Dragging the left edge moves `offset` and `start`
  * together, so the sound stays anchored where it was while the edge comes in.
  */

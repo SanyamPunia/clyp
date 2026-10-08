@@ -75,6 +75,7 @@ import {
 import { type MotionRead, readMotion } from "@/lib/read-motion";
 import {
   type Piece,
+  copyPiece,
   fromLegacy,
   indexAt,
   joinPieces,
@@ -390,6 +391,16 @@ export function Clyp() {
   const [selectedPiece, setSelectedPiece] = useState<string | null>(null);
   /** The selected join, by the id of the piece it runs into. */
   const [selectedJoin, setSelectedJoin] = useState<string | null>(null);
+  /**
+   * The piece the playhead is in, by id, as the trim bar's frame loop last
+   * reported it. Two pieces can show the same footage, so the video's own
+   * clock cannot say which one is playing. A ref, since it changes during
+   * playback and nothing renders from it.
+   */
+  const cursorRef = useRef<string | null>(null);
+  const handleCursorChange = useCallback((id: string | null) => {
+    cursorRef.current = id;
+  }, []);
   const [removePieceOpen, setRemovePieceOpen] = useState(false);
   /**
    * Stretches where the picture arrives or leaves, on the source's axis like
@@ -424,7 +435,9 @@ export function Clyp() {
    * back needs a permission this feature does not deserve. It also means a
    * paste cannot arrive holding something from another site.
    */
-  const [copied, setCopied] = useState<ZoomRegion | null>(null);
+  const [copied, setCopied] = useState<
+    { kind: "zoom"; region: ZoomRegion } | { kind: "piece"; piece: Piece } | null
+  >(null);
   /**
    * The clip's motion track, read once for the whole clip when a region is
    * first asked to follow, and the read's progress while it runs. Reading it
@@ -849,7 +862,7 @@ export function Clyp() {
     (file: File) => {
       // It lands filling the clip, and the clip at 2x is half as long on the
       // track's own clock, so that is the length it is cut to.
-      loadSoundtrack(file, (media?.duration ?? 0) / speed)
+      loadSoundtrack(file, (pieces ? lengthOf(pieces) : (media?.duration ?? 0)) / speed)
         .then((next) => {
           setSoundtrack((previous) => {
             if (previous) URL.revokeObjectURL(previous.src);
@@ -862,7 +875,7 @@ export function Clyp() {
         })
         .catch((error: Error) => toast.error(error.message));
     },
-    [media?.duration, speed],
+    [media?.duration, pieces, speed],
   );
 
   const removeSoundtrack = useCallback(() => {
@@ -873,27 +886,27 @@ export function Clyp() {
   }, []);
 
   /**
-   * A faster clip has less lane behind a soundtrack's anchor.
+   * A faster clip has less timeline after a soundtrack's start.
    *
-   * The region starts on a source frame and runs at the track's own tempo, so
-   * on the lane it spans `speed` times its length. At 2x a region that filled
-   * the last three seconds now needs six, and a part hanging off the end is a
-   * part that cannot be heard. Its tail is cut to fit rather than drawn past
-   * the lane, which would say the control is broken.
+   * The region runs at the track's own tempo, so on the timeline it spans
+   * `speed` times its length. At 2x a region that filled the last three
+   * seconds now needs six, and a part hanging off the end is a part that
+   * cannot be heard. Its tail is cut to fit rather than drawn past the
+   * clip's end, which would say the control is broken.
    */
   const duration = media?.duration;
   const handleSpeedChange = useCallback(
     (next: number) => {
       setSpeed(next);
       setSoundtrack((previous) => {
-        if (!previous || !duration) return previous;
-        const room = (duration - previous.offset) / next;
+        if (!previous || !pieces) return previous;
+        const room = (lengthOf(pieces) - previous.offset) / next;
         return previous.end - previous.start > room
-          ? { ...previous, end: previous.start + room }
+          ? { ...previous, end: previous.start + Math.max(room, 0.2) }
           : previous;
       });
     },
-    [duration],
+    [pieces],
   );
 
   /**
@@ -1027,7 +1040,11 @@ export function Clyp() {
     const video = videoRef.current;
     if (!video || !pieces) return;
     const at = Math.round(video.currentTime * EDIT_FPS) / EDIT_FPS;
-    const index = indexAt(segmentsOf(pieces), at);
+    const own = pieces.findIndex((p) => p.id === cursorRef.current);
+    const index =
+      own >= 0 && at > pieces[own].start && at < pieces[own].end
+        ? own
+        : indexAt(segmentsOf(pieces), at);
     const id = newPieceId();
     const next = index < 0 ? null : splitPiece(pieces, index, at, id);
     if (!next) {
@@ -1135,10 +1152,16 @@ export function Clyp() {
   const copySelection = useCallback(() => {
     const region = zooms.find((r) => r.id === selectedZoom);
     if (region) {
-      setCopied(region);
+      setCopied({ kind: "zoom", region });
       toast.success("Zoom copied");
+      return;
     }
-  }, [selectedZoom, zooms]);
+    const piece = pieces?.find((p) => p.id === selectedPiece);
+    if (piece) {
+      setCopied({ kind: "piece", piece });
+      toast.success("Piece copied");
+    }
+  }, [pieces, selectedPiece, selectedZoom, zooms]);
 
   /**
    * Pastes it at the playhead, keeping its own length.
@@ -1150,16 +1173,35 @@ export function Clyp() {
   const pasteCopied = useCallback(() => {
     const video = videoRef.current;
     if (!copied || !video || !duration) return;
+
+    // A piece goes in right after the selected piece, or after the one the
+    // playhead is in, the way a pasted clip lands in an editor.
+    if (copied.kind === "piece") {
+      if (!pieces) return;
+      const after = pieces.findIndex(
+        (p) => p.id === (selectedPiece ?? cursorRef.current),
+      );
+      const id = newPieceId();
+      const index = after < 0 ? pieces.length - 1 : after;
+      setPieces([
+        ...pieces.slice(0, index + 1),
+        { id, start: copied.piece.start, end: copied.piece.end },
+        ...pieces.slice(index + 1),
+      ]);
+      selectPiece(id);
+      return;
+    }
+
     const grid = (seconds: number) => Math.round(seconds * EDIT_FPS) / EDIT_FPS;
     const at = grid(video.currentTime);
-
-    const placed = placeZoom(zooms, at, duration, copied.end - copied.start);
+    const region = copied.region;
+    const placed = placeZoom(zooms, at, duration, region.end - region.start);
     if (!placed) {
       toast.error("There is no room for a zoom at the playhead");
       return;
     }
     const next: ZoomRegion = {
-      ...copied,
+      ...region,
       id: newZoomId(),
       start: grid(placed.start),
       end: grid(placed.end),
@@ -1168,7 +1210,7 @@ export function Clyp() {
       [...previous, next].sort((a, b) => a.start - b.start),
     );
     setSelectedZoom(next.id);
-  }, [copied, duration, zooms]);
+  }, [copied, duration, pieces, selectPiece, selectedPiece, zooms]);
 
   /**
    * Everything undo walks back: the four edits plus a soundtrack's placement.
@@ -1580,7 +1622,7 @@ export function Clyp() {
                     place
                       ? {
                           ...next,
-                          offset: clamp(place.offset, 0, next.duration),
+                          offset: Math.max(place.offset, 0),
                           start: clamp(place.start, 0, next.duration),
                           end: clamp(place.end, place.start, next.duration),
                         }
@@ -2201,7 +2243,13 @@ export function Clyp() {
       // the encode uses. A zoom transition pushes in on top of any region.
       const list = piecesRef.current;
       const joins = list ? joinsOf(list, speed) : [];
-      const out = list ? outputOf(segmentsOf(list), video.currentTime) : null;
+      const out = list
+        ? outputOf(
+            segmentsOf(list),
+            video.currentTime,
+            list.findIndex((p) => p.id === cursorRef.current),
+          )
+        : null;
       const move =
         out !== null ? transitionAt(joins, out / speed) : NO_TRANSITION;
       const state =
@@ -2356,11 +2404,21 @@ export function Clyp() {
     const follow = () => {
       frame = requestAnimationFrame(follow);
 
-      // The region is anchored to a source frame and the track keeps its own
-      // tempo, so the distance past the anchor is read on the output's clock,
-      // which at 2x runs half as fast as the element's.
+      // The region sits on the timeline and the track keeps its own tempo,
+      // so the distance past the region's start is read on the output's
+      // clock, which at 2x runs half as fast as the timeline's.
+      const list = piecesRef.current;
+      const out = list
+        ? outputOf(
+            segmentsOf(list),
+            video.currentTime,
+            list.findIndex((p) => p.id === cursorRef.current),
+          )
+        : null;
       const at =
-        (video.currentTime - soundtrack.offset) / speed + soundtrack.start;
+        out === null
+          ? -1
+          : (out - soundtrack.offset) / speed + soundtrack.start;
       const inside = at >= soundtrack.start && at < soundtrack.end;
 
       if (!inside || video.paused) {
@@ -3042,6 +3100,11 @@ export function Clyp() {
               selectedZoom={selectedZoom}
               selectedPiece={selectedPiece}
               onPieceSelect={selectPiece}
+              onCursorChange={handleCursorChange}
+              onPieceCopy={() => {
+                const piece = pieces.find((p) => p.id === selectedPiece);
+                if (piece) setPieces(copyPiece(pieces, pieces.indexOf(piece), newPieceId()));
+              }}
               onPiecesChange={handlePiecesChange}
               onSplit={splitAtPlayhead}
               onPieceDelete={() => deletePiece()}

@@ -1,24 +1,27 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  MAX_TIMELINE,
   MIN_PIECE,
   type Piece,
   continues,
+  copyPiece,
   dropIndex,
   fromLegacy,
   indexAt,
   joinPieces,
-  laneOf,
   lengthOf,
   movePiece,
+  occurrences,
   outputOf,
   removePiece,
   resizePiece,
-  roomOf,
   segmentsOf,
   sourceAt,
   splitPiece,
+  startsOf,
   tidyPieces,
+  timelineExtent,
   withTransition,
 } from "@/lib/clip-pieces";
 
@@ -59,6 +62,12 @@ describe("indexAt and outputOf", () => {
     expect(indexAt(segments, 6)).toBe(1);
   });
 
+  it("reads a time in the piece it is told, when two show the same footage", () => {
+    const twice = segmentsOf([p(0, 2), p(0, 2)]);
+    expect(outputOf(twice, 1)).toBe(1);
+    expect(outputOf(twice, 1, 1)).toBe(3);
+  });
+
   it("maps footage onto the output and back", () => {
     expect(outputOf(segments, 4)).toBe(3);
     expect(outputOf(segments, 2.5)).toBeNull();
@@ -93,35 +102,39 @@ describe("removePiece", () => {
 });
 
 describe("resizePiece", () => {
-  it("brings an edge in, and nothing else moves", () => {
+  it("brings an end in, and nothing else moves", () => {
     const next = resizePiece([p(0, 3), p(3, 6)], 0, "end", 1, 6);
     expect(spans(next)).toEqual([[0, 1], [3, 6]]);
   });
 
-  it("brings footage back up to the piece holding the source beside it", () => {
-    const next = resizePiece([p(0, 1), p(3, 6)], 0, "end", 9, 6);
-    expect(spans(next)).toEqual([[0, 3], [3, 6]]);
-  });
-
-  it("stops at that footage whatever the order", () => {
-    // The piece holding 3 to 6 plays first, and its start still cannot reach
-    // back past the footage of the piece holding 0 to 2.
-    const next = resizePiece([p(3, 6), p(0, 2)], 0, "start", 0, 6);
-    expect(spans(next)).toEqual([[2, 6], [0, 2]]);
-  });
-
-  it("reaches the file's own ends", () => {
-    const next = resizePiece([p(1, 5)], 0, "start", -3, 6);
-    expect(spans(resizePiece(next, 0, "end", 99, 6))).toEqual([[0, 6]]);
+  it("takes an end back out as far as the file goes, whatever the other pieces hold", () => {
+    // Each piece is its own reference to the file, so the first can grow over
+    // footage the second also shows.
+    expect(spans(resizePiece([p(0, 1), p(3, 6)], 0, "end", 9, 6))).toEqual([
+      [0, 6],
+      [3, 6],
+    ]);
+    expect(spans(resizePiece([p(3, 6), p(0, 2)], 0, "start", -4, 6))).toEqual([
+      [0, 6],
+      [0, 2],
+    ]);
   });
 
   it("never goes under the shortest piece", () => {
     const next = resizePiece([p(0, 3)], 0, "end", 0, 6);
     expect(next[0].end - next[0].start).toBeCloseTo(MIN_PIECE, 10);
   });
+});
 
-  it("reports the room each way", () => {
-    expect(roomOf([p(0, 1), p(3, 4), p(5, 6)], 1, 6)).toEqual({ lo: 1, hi: 5 });
+describe("copyPiece", () => {
+  it("puts the same footage right after the piece, under a new id and a straight join", () => {
+    const dip = { kind: "black" as const, duration: 0.5 };
+    const next = copyPiece([p(0, 2, "a"), { ...p(3, 6, "b"), transition: dip }], 1, "c");
+    expect(next).toEqual([
+      p(0, 2, "a"),
+      { ...p(3, 6, "b"), transition: dip },
+      p(3, 6, "c"),
+    ]);
   });
 });
 
@@ -134,13 +147,13 @@ describe("movePiece", () => {
     expect(next[0]).toEqual({ ...p(3, 6, "b"), transition: dip });
   });
 
-  it("drops a piece where the pointer passes the middle of another", () => {
-    // [0,2] [2,3] [3,6] from an origin of zero. Dragging the last one to 0.5
-    // passes nothing's middle, so it goes first.
+  it("drops a piece where its middle passes the middle of another", () => {
+    // [0,2] [2,3] [3,6]. The last one with its middle at 0.5 passes nothing's
+    // middle, so it goes first.
     const pieces = [p(0, 2), p(2, 3), p(3, 6)];
-    expect(dropIndex(pieces, 2, 0.5, 0)).toBe(0);
-    expect(dropIndex(pieces, 2, 1.5, 0)).toBe(1);
-    expect(dropIndex(pieces, 0, 5, 0)).toBe(2);
+    expect(dropIndex(pieces, 2, 0.5)).toBe(0);
+    expect(dropIndex(pieces, 2, 1.5)).toBe(1);
+    expect(dropIndex(pieces, 0, 5)).toBe(2);
   });
 });
 
@@ -164,71 +177,46 @@ describe("withTransition", () => {
   });
 });
 
-describe("the lane", () => {
-  it("is the source itself with one whole piece", () => {
-    const lane = laneOf([p(0, 6)]);
-    expect(lane.toLane(2.5)).toBe(2.5);
-    expect(lane.fromLane(2.5)).toBe(2.5);
+describe("the timeline", () => {
+  it("starts the first piece at zero and the rest end to end", () => {
+    expect(startsOf([p(3, 6), p(0, 2)])).toEqual([0, 3]);
   });
 
   it("closes the gap a trimmed piece leaves, and the next piece keeps its footage", () => {
     // A ten second clip split at three, then the first piece cut back to one
-    // second. The second piece sits right after it on the lane and still
-    // opens on the source's third second, not on what used to be beside it.
+    // second. The second piece starts at one second on the timeline and
+    // still opens on the source's third second.
     const split = splitPiece([p(0, 10)], 0, 3, "b")!;
     const next = resizePiece(split, 0, "end", 1, 10);
-    const lane = laneOf(next);
     expect(spans(next)).toEqual([[0, 1], [3, 10]]);
-    expect(lane.toLane(3)).toBe(1);
-    expect(lane.fromLane(1)).toBe(3);
-    expect(lane.toLane(10)).toBe(8);
+    expect(startsOf(next)).toEqual([0, 1]);
+    expect(sourceAt(segmentsOf(next), 1)).toEqual({ index: 1, time: 3 });
   });
 
-  it("keeps the footage the first piece can reach back into at its own place", () => {
-    const lane = laneOf([p(2, 3), p(4, 6)]);
-    expect(lane.origin).toBe(2);
-    expect(lane.toLane(1)).toBe(1);
-    expect(lane.toLane(4)).toBe(3);
-    expect(lane.fromLane(1.5)).toBe(1.5);
-  });
-
-  it("puts the footage the last piece can reach into right after it", () => {
-    const lane = laneOf([p(0, 2), p(3, 6)]);
-    expect(lane.toLane(6)).toBe(5);
-    expect(lane.fromLane(4.5)).toBe(5.5);
-  });
-
-  it("lands footage no piece holds on the join it was cut from", () => {
-    const lane = laneOf([p(0, 2), p(3, 6)]);
-    expect(lane.toLane(2.5)).toBe(2);
-    expect(lane.fromLane(2)).toBe(3);
-  });
-
-  it("draws pieces in play order, and the room in front is only what the first can reach", () => {
-    // Played as [3,6] then [0,2]. The first piece can reach back to 2, so
-    // one second of room sits in front of it.
-    const lane = laneOf([p(3, 6), p(0, 2)]);
-    expect(lane.origin).toBe(1);
-    expect(lane.starts).toEqual([1, 4]);
-    expect(lane.toLane(0.5)).toBe(4.5);
-    expect(lane.fromLane(4.5)).toBe(0.5);
-  });
-
-  it("holds a dragged start edge's far side still with a preview", () => {
+  it("holds a dragged start's far end still with a preview", () => {
     // The second piece's start is being brought in by half a second. Until
-    // the drag lets go, it and everything after it sit half a second along.
+    // the drag lets go, it and everything after it sit half a second along,
+    // so its end stays where it was, at 2 + 3 = 5.
     const pieces = [p(0, 2), p(3.5, 6), p(6, 7)];
-    const lane = laneOf(pieces, { index: 1, by: 0.5 });
-    expect(lane.starts).toEqual([0, 2.5, 5]);
-    // Its end is where it was before the drag began, at 2 + 3 = 5.
-    expect(lane.toLane(6)).toBe(5);
+    const starts = startsOf(pieces, { index: 1, by: 0.5 });
+    expect(starts).toEqual([0, 2.5, 5]);
+    expect(starts[1] + (6 - 3.5)).toBe(5);
   });
 
-  it("round-trips every time a piece holds", () => {
-    const lane = laneOf([p(4, 5), p(1, 2), p(6, 9)]);
-    for (const time of [1, 1.7, 4, 4.5, 6.2, 8.9]) {
-      expect(lane.fromLane(lane.toLane(time))).toBeCloseTo(time, 10);
-    }
+  it("draws a stretch of the source wherever its footage plays", () => {
+    const pieces = [p(0, 3), p(2, 5)];
+    expect(occurrences(pieces, startsOf(pieces), 2, 4)).toEqual([
+      { index: 0, from: 2, to: 3, start: 2, end: 3, head: true, tail: false },
+      { index: 1, from: 3, to: 5, start: 2, end: 4, head: true, tail: true },
+    ]);
+    expect(occurrences(pieces, startsOf(pieces), 5.5, 6)).toEqual([]);
+  });
+
+  it("shows half as much again as the file, rounded up to a step", () => {
+    expect(timelineExtent(8)).toBe(15);
+    expect(timelineExtent(4)).toBe(10);
+    expect(timelineExtent(100)).toBe(180);
+    expect(timelineExtent(9999)).toBe(MAX_TIMELINE);
   });
 });
 
@@ -244,8 +232,10 @@ describe("tidyPieces", () => {
       6,
       grid,
     );
+    // Two pieces may show the same footage, so the overlap stays.
     expect(tidy).toEqual([
       { id: "a", start: 0, end: 2 },
+      { id: "b", start: 1, end: 3 },
       { id: "d", start: 5, end: 6 },
     ]);
   });
