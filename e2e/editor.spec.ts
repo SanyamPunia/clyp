@@ -2,8 +2,8 @@ import { expect, test, type Page } from "@playwright/test";
 import { gradientFamilies, gradientPresets } from "../lib/gradients";
 
 import {
-  CLIP_SECONDS,
   keptReadout,
+  laneX,
   loadClip,
   loadTrack,
   openEditor,
@@ -27,13 +27,6 @@ import {
  * took the wrong selection.
  */
 
-const lane = (page: Page) => page.locator('[data-lane="video"]').first();
-
-/** The lane's x for a point on it, in the lane's own seconds. */
-async function laneX(page: Page, seconds: number) {
-  const box = (await lane(page).boundingBox())!;
-  return box.x + 6 + ((box.width - 12) * seconds) / CLIP_SECONDS;
-}
 
 /**
  * Drags a lane control from where it sits to another point on the lane, both
@@ -100,19 +93,27 @@ test.describe("pieces", () => {
     expect(Math.abs(second.x - (await laneX(page, 1)))).toBeLessThan(4);
   });
 
-  test("an edge drags back out to bring the footage back", async ({ page }) => {
+  test("an end drags back out as far as the file goes", async ({ page }) => {
     await openEditor(page);
     await loadClip(page);
     await removeStretch(page, 2, 3);
 
-    // On the lane the first piece ends at 2s. Its end drags out a second,
-    // into the footage it had lost, and stops at the piece after it.
+    // The first piece ends at 2s. Its end drags out two seconds, back over
+    // the footage that was taken out and on into what the next piece also
+    // shows, since every piece is its own reference to the file.
     await dragBy(page, "Piece end", 0, 2, 4);
     expect(await pieceLabels(page)).toEqual([
-      "Piece, 0.000s to 3.000s",
+      "Piece, 0.000s to 4.000s",
       "Piece, 3.000s to 6.000s",
     ]);
-    expect(await keptReadout(page)).toBe("6.000s");
+    expect(await keptReadout(page)).toBe("7.000s");
+
+    // And no further than the file's own end.
+    await dragBy(page, "Piece end", 0, 4, 9);
+    expect(await pieceLabels(page)).toEqual([
+      "Piece, 0.000s to 6.000s",
+      "Piece, 3.000s to 6.000s",
+    ]);
   });
 
   test("a start edge moves alone, and the pieces close up when it is let go", async ({
@@ -191,6 +192,105 @@ test.describe("pieces", () => {
     );
   });
 
+  test("the ruler holds still while the first piece's start is dragged", async ({
+    page,
+  }) => {
+    await openEditor(page);
+    await loadClip(page);
+    await seek(page, 3);
+    await page.keyboard.press("s");
+
+    // The ruler's zero and the first piece's end, before anything moves.
+    const zero = page.locator("[data-timeline] span", { hasText: /^0s$/ }).first();
+    const zeroBefore = (await zero.boundingBox())!;
+    const first = page.getByRole("button", { name: /^Piece, 0\.000/ });
+    const before = (await first.boundingBox())!;
+
+    const edge = (await page
+      .getByRole("slider", { name: "Piece start", exact: true })
+      .first()
+      .boundingBox())!;
+    const x = edge.x + edge.width / 2;
+    const y = edge.y + edge.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + (await laneX(page, 1)) - (await laneX(page, 0)), y, {
+      steps: 12,
+    });
+
+    // Held: the start is under the pointer, the end has not moved, the ruler
+    // has not moved, and the bubble names the length the piece now has.
+    const held = (await page.getByRole("button", { name: /^Piece, 1\.000/ }).boundingBox())!;
+    expect(Math.abs(held.x + held.width - (before.x + before.width))).toBeLessThan(3);
+    expect((await zero.boundingBox())!.x).toBeCloseTo(zeroBefore.x, 0);
+    // The piece's own corner says it too, so the bubble is the later one.
+    await expect(
+      page.locator("[data-timeline] span", { hasText: /^2\.0s$/ }),
+    ).toHaveCount(2);
+
+    // Let go: the piece goes back to the timeline's start.
+    await page.mouse.up();
+    await expect
+      .poll(async () => {
+        const box = (await page
+          .getByRole("button", { name: /^Piece, 1\.000/ })
+          .boundingBox())!;
+        return Math.round(box.x - (await laneX(page, 0)));
+      })
+      .toBe(0);
+    expect((await zero.boundingBox())!.x).toBeCloseTo(zeroBefore.x, 0);
+  });
+
+  test("a piece is copied and pasted right after itself", async ({ page }) => {
+    await openEditor(page);
+    await loadClip(page);
+    await seek(page, 2);
+    await page.keyboard.press("s");
+    await page.getByRole("button", { name: /^Piece, 0\.000/ }).click();
+
+    await page.keyboard.press("Meta+c");
+    await page.keyboard.press("Meta+v");
+    const order = await page
+      .getByRole("button", { name: /^Piece, / })
+      .evaluateAll((els) =>
+        els
+          .map((el) => ({
+            label: el.getAttribute("aria-label") ?? "",
+            left: el.getBoundingClientRect().left,
+          }))
+          .sort((a, b) => a.left - b.left)
+          .map((el) => el.label),
+      );
+    expect(order).toEqual([
+      "Piece, 0.000s to 2.000s",
+      "Piece, 0.000s to 2.000s",
+      "Piece, 2.000s to 6.000s",
+    ]);
+    expect(await keptReadout(page)).toBe("8.000s");
+  });
+
+  test("the timeline zooms with Cmd and the wheel, and the slider follows", async ({
+    page,
+  }) => {
+    await openEditor(page);
+    await loadClip(page);
+    const zoom = page.getByRole("slider", { name: "Timeline zoom" });
+    const lane = page.locator('[data-lane="video"]').first();
+    const before = Number(await zoom.getAttribute("aria-valuenow"));
+    const width = (await lane.boundingBox())!.width;
+
+    const box = (await lane.boundingBox())!;
+    await page.mouse.move(box.x + 40, box.y + box.height / 2);
+    await page.keyboard.down("Meta");
+    await page.mouse.wheel(0, -400);
+    await page.keyboard.up("Meta");
+
+    await expect
+      .poll(async () => Number(await zoom.getAttribute("aria-valuenow")))
+      .toBeGreaterThan(before);
+    expect((await lane.boundingBox())!.width).toBeGreaterThan(width);
+  });
+
   test("the clip's own edges trim it and stop at the shortest", async ({ page }) => {
     await openEditor(page);
     await loadClip(page);
@@ -208,8 +308,8 @@ test.describe("pieces", () => {
     const piece = page.getByRole("button", { name: /^Piece, 0\.000/ });
     await piece.click();
     await expect(piece).toHaveAttribute("aria-pressed", "true");
-    // The pieces take 5s of the lane's 6, so the last sixth is bare rail.
-    await pressLane(page, 0.95);
+    // The pieces end at 5s, so 9s on the timeline is bare track.
+    await pressLane(page, 9);
     await expect(piece).toHaveAttribute("aria-pressed", "false");
   });
 

@@ -9,6 +9,7 @@ import {
   openEditor,
   pause,
   pickSegmented,
+  laneX,
   pressLane,
   readVideo,
   seek,
@@ -441,7 +442,7 @@ test.describe("pieces", () => {
     await seek(page, 3);
     await page.keyboard.press("s");
     // 2.5s of 6, the middle of the blue piece.
-    await pressLane(page, 2.5 / 6);
+    await pressLane(page, 2.5);
     await expect(page.getByRole("button", { name: /^Piece, 2\.000/ })).toHaveAttribute(
       "aria-pressed",
       "true",
@@ -500,10 +501,10 @@ test.describe("the timeline, by pointer", () => {
   const lane = (page: Page) => page.locator('[data-lane="video"]').first();
   const now = (page: Page) =>
     page.evaluate(() => document.querySelector("video")?.currentTime ?? -1);
-  /** The lane's x for a point on it, in the lane's own seconds, from its box. */
+  /** A timeline second's point on the picture's track. */
   async function xAt(page: Page, seconds: number) {
     const box = (await lane(page).boundingBox())!;
-    return { x: box.x + 6 + ((box.width - 12) * seconds) / 6, y: box.y + box.height / 2 };
+    return { x: await laneX(page, seconds), y: box.y + box.height / 2 };
   }
 
   test("the playhead is grabbed and dragged across a clip in pieces", async ({
@@ -551,7 +552,7 @@ test.describe("the timeline, by pointer", () => {
     await page.keyboard.press("s");
     await seek(page, 3);
     await page.keyboard.press("s");
-    await pressLane(page, 2.5 / 6);
+    await pressLane(page, 2.5);
     await page.keyboard.press("Delete");
 
     // The pieces are [0, 2] and [3, 6], drawn end to end. The second is
@@ -600,13 +601,17 @@ test.describe("the timeline, by pointer", () => {
     await loadClip(page);
     await seek(page, 3);
     await page.keyboard.press("s");
-    await pressLane(page, 1.5 / 6);
+    await pressLane(page, 1.5);
 
+    // Moved by the distance from 3s to 2s, since the grip's centre is a few
+    // pixels inside the edge it moves.
     const edge = (await page.getByRole("slider", { name: "Piece end" }).first().boundingBox())!;
-    const to = await xAt(page, 2);
+    const by = (await laneX(page, 2)) - (await laneX(page, 3));
     await page.mouse.move(edge.x + edge.width / 2, edge.y + edge.height / 2);
     await page.mouse.down();
-    await page.mouse.move(to.x, edge.y + edge.height / 2, { steps: 10 });
+    await page.mouse.move(edge.x + edge.width / 2 + by, edge.y + edge.height / 2, {
+      steps: 10,
+    });
     await page.mouse.up();
     // What the edge came in by is now removed, and the piece after it
     // closes up rather than leaving a gap.
@@ -619,7 +624,7 @@ test.describe("the timeline, by pointer", () => {
     await loadClip(page);
     const ruler = page.locator('[data-lane="video"]').locator("xpath=../../..").locator("div.h-5.cursor-pointer").first();
     const box = (await ruler.boundingBox())!;
-    await page.mouse.click(box.x + 6 + (box.width - 12) / 2, box.y + box.height / 2);
+    await page.mouse.click(await laneX(page, 3), box.y + box.height / 2);
     await expect.poll(() => now(page)).toBeCloseTo(3, 0);
   });
 });
@@ -630,7 +635,7 @@ test.describe("transitions", () => {
     await page.keyboard.press("s");
     await seek(page, 3);
     await page.keyboard.press("s");
-    await pressLane(page, 2.5 / 6);
+    await pressLane(page, 2.5);
     await page.keyboard.press("Delete");
     // The join sits where the output has it: two seconds in.
     await page.getByRole("button", { name: /^Join at 2\.000/ }).click();

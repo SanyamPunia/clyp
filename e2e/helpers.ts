@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { expect, type Download, type Page } from "@playwright/test";
 
 import { SETTLE_MS } from "../components/use-edit-history";
+import { timelineExtent } from "../lib/clip-pieces";
 
 /**
  * Driving the app, and reading back what it wrote.
@@ -159,12 +160,27 @@ export async function removeStretch(page: Page, from: number, to: number) {
   await expect(page.getByRole("button", { name })).toHaveCount(0);
 }
 
-/** A press on the bare lane, which seeks and puts any selection away. */
-export async function pressLane(page: Page, fraction: number) {
-  const lane = page.locator('[data-lane="video"]').first();
-  const box = await lane.boundingBox();
+/**
+ * How many seconds the timeline shows for the fixture clip before it is
+ * zoomed. The picture's track is that long, whatever the pieces hold.
+ */
+export const TIMELINE_SECONDS = timelineExtent(CLIP_SECONDS);
+
+/** The x of a timeline second, from the picture's track's own box. */
+export async function laneX(page: Page, seconds: number) {
+  const box = await page.locator('[data-lane="video"]').first().boundingBox();
   if (!box) throw new Error("The lane has no box");
-  await page.mouse.click(box.x + box.width * fraction, box.y + box.height / 2);
+  return box.x + 6 + ((box.width - 12) * seconds) / TIMELINE_SECONDS;
+}
+
+/**
+ * A press at a timeline second on the picture's track. On a piece it selects
+ * the piece. Past the pieces it seeks and puts any selection away.
+ */
+export async function pressLane(page: Page, seconds: number) {
+  const box = await page.locator('[data-lane="video"]').first().boundingBox();
+  if (!box) throw new Error("The lane has no box");
+  await page.mouse.click(await laneX(page, seconds), box.y + box.height / 2);
 }
 
 /**
