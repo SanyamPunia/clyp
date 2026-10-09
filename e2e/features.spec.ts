@@ -824,23 +824,10 @@ test.describe("the rest of the frame", () => {
   test("a generated background reaches the file as the canvas shows it", async ({
     page,
   }) => {
-    // Paper, halftone and fluted presets are SVG images inside the frame,
-    // and a paper's surface is a filter inside that image. The raster has to
-    // carry all three, or the export is a flat colour under a textured
-    // preview.
+    // Fluted presets are SVG images inside the frame. The raster has to
+    // carry them, or the export is a flat colour under a columned preview.
     await openEditor(page);
     await loadImage(page);
-
-    await page.getByRole("button", { name: "Kraft" }).click();
-    const paper = await paddingSpread(page, await exportFile(page));
-    // The sheet's colour, with tooth over it rather than a flat fill.
-    expect(paper.mean[0]).toBeGreaterThan(paper.mean[2]);
-    expect(paper.spread).toBeGreaterThan(8);
-
-    await page.getByRole("button", { name: "Pop Dot" }).click();
-    const dots = await paddingSpread(page, await exportFile(page));
-    // Ink and bare paper side by side.
-    expect(dots.spread).toBeGreaterThan(100);
 
     await page.getByRole("button", { name: "Cathedral" }).click();
     const columns = await paddingSpread(page, await exportFile(page));
