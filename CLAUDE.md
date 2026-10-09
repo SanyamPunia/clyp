@@ -103,8 +103,7 @@ chrome and need colours no surface token has.
 
 The exceptions are all inside the exported artwork rather than app chrome:
 the title bar and browser bar in `window-navbar.tsx`, the caption's text
-colours in `clyp.tsx`, the gradient hexes in `lib/gradients.ts` and the
-black and white shade layers in `lib/paper.ts`, the mark
+colours in `clyp.tsx`, the gradient hexes in `lib/gradients.ts`, the mark
 colours in `lib/marks.ts`, the ring in `lib/ripples.ts`, the device in
 `device-frame.tsx` and the pill in `handle-badge.tsx`. None of them follows the
 app theme, because the exported PNG has no theme. The template guides in
@@ -197,8 +196,8 @@ both derive their CSS from that data, so the two cannot drift.
 - **A family holds a multiple of eight presets, so the picker lays out as even
   rows.** It is eight columns wide, and a ninth in one family leaves a ragged
   last row. The first four families hold thirty-two each, four rows, and the
-  four scene families, the three generated ones and the two moving ones
-  sixteen each, two rows.
+  four scene families, the generated one and the two moving ones sixteen
+  each, two rows.
   `lib/gradients.test.ts` fails on any count that is not a multiple of eight.
 - **A family can carry the grain it is made to be seen with.** Defocus is 70,
   Glow 40, Horizon 30 and Spectral 55: a defocused photograph is mostly its
@@ -251,71 +250,35 @@ both derive their CSS from that data, so the two cannot drift.
 
 ### Generated backgrounds
 
-Paper, Halftone and Fluted are pictures a gradient cannot draw: a lit surface,
-dots and columns. Each is generated as SVG from its parameters, by
-`lib/paper.ts`, `lib/halftone.ts` and `lib/fluted.ts`, and handed to
+Fluted is a picture a gradient cannot draw: columns of reeded glass. It is
+generated as SVG from its parameters by `lib/fluted.ts` and handed to
 `background-image` through `svgBackground` in `lib/svg-background.ts`, so the
-cross-fade, the grain layer and both exports still see one property. They are
-data in the registry like every other preset, and the first row of each is the
-references they were drawn against.
+cross-fade, the grain layer and both exports still see one property. Its
+presets are data in the registry like every other preset, and the first is
+the reference it was drawn against.
+
+Paper and Halftone families were built the same way and then taken out.
 
 - **The image sits over a solid layer of its own ground.** The value is
-  `url(...)`, then a one-colour gradient of the paper or the calm colour, so it
-  is opaque in the moment before the SVG decodes, which is what the cross-fade
-  relies on. The spec checks that every generated preset ends that way.
+  `url(...)`, then a one-colour gradient of the calm colour, so it is opaque
+  in the moment before the SVG decodes, which is what the cross-fade relies
+  on. The spec checks that every generated preset ends that way.
 - **The outer `<svg>` has no size and no viewBox.** As a background it then
   has no intrinsic size and fills the box. An inner `<svg>` maps its own units
-  onto that box: a paper and a halftone are laid out on a square and sliced to
-  cover, so a dot stays round and the tooth stays square at any shape, and the
-  fluted columns are stretched, since nothing in them is round and a crop would
-  lose the outer columns on a tall frame.
+  onto that box, and the columns are stretched, since nothing in them is round
+  and a crop would lose the outer columns on a tall frame.
 - **Parentheses are percent-encoded inside the data URL.** `html-to-image`
   scans every CSS value for `url(` and fetches what it finds, and inside these
-  images that is a gradient or a filter reference such as `url(#c3)`. It
-  requested those from the server, got 404s, and the export lost the fluted
-  gradients. Found by driving the export, and `lib/svg-background.test.ts`
-  guards it.
-- **A paper's surface is an SVG filter inside the image, which is why it
-  survives the export.** `lib/noise.ts` moved the grain to a raster because
-  `html-to-image` drops a filter set on a DOM element. A filter inside an
-  image is the browser's to render, the same as the image's pixels.
-  - The tooth is fractal noise read as a height map and lit from the top left.
-    The light becomes a black and a white layer whose alpha is the distance
-    from what flat paper gets, so a flat patch is the sheet's own colour
-    exactly rather than a shade of it.
-  - **A crumple is not lit.** A height map is eight bits deep, and at a
-    crumple's scale in a 3x export one step spans several pixels, which the
-    lighting read as a ledge: the sheet was covered in contour lines. The
-    noise used directly as a tone has steps a 255th apart, which nothing can
-    see. The tooth is small enough that its steps stay under a pixel.
-  - Folds are a soft shade and a hard lit ridge across the sheet, with each
-    panel between them a little lighter or darker. The weave is a rotated
-    pattern of ribs, displaced slightly so the threads do not read as ruled.
-- **A halftone dot is a zero-length line with a round cap**, `m dx dy h0`,
-  grouped into one path per radius step. That is about eight bytes a dot
-  against thirty for a `<circle>`, and a screen is ten thousand dots. Coverage
-  is dot area over cell area. A tone too light for the smallest dot keeps a
-  dot of that size at random, often enough to print the same ink, so a fade
-  thins out into paper rather than stopping at a hard edge. Colour plates are
-  the same dots nudged off the key plate and printed under it, and rings are
-  paper-coloured holes over it.
+  images that is a gradient reference such as `url(#c3)`. It requested those
+  from the server, got 404s, and the export lost the fluted gradients. Found
+  by driving the export, and `lib/svg-background.test.ts` guards it.
 - **A fluted column rises from the calm colour to its peak, holds, and falls
   back.** Where each column peaks follows a curve across the row, an arch, a
   valley, a wave or a slope, and the columns' hard edges against that curve
   are the reeded glass.
-- **Everything random is seeded**, so a preset draws the same picture in the
-  swatch, the canvas and every export. Paper and halftone strings are
-  memoised, since the picker and the canvas ask on every render.
-- **None of them answers to the angle.** The panel names why for each kind.
+- **It does not answer to the angle.** The panel says so.
 - **Measured at 8064x5184, a 3x export of a 2560px capture, in Chrome with a
-  GPU: 0.95 s for Kraft, 0.84 s for Folded Letter, 0.41 s for Umbra and
-  0.35 s for Cathedral, against 0.84 s for a gradient.** Headless Chromium
-  renders filters on the CPU and took 16 to 30 s for the same papers, so a
-  timing taken in the browser suite is not what a reader waits for.
-- The PNG size estimate was fitted on gradients. A paper or a halftone
-  compresses far worse, measured at 13.7 MB for Kraft at that size against
-  1.8 MB for a gradient, so the readout runs low for them. Refit from real
-  exports before adjusting it.
+  GPU: 0.35 s for Cathedral, against 0.84 s for a gradient.**
 
 Every generated layer must be fully opaque. `GradientBackground` keeps the
 previous gradient painted underneath during a cross-fade, and an incoming layer
@@ -1156,7 +1119,9 @@ then was two of them, its header and its one swatch stop, with the swatches behi
 the arrow keys. The Marks, Handle, Clicks and Saved looks sections added
 seven, each a radiogroup or a single control, and each of the nine panel
 section headers is one. Flow and Warp came after that count, two stops each,
-and the Motion radiogroup is one more while a moving preset is chosen.
+and the Motion radiogroup is one more while a moving preset is chosen. Paper
+and Halftone, two of those eleven families, were taken out later, two stops
+each.
 
 ### Shortcuts
 
