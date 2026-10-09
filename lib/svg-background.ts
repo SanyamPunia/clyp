@@ -1,8 +1,8 @@
 /**
  * An SVG document as a `background-image` value, over a solid base.
  *
- * The generated backgrounds that a gradient cannot draw (halftone dots,
- * fluted columns) go through here, so they stay on the one property every
+ * The generated backgrounds that a gradient cannot draw (fluted columns) go
+ * through here, so they stay on the one property every
  * other background uses and the cross-fade, the grain layer and both exports
  * need no branch for them.
  *

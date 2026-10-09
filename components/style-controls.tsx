@@ -298,13 +298,9 @@ export function StyleControls({
                     ? "A moving background keeps its own direction."
                     : activePreset.kind === "mesh"
                     ? "Mesh gradients do not use an angle."
-                    : activePreset.kind === "paper"
-                      ? "A sheet of paper does not turn with an angle."
-                      : activePreset.kind === "halftone"
-                        ? "A halftone screen keeps its own angle."
-                        : activePreset.kind === "fluted"
-                          ? "Fluted glass stays upright."
-                          : "This scene does not turn with an angle."}
+                    : activePreset.kind === "fluted"
+                      ? "Fluted glass stays upright."
+                      : "This scene does not turn with an angle."}
             </p>
           )}
 

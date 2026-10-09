@@ -6,7 +6,7 @@
  *
  * A column is a rect with a gradient of its own, which CSS cannot draw
  * without a `background-size` per layer, so it is written as an SVG and goes
- * through `svgBackground` like a halftone screen does.
+ * through `svgBackground`.
  *
  * The columns stretch with the frame rather than being cropped to it. Nothing
  * in them is round, so stretching distorts nothing, and a crop would lose the
